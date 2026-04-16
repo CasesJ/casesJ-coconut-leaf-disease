@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CoconutAI — Drone Disease Mapping System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <link href='https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css' rel='stylesheet' />
+  <script src='https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js'></script>
+  <!-- Firebase SDK (compat version for simpler initialization) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --deep:#0b2a1f; --mid:#164d37; --bright:#26865a; --accent:#3ec97a;
+      --pale:#d0eddf; --cream:#f5f2eb; --cream2:#ebe7dd; --sand:#c4b49a;
+      --text:#0e1c15; --text2:#3a5244; --text3:#7a9a8a; --white:#ffffff;
+      --red:#e04f4f; --red-bg:#fde8e8; --red-text:#8b2020;
+      --yellow:#f0b429; --yellow-bg:#fef8e7; --yellow-text:#7a4f00;
+      --r:14px; --rs:10px;
+      --sh:0 2px 12px rgba(11,42,31,0.09); --shm:0 8px 32px rgba(11,42,31,0.13);
+    }
+    html { scroll-behavior:smooth; }
+    body { font-family:'DM Sans',sans-serif; background:var(--cream); color:var(--text); min-height:100vh; }
+
+    /* AUTH SCREEN */
+    .auth-screen { 
+      position:fixed; 
+      inset:0; 
+      z-index:999; 
+      display:flex; 
+      align-items:center; 
+      justify-content:center;
+      background-image: url('/static/coco-farm.jpg');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-attachment: scroll;
+    }
+    .auth-screen::before {
+      content:''; 
+      position:absolute; 
+      inset:0; 
+      background-color:rgba(11, 42, 31, 0.3); 
+      z-index:1;
+      pointer-events:none;
+    }
+    .auth-screen.hidden { display:none; }
+    .auth-container { width:90%; max-width:420px; position:relative; z-index:2; }
+    .auth-header { text-align:center; margin-bottom:40px; }
+    .auth-header .logo-icon { width:56px; height:56px; background:var(--deep); border-radius:12px; display:flex; align-items:center; justify-content:center; margin:0 auto 20px; }
+    .auth-header .logo-icon svg { width:28px; height:28px; stroke:var(--accent); fill:none; stroke-width:2; stroke-linecap:round; }
+    .auth-header h1 { font-family:'DM Serif Display',serif; font-size:32px; color:var(--deep); margin-bottom:8px; }
+    .auth-header p { font-size:13px; color:var(--text3); }
+    
+    .auth-form { background:var(--white); border-radius:var(--r); padding:32px; box-shadow:var(--shm); }
+    .form-title { font-size:22px; font-weight:600; color:var(--deep); margin-bottom:24px; }
+    .form-group { margin-bottom:18px; }
+    .form-group label { display:block; font-size:12px; font-weight:600; margin-bottom:8px; color:var(--text2); letter-spacing:.5px; text-transform:uppercase; }
+    .form-group input { width:100%; padding:12px 14px; border:1.5px solid rgba(11,42,31,0.12); border-radius:8px; font-size:14px; font-family:'DM Sans',sans-serif; transition:all .2s; }
+    .form-group input:focus { outline:none; border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,0.1); }
+    .error-message { background:var(--red-bg); color:var(--red-text); padding:11px 14px; border-radius:8px; font-size:12px; margin-bottom:16px; display:none; }
+    .error-message.show { display:block; }
+    .success-message { background:#e8f5e9; color:#1b5e20; padding:11px 14px; border-radius:8px; font-size:12px; margin-bottom:16px; display:none; }
+    .success-message.show { display:block; }
+    .btn-submit { width:100%; padding:14px; background:var(--deep); color:white; border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; transition:all .2s; font-family:'DM Sans',sans-serif; margin-top:24px; }
+    .btn-submit:hover:not(:disabled) { background:var(--mid); box-shadow:0 4px 12px rgba(11,42,31,0.2); }
+    .btn-submit:disabled { background:var(--text3); cursor:not-allowed; opacity:.6; }
+    .loading-spinner { display:none; width:16px; height:16px; border:2px solid var(--pale); border-top-color:var(--bright); border-radius:50%; animation:spin .8s linear infinite; margin-right:8px; vertical-align:middle; }
+    .loading-spinner.active { display:inline-block; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .form-footer { text-align:center; margin-top:20px; font-size:13px; color:var(--text3); }
+    .form-footer a { color:var(--bright); cursor:pointer; text-decoration:none; font-weight:600; }
+    .form-footer a:hover { text-decoration:underline; }
+
+    /* MAIN APP (hidden until logged in) */
+    .app-screen { display:none; }
+    .app-screen.active { display:block; }
+    
+    body::before {
+      content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+      background: radial-gradient(ellipse 70% 50% at 5% 15%,rgba(38,134,90,0.07) 0%,transparent 55%),
+                  radial-gradient(ellipse 50% 70% at 95% 85%,rgba(11,42,31,0.06) 0%,transparent 55%);
+    }
+
+    /* HEADER */
+    header {
+      position:sticky; top:0; z-index:200;
+      display:flex; align-items:center; justify-content:space-between;
+      padding:14px 40px;
+      background:rgba(245,242,235,0.92); backdrop-filter:blur(14px);
+      border-bottom:1px solid rgba(11,42,31,0.08);
+    }
+    .logo { display:flex; align-items:center; gap:11px; }
+    .logo-icon { width:36px; height:36px; background:var(--deep); border-radius:9px; display:flex; align-items:center; justify-content:center; }
+    .logo-icon svg { width:18px; height:18px; stroke:var(--accent); fill:none; stroke-width:2; stroke-linecap:round; }
+    .logo-name { font-family:'DM Serif Display',serif; font-size:20px; color:var(--deep); letter-spacing:-0.3px; }
+    .logo-sub { font-size:10px; font-weight:500; color:var(--text3); letter-spacing:1px; text-transform:uppercase; }
+    .header-right { display:flex; align-items:center; gap:10px; }
+    .hbadge { display:flex; align-items:center; gap:6px; border-radius:20px; padding:5px 12px; font-size:11px; font-weight:500; }
+    .hbadge.g { background:var(--pale); color:var(--mid); }
+    .hbadge.b { background:#e8f0fe; color:#1a3a8a; }
+    .pulse { width:7px; height:7px; border-radius:50%; animation:pulse 2s infinite; }
+    .pulse.g { background:var(--accent); }
+    .pulse.b { background:#4a7cf7; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.35)} }
+
+    /* TABS */
+    .nav-tabs { display:flex; justify-content:center; gap:6px; padding:28px 40px 0; }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+    .ntab {
+      display:flex; align-items:center; gap:7px; padding:10px 26px; border-radius:40px;
+      font-size:13px; font-weight:500; cursor:pointer; border:1.5px solid transparent;
+      transition:all .22s ease; font-family:'DM Sans',sans-serif; background:none;
+    }
+    .ntab svg { width:15px; height:15px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; }
+    .ntab.active { background:var(--deep); color:var(--white); box-shadow:0 4px 16px rgba(11,42,31,0.22); }
+    .ntab:not(.active) { background:var(--white); color:var(--text2); border-color:rgba(11,42,31,0.1); }
+    .ntab:not(.active):hover { border-color:var(--bright); color:var(--deep); }
+
+    /* PANELS */
+    .panels { max-width:1100px; margin:0 auto; padding:24px 24px 60px; position:relative; z-index:1; }
+    .panel { display:none; animation:fadeUp .35s ease both; }
+    .panel.active { display:block; }
+    .section-label { font-size:10px; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:var(--text3); margin-bottom:12px; padding-left:2px; }
+
+    /* UPLOAD */
+    .upload-drop {
+      border:2px dashed rgba(11,42,31,0.18); border-radius:var(--r); background:var(--white);
+      padding:52px 24px; text-align:center; cursor:pointer; transition:all .22s ease; position:relative; overflow:hidden;
+    }
+    .upload-drop:hover,.upload-drop.over { border-color:var(--bright); background:rgba(208,237,223,0.18); transform:translateY(-2px); box-shadow:var(--shm); }
+    .upload-drop input { position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%; }
+    .uicon { width:60px; height:60px; margin:0 auto 18px; background:var(--pale); border-radius:50%; display:flex; align-items:center; justify-content:center; }
+    .uicon svg { width:26px; height:26px; stroke:var(--bright); fill:none; stroke-width:1.8; stroke-linecap:round; }
+    .upload-drop h3 { font-size:16px; font-weight:600; color:var(--deep); margin-bottom:6px; }
+    .upload-drop p { font-size:13px; color:var(--text3); }
+    .ftypes { display:flex; gap:6px; justify-content:center; margin-top:16px; }
+    .ftypes span { font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; background:var(--cream2); color:var(--text2); padding:3px 9px; border-radius:5px; }
+    .loverlay { display:none; position:absolute; inset:0; background:rgba(245,242,235,0.88); backdrop-filter:blur(4px); z-index:5; flex-direction:column; align-items:center; justify-content:center; gap:14px; }
+    .loverlay.on { display:flex; }
+    .spin { width:38px; height:38px; border:3px solid var(--pale); border-top-color:var(--bright); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .loverlay p { font-size:13px; color:var(--text2); font-weight:500; }
+
+    .result-grid { display:grid; grid-template-columns:1fr 300px; gap:16px; margin-top:20px; }
+    @media(max-width:680px){ .result-grid{grid-template-columns:1fr;} }
+    .img-card { background:var(--white); border-radius:var(--r); overflow:hidden; box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); }
+    .img-card img { width:100%; display:block; }
+    .img-footer { padding:10px 14px; font-size:11px; font-weight:500; color:var(--text3); letter-spacing:.5px; text-transform:uppercase; border-top:1px solid rgba(11,42,31,0.05); }
+    .det-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); display:flex; flex-direction:column; }
+    .det-head { padding:14px 14px 10px; border-bottom:1px solid rgba(11,42,31,0.06); display:flex; align-items:center; justify-content:space-between; }
+    .det-head h4 { font-size:13px; font-weight:600; color:var(--deep); }
+    .cbadge { background:var(--pale); color:var(--mid); font-size:11px; font-weight:600; padding:2px 9px; border-radius:11px; }
+    .det-list { padding:10px; flex:1; overflow-y:auto; max-height:320px; }
+    .ditem { display:flex; align-items:center; gap:10px; padding:10px; border-radius:var(--rs); border:1px solid rgba(11,42,31,0.05); margin-bottom:7px; }
+    .ddot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+    .ddot.h{background:var(--accent);} .ddot.d{background:var(--red);} .ddot.w{background:var(--yellow);}
+    .dinfo { flex:1; min-width:0; }
+    .dlabel { font-size:12px; font-weight:600; color:var(--text); text-transform:capitalize; }
+    .dbar-bg { height:3px; background:var(--cream2); border-radius:3px; overflow:hidden; margin-top:5px; }
+    .dbar { height:100%; border-radius:3px; transition:width .5s ease; }
+    .dbar.h{background:var(--accent);} .dbar.d{background:var(--red);} .dbar.w{background:var(--yellow);}
+    .dpct { font-size:10px; color:var(--text3); margin-top:2px; }
+    .empty-state { text-align:center; padding:32px; color:var(--text3); font-size:13px; }
+    .stats-row { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+    .scard { background:var(--white); border-radius:var(--rs); padding:16px; text-align:center; border:1px solid rgba(11,42,31,0.06); box-shadow:var(--sh); }
+    .sval { font-family:'DM Serif Display',serif; font-size:26px; color:var(--deep); }
+    .slbl { font-size:11px; color:var(--text3); margin-top:3px; }
+
+    /* DRONE */
+    .drone-layout { display:grid; grid-template-columns:1fr 340px; gap:16px; }
+    @media(max-width:860px){ .drone-layout{grid-template-columns:1fr;} }
+    .drone-feed-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; }
+    .feed-toolbar { padding:12px 16px; background:var(--deep); display:flex; align-items:center; justify-content:space-between; }
+    .ftleft { display:flex; align-items:center; gap:9px; }
+    .ftleft svg { width:16px; height:16px; stroke:rgba(255,255,255,.45); fill:none; stroke-width:2; }
+    .ftleft span { font-size:13px; font-weight:500; color:rgba(255,255,255,.75); }
+    .feed-status { display:flex; align-items:center; gap:5px; }
+    .sdot { width:6px; height:6px; border-radius:50%; background:#555; }
+    .sdot.live { background:var(--accent); animation:pulse 1.5s infinite; }
+    .sdot-lbl { font-size:11px; color:rgba(255,255,255,.5); }
+    .canvas-wrap { position:relative; background:#071a11; min-height:300px; display:flex; align-items:center; justify-content:center; }
+    #droneCanvas { width:100%; display:block; }
+    #droneVideo { display:none; }
+    .canvas-ph { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
+    .canvas-ph svg { width:44px; height:44px; stroke:rgba(255,255,255,.13); fill:none; stroke-width:1.5; }
+    .canvas-ph p { font-size:12px; color:rgba(255,255,255,.18); }
+    .canvas-ph.hidden { display:none; }
+    .gps-bar { padding:9px 14px; background:rgba(11,42,31,0.03); border-top:1px solid rgba(11,42,31,0.06); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+    .gps-item { display:flex; align-items:center; gap:4px; }
+    .gps-item svg { width:12px; height:12px; stroke:var(--text3); fill:none; stroke-width:2; }
+    .gps-item span { font-size:11px; color:var(--text3); font-weight:500; }
+    .gval { color:var(--text2) !important; font-weight:600 !important; }
+    .drone-controls { padding:12px 14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-top:1px solid rgba(11,42,31,0.06); }
+    .btn { display:flex; align-items:center; gap:6px; padding:9px 18px; border-radius:40px; font-size:13px; font-weight:500; cursor:pointer; transition:all .2s; border:none; font-family:'DM Sans',sans-serif; }
+    .btn svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; }
+    .btn-p { background:var(--deep); color:var(--white); }
+    .btn-p:hover { background:var(--mid); box-shadow:0 4px 12px rgba(11,42,31,0.2); }
+    .btn-d { background:var(--red-bg); color:var(--red-text); border:1.5px solid rgba(139,32,32,0.12); }
+    .btn-d:hover { background:#fcd5d5; }
+    .btn-o { background:var(--white); color:var(--text2); border:1.5px solid rgba(11,42,31,0.12); }
+    .btn-o:hover { border-color:var(--bright); color:var(--deep); }
+    .live-dets { padding:10px 14px 14px; display:flex; flex-wrap:wrap; gap:6px; min-height:48px; border-top:1px solid rgba(11,42,31,0.06); }
+    .ltag { display:flex; align-items:center; gap:5px; padding:5px 11px; border-radius:18px; font-size:12px; font-weight:500; animation:tagIn .2s ease; }
+    @keyframes tagIn { from{opacity:0;transform:scale(.88)} to{opacity:1;transform:scale(1)} }
+    .ltag.h{background:var(--pale);color:var(--mid);} .ltag.d{background:var(--red-bg);color:var(--red-text);} .ltag.w{background:var(--yellow-bg);color:var(--yellow-text);}
+    .ltdot { width:6px; height:6px; border-radius:50%; }
+    .ltag.h .ltdot{background:var(--accent);} .ltag.d .ltdot{background:var(--red);} .ltag.w .ltdot{background:var(--yellow);}
+    .live-empty { color:var(--text3); font-size:12px; padding:6px 0; width:100%; text-align:center; }
+
+    /* MAP */
+    .map-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; }
+    .map-head { padding:13px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(11,42,31,0.06); }
+    .map-head h4 { font-size:13px; font-weight:600; color:var(--deep); }
+    .map-actions { display:flex; gap:6px; }
+    #disease-map { height:460px; position: relative; }
+    #mini-map { height:260px; position: relative; }
+    .maplibregl-popup-content { font-family:'DM Sans',sans-serif !important; font-size:12px !important; }
+    .map-legend { padding:10px 14px; border-top:1px solid rgba(11,42,31,0.06); display:flex; gap:14px; flex-wrap:wrap; }
+    .leg-item { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text2); font-weight:500; }
+    .leg-dot { width:9px; height:9px; border-radius:50%; }
+    .events-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); display:flex; flex-direction:column; max-height:540px; }
+    .events-head { padding:13px 14px 9px; border-bottom:1px solid rgba(11,42,31,0.06); }
+    .events-head h4 { font-size:13px; font-weight:600; color:var(--deep); }
+    .events-list { flex:1; overflow-y:auto; padding:9px; }
+    .eitem { display:flex; gap:9px; padding:10px; border-radius:var(--rs); border:1px solid rgba(11,42,31,0.05); margin-bottom:7px; cursor:pointer; transition:background .18s; }
+    .eitem:hover { background:var(--cream); }
+    .edot { width:9px; height:9px; border-radius:50%; flex-shrink:0; margin-top:3px; }
+    .ebody { flex:1; min-width:0; }
+    .elabel { font-size:12px; font-weight:600; color:var(--text); text-transform:capitalize; }
+    .ecoords { font-size:10px; color:var(--text3); margin-top:2px; font-family:monospace; }
+    .etime { font-size:10px; color:var(--text3); margin-top:1px; }
+    .econf { font-size:10px; font-weight:600; margin-top:2px; }
+    .no-events { text-align:center; padding:32px 14px; color:var(--text3); font-size:13px; line-height:1.6; }
+    .map-two-col { display:grid; grid-template-columns:1fr 300px; gap:16px; }
+    @media(max-width:800px){ .map-two-col{grid-template-columns:1fr;} }
+    .map-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+
+    /* RECORDS PANEL */
+    .records-container { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); }
+    .records-head { padding:14px; border-bottom:1px solid rgba(11,42,31,0.06); display:flex; justify-content:space-between; align-items:center; }
+    .records-head h4 { font-size:13px; font-weight:600; color:var(--deep); margin:0; }
+    .records-list { max-height:600px; overflow-y:auto; }
+    .record-item { padding:12px 14px; border-bottom:1px solid rgba(11,42,31,0.05); }
+    .record-item:last-child { border-bottom:none; }
+    .record-type { display:inline-block; font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; margin-bottom:6px; }
+    .record-type.upload { background:var(--yellow-bg); color:var(--yellow-text); }
+    .record-type.drone { background:#e3f2fd; color:#1565c0; }
+    .record-meta { font-size:11px; color:var(--text3); margin-bottom:6px; }
+    .record-detections { display:flex; flex-wrap:wrap; gap:6px; }
+    .record-det { font-size:11px; padding:4px 8px; background:#f0f0f0; border-radius:4px; color:var(--text); }
+    .record-det.high { background:rgba(62,201,122,0.15); color:var(--bright); font-weight:600; }
+    .no-records { text-align:center; padding:40px 14px; color:var(--text3); font-size:13px; }
+
+
+    /* TOAST / FOOTER */
+    .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(16px); background:#111; color:#fff; padding:10px 22px; border-radius:40px; font-size:13px; opacity:0; transition:all .3s; z-index:999; pointer-events:none; }
+    .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    footer { position:relative; z-index:1; text-align:center; padding:18px; font-size:11px; color:var(--text3); letter-spacing:.3px; border-top:1px solid rgba(11,42,31,0.06); margin-top:8px; }
+    footer strong { color:var(--mid); }
+    .maplibregl-popup-content-wrapper { border-radius:10px !important; font-family:'DM Sans',sans-serif !important; }
+    .maplibregl-popup-content { font-size:12px !important; line-height:1.65 !important; }
+
+    /* AUTH MODAL */
+    .auth-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; display:flex; align-items:center; justify-content:center; }
+    .auth-overlay.hidden { display:none; }
+    .auth-modal { background:var(--cream); border-radius:var(--r); box-shadow:var(--shm); padding:32px; width:90%; max-width:400px; animation:slideUp .3s ease; z-index:1001; }
+    @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    .auth-modal h2 { font-size:24px; margin-bottom:24px; color:var(--deep); font-family:'DM Serif Display',serif; }
+    .auth-modal .form-group { margin-bottom:16px; }
+    .auth-modal label { display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text2); letter-spacing:.5px; text-transform:uppercase; }
+    .auth-modal input { width:100%; padding:11px 14px; border:1.5px solid rgba(11,42,31,0.12); border-radius:var(--rs); font-size:13px; font-family:'DM Sans',sans-serif; }
+    .auth-modal input:focus { outline:none; border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,0.1); }
+    .auth-modal .btn-submit { width:100%; padding:12px; margin-top:24px; background:var(--deep); color:white; border:none; border-radius:var(--rs); font-size:13px; font-weight:600; cursor:pointer; transition:all .2s; font-family:'DM Sans',sans-serif; }
+    .auth-modal .btn-submit:hover { background:var(--mid); }
+    .auth-modal .btn-submit:disabled { background:var(--text3); cursor:not-allowed; }
+    .auth-modal .toggle-form { text-align:center; margin-top:16px; font-size:12px; color:var(--text3); }
+    .auth-modal .toggle-form a { color:var(--bright); cursor:pointer; text-decoration:underline; }
+    .auth-modal .error { background:var(--red-bg); color:var(--red-text); padding:10px 12px; border-radius:var(--rs); font-size:12px; margin-bottom:16px; }
+    .auth-modal .success { background:#e8f5e9; color:#1b5e20; padding:10px 12px; border-radius:var(--rs); font-size:12px; margin-bottom:16px; }
+    .auth-modal .loading { display:none; text-align:center; }
+    .auth-modal .loading.active { display:block; }
+    .auth-modal .spinner { width:20px; height:20px; border:2px solid var(--pale); border-top-color:var(--bright); border-radius:50%; animation:spin .8s linear infinite; display:inline-block; margin-right:8px; vertical-align:middle; }
+    
+    /* USER BADGE IN HEADER */
+    .user-badge { display:flex; align-items:center; gap:8px; }
+    .user-info { font-size:12px; text-align:right; }
+    .user-email { font-size:11px; color:var(--text3); }
+    .logout-btn { padding:6px 14px; background:var(--red-bg); color:var(--red-text); border:1px solid rgba(139,32,32,0.2); border-radius:var(--rs); font-size:11px; font-weight:600; cursor:pointer; transition:all .2s; font-family:'DM Sans',sans-serif; }
+  </style>
+</head>
+<body>
+
+<!-- AUTH SCREEN - SHOWN FIRST -->
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-container">
+    <div class="auth-header">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 2C8 2 4 6 4 10c0 5 8 12 8 12s8-7 8-12c0-4-4-8-8-8z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      </div>
+      <h1>CoconutAI</h1>
+      <p>Drone Disease Mapping System</p>
+    </div>
+    
+    <div class="auth-form">
+      <div class="form-title" id="form-title">Login</div>
+      
+      <div class="error-message" id="error-message"></div>
+      <div class="success-message" id="success-message"></div>
+      
+      <form id="auth-form" onsubmit="handleAuthSubmit(event)">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" required placeholder="your@email.com" />
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" required placeholder="••••••••" />
+        </div>
+        <button type="submit" class="btn-submit" id="submit-btn">
+          <span class="loading-spinner" id="spinner"></span>
+          <span id="btn-text">Login</span>
+        </button>
+      </form>
+      
+      <div class="form-footer">
+        <span id="toggle-text">Don't have an account? <a onclick="switchAuthMode()">Sign Up</a></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP - SHOWN AFTER LOGIN -->
+<div id="app-screen" class="app-screen">
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 2C8 2 4 6 4 10c0 5 8 12 8 12s8-7 8-12c0-4-4-8-8-8z"/><circle cx="12" cy="10" r="2.5"/></svg>
+    </div>
+    <div>
+      <div class="logo-name">CoconutAI</div>
+      <div class="logo-sub">Drone Disease Mapping System</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="auth-status" style="display:flex;gap:16px;align-items:center;">
+      <div class="hbadge b"><span class="pulse b"></span>Drone Ready</div>
+      <div class="hbadge g"><span class="pulse g"></span>YOLO11 Active</div>
+      <button class="btn btn-p" style="padding:8px 16px;font-size:12px;white-space:nowrap;" id="login-btn" style="display:none;">
+        <svg style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Login
+      </button>
+      <div class="user-badge" id="user-badge" style="display:none;">
+        <div class="user-info">
+          <div id="user-email" class="user-email"></div>
+        </div>
+        <button class="logout-btn" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+
+
+<!-- NAV TABS -->
+<div class="nav-tabs">
+  <button class="ntab active" onclick="switchTab('upload',this)">
+    <svg viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+    Upload Image
+  </button>
+  <button class="ntab" onclick="switchTab('drone',this)">
+    <svg viewBox="0 0 24 24"><path d="M12 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/><line x1="12" y1="13" x2="12" y2="22"/></svg>
+    Drone Camera
+  </button>
+  <button class="ntab" onclick="switchTab('map',this)">
+    <svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+    Disease Map
+  </button>
+  <button class="ntab" onclick="switchTab('records',this);loadUserRecords()">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+    My Records
+  </button>
+</div>
+
+<!-- PANELS -->
+<div class="panels">
+
+  <!-- UPLOAD -->
+  <div id="panel-upload" class="panel active">
+    <p class="section-label">Image Analysis</p>
+    <div id="upload-drop" class="upload-drop"
+         ondragover="event.preventDefault();this.classList.add('over')"
+         ondragleave="this.classList.remove('over')"
+         ondrop="handleDrop(event)">
+      <input type="file" id="fileInput" accept="image/*" onchange="detectImage(this.files[0])"/>
+      <div class="loverlay" id="upload-loading"><div class="spin"></div><p>Analyzing leaf...</p></div>
+      <div class="uicon">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      </div>
+      <h3>Drop your leaf image here</h3>
+      <p>or click to browse from your device</p>
+      <div class="ftypes"><span>JPG</span><span>PNG</span><span>WEBP</span></div>
+    </div>
+    <div id="result-area" style="display:none">
+      <div class="result-grid">
+        <div class="img-card">
+          <img id="result-img" src="" alt="Detection result"/>
+          <div class="img-footer">Annotated detection output</div>
+        </div>
+        <div class="det-card">
+          <div class="det-head"><h4>Detections</h4><span class="cbadge" id="count-badge">0 found</span></div>
+          <div class="det-list" id="det-list"><div class="empty-state">No detections yet</div></div>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="scard"><div class="sval" id="s-total">0</div><div class="slbl">Total Detections</div></div>
+        <div class="scard"><div class="sval" id="s-conf">—</div><div class="slbl">Avg. Confidence</div></div>
+        <div class="scard"><div class="sval" id="s-status">—</div><div class="slbl">Overall Status</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DRONE -->
+  <div id="panel-drone" class="panel">
+    <p class="section-label">Live Drone Feed — YOLO11 Real-Time Detection</p>
+    <div class="drone-layout">
+      <div class="drone-feed-card">
+        <div class="feed-toolbar">
+          <div class="ftleft">
+            <svg viewBox="0 0 24 24"><path d="M12 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>
+            <span>Drone Camera Feed</span>
+          </div>
+          <div class="feed-status">
+            <div class="sdot" id="sdot"></div>
+            <span class="sdot-lbl" id="sdot-lbl">Offline</span>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <video id="droneVideo" autoplay playsinline></video>
+          <canvas id="droneCanvas"></canvas>
+          <div class="canvas-ph" id="canvas-ph">
+            <svg viewBox="0 0 24 24"><path d="M12 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/><line x1="12" y1="13" x2="12" y2="22"/></svg>
+            <p>Start drone camera to begin detection</p>
+          </div>
+        </div>
+        <div class="gps-bar">
+          <div class="gps-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2C8 2 4 6 4 10c0 5 8 12 8 12s8-7 8-12c0-4-4-8-8-8z"/></svg><span>Lat: <span class="gval" id="g-lat">—</span></span></div>
+          <div class="gps-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2C8 2 4 6 4 10c0 5 8 12 8 12s8-7 8-12c0-4-4-8-8-8z"/></svg><span>Lng: <span class="gval" id="g-lng">—</span></span></div>
+          <div class="gps-item"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Alt: <span class="gval" id="g-alt">—</span> m</span></div>
+          <div class="gps-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span>Frames: <span class="gval" id="g-frames">0</span></span></div>
+        </div>
+        <div class="drone-controls">
+          <button class="btn btn-p" onclick="startDrone()">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+            Start Drone Camera
+          </button>
+          <button class="btn btn-d" onclick="stopDrone()">
+            <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            Stop
+          </button>
+          <button class="btn btn-o" onclick="switchTab('map',document.querySelectorAll('.ntab')[2])">
+            <svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/></svg>
+            View Map
+          </button>
+        </div>
+        <div class="live-dets" id="live-dets">
+          <span class="live-empty">Start camera to detect diseases</span>
+        </div>
+      </div>
+
+      <!-- Right: mini map + counters -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="map-card">
+          <div class="map-head"><h4>Live GPS Tracking</h4><span class="cbadge" id="pin-count">0 pins</span></div>
+          <div id="mini-map"></div>
+          <div class="map-legend">
+            <div class="leg-item"><div class="leg-dot" style="background:var(--red)"></div>Disease</div>
+            <div class="leg-item"><div class="leg-dot" style="background:var(--yellow)"></div>Warning</div>
+            <div class="leg-item"><div class="leg-dot" style="background:var(--accent)"></div>Healthy</div>
+          </div>
+        </div>
+        <div class="map-stats">
+          <div class="scard"><div class="sval" id="ms-total">0</div><div class="slbl">Pins Logged</div></div>
+          <div class="scard"><div class="sval" id="ms-dis" style="color:var(--red)">0</div><div class="slbl">Diseased</div></div>
+          <div class="scard"><div class="sval" id="ms-ok" style="color:var(--accent)">0</div><div class="slbl">Healthy</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div id="panel-map" class="panel">
+    <p class="section-label">Disease Location Map</p>
+    <div class="map-two-col">
+      <div>
+        <div class="map-card">
+          <div class="map-head">
+            <h4>Coconut Farm — Disease Heatmap</h4>
+            <div class="map-actions">
+              <button class="btn btn-o" style="padding:6px 12px;font-size:12px" onclick="toggle3DView()">🌍 3D View</button>
+              <button class="btn btn-o" style="padding:6px 12px;font-size:12px" onclick="clearPins()">Clear</button>
+              <button class="btn btn-o" style="padding:6px 12px;font-size:12px" onclick="exportCSV()">Export CSV</button>
+            </div>
+          </div>
+          <div id="disease-map"></div>
+          <div class="map-legend">
+            <div class="leg-item"><div class="leg-dot" style="background:var(--red)"></div>Disease detected</div>
+            <div class="leg-item"><div class="leg-dot" style="background:var(--yellow)"></div>Warning zone</div>
+            <div class="leg-item"><div class="leg-dot" style="background:var(--accent)"></div>Healthy</div>
+            <div class="leg-item"><div class="leg-dot" style="background:#888"></div>Upload pin</div>
+            <div class="leg-item"><span style="font-size:11px">🔴🟠🟡 Heatmap shows disease concentration</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="events-card">
+        <div class="events-head"><h4>Detection Log</h4></div>
+        <div class="events-list" id="events-list">
+          <div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image with GPS enabled.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Records Panel -->
+  <div id="panel-records" class="panel">
+    <p class="section-label">My Detection Records</p>
+    <div class="records-container">
+      <div class="records-head">
+        <h4>Detection History (>= 50% Confidence)</h4>
+        <button class="btn btn-o" onclick="loadUserRecords()" style="padding:6px 12px;font-size:12px;">Refresh</button>
+      </div>
+      <div id="records-list" class="records-list">
+        <div class="no-records">Loading records...</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /panels -->
+
+<footer>Powered by <strong>YOLO11</strong> &nbsp;·&nbsp; <strong>FastAPI</strong> &nbsp;·&nbsp; <strong>MapLibre GL</strong> &nbsp;·&nbsp; CoconutAI Drone Mapping System</footer>
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Global Variables (declare first!) ──
+let currentUser = null;
+let currentToken = null;
+let authMode = 'login'; // 'login' or 'signup'
+let auth = null;
+let ws, droneStream, droneRunning=false, frameCount=0;
+let mainMap, miniMap, mapsReady=false;
+let log=[]; let mainMarkers=[], miniMarkers=[];
+let baseLat=7.30806, baseLng=125.68417;
+let lastDroneGPS = null; // ✅ Store latest drone GPS data from WebSocket
+
+// ── Firebase Config ──
+const firebaseConfig = {
+  apiKey: "AIzaSyCYPyhuhLGuKLColorKYU6gZs3-ASMo0ck",
+  authDomain: "coconut-leaf-disease-dcf9a.firebaseapp.com",
+  projectId: "coconut-leaf-disease-dcf9a",
+  storageBucket: "coconut-leaf-disease-dcf9a.firebasestorage.app",
+  messagingSenderId: "87937530464",
+  appId: "1:87937530464:web:3dfb3cfb5f7c689a522105",
+  measurementId: "G-4NNZLME6MB"
+};
+
+// Initialize Firebase immediately
+firebase.initializeApp(firebaseConfig);
+auth = firebase.auth();
+console.log('✅ Firebase initialized successfully!');
+
+// Listen for auth state changes
+auth.onAuthStateChanged(async (user) => {
+  console.log('🔄 Auth state changed:', user ? 'LOGGED IN (' + user.email + ')' : 'LOGGED OUT');
+  if (user) {
+    currentUser = user;
+    // ✅ Get and store token when auth state changes
+    try {
+      const token = await user.getIdToken();
+      currentToken = token;
+      console.log('✅ Token refreshed on auth state change');
+    } catch (e) {
+      console.warn('Token refresh failed:', e);
+    }
+    document.getElementById('auth-screen').classList.add('hidden');
+    document.getElementById('app-screen').classList.add('active');
+    updateUIOnLogin(user);
+  } else {
+    currentUser = null;
+    currentToken = null;
+    document.getElementById('auth-screen').classList.remove('hidden');
+    document.getElementById('app-screen').classList.remove('active');
+    updateUIOnLogout();
+  }
+});
+
+// ── Auth UI Functions ──
+
+
+
+function showError(message) {
+  console.error('❌ ERROR:', message);
+  const errorDiv = document.getElementById('error-message');
+  if (!errorDiv) {
+    console.error('Error message element not found!');
+    alert('❌ ' + message);
+    return;
+  }
+  errorDiv.textContent = message;
+  errorDiv.style.display = 'block';
+  setTimeout(() => {
+    errorDiv.style.display = 'none';
+    errorDiv.textContent = '';
+  }, 5000);
+}
+
+function showSuccess(message) {
+  console.log('Showing success:', message);
+  const successDiv = document.getElementById('success-message');
+  if (!successDiv) {
+    console.error('Success message element not found!');
+    return;
+  }
+  successDiv.textContent = message;
+  successDiv.style.display = 'block';
+  setTimeout(() => {
+    successDiv.style.display = 'none';
+    successDiv.textContent = '';
+  }, 5000);
+}
+
+function switchAuthMode() {
+  const title = document.getElementById('form-title');
+  const btnText = document.getElementById('btn-text');
+  const toggleText = document.getElementById('toggle-text');
+  
+  authMode = authMode === 'login' ? 'signup' : 'login';
+  
+  if (authMode === 'login') {
+    title.textContent = 'Login';
+    btnText.textContent = 'Login';
+    toggleText.innerHTML = 'Don\'t have an account? <a onclick="switchAuthMode()">Sign Up</a>';
+  } else {
+    title.textContent = 'Sign Up';
+    btnText.textContent = 'Sign Up';
+    toggleText.innerHTML = 'Already have an account? <a onclick="switchAuthMode()">Login</a>';
+  }
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const form = document.getElementById('auth-form');
+  const btn = document.getElementById('submit-btn');
+  const spinner = document.getElementById('spinner');
+  const btnText = document.getElementById('btn-text');
+  
+  // Validation
+  if (!email) {
+    showError('❌ Please enter an email');
+    return;
+  }
+  if (!password) {
+    showError('❌ Please enter a password');
+    return;
+  }
+  
+  // Disable button during submission
+  btn.disabled = true;
+  spinner.classList.add('active');
+  document.getElementById('error-message').innerHTML = '';
+  
+  try {
+    console.log('Auth attempt:', authMode, email);
+    
+    if (!auth) {
+      throw new Error('Firebase not initialized. Check browser console.');
+    }
+    
+    let userCred;
+    
+    if (authMode === 'login') {
+      console.log('Attempting login...');
+      userCred = await auth.signInWithEmailAndPassword(email, password);
+      console.log('Login successful:', userCred.user.email);
+      showSuccess('✅ Login successful!');
+      
+      // Get token and verify with backend
+      const token = await userCred.user.getIdToken();
+      currentToken = token;  // ✅ Save token for WebSocket use
+      console.log('Token obtained');
+      
+      const verifyRes = await fetch('/auth/verify-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      
+      console.log('Backend verification:', verifyRes.status);
+      
+      if (verifyRes.ok) {
+        form.reset();
+        console.log('Auth complete');
+        // Auth state listener will handle showing app
+      } else {
+        const errData = await verifyRes.json();
+        throw new Error('Backend error: ' + (errData.detail || 'Unknown'));
+      }
+    } else {
+      console.log('Attempting signup...');
+      userCred = await auth.createUserWithEmailAndPassword(email, password);
+      console.log('Signup successful:', userCred.user.email);
+      
+      // Sign out immediately after signup
+      await auth.signOut();
+      console.log('Auto-signed out after signup');
+      
+      // Show success and switch to login mode
+      showSuccess('✅ Account created! Now please login.');
+      form.reset();
+      authMode = 'login';
+      switchAuthMode();
+    }
+  } catch (error) {
+    console.error('Auth error:', error);
+    let errorMsg = error.message || 'Unknown error occurred';
+    
+    if (error.code === 'auth/email-already-in-use') {
+      errorMsg = '❌ Email already in use. Try logging in.';
+    } else if (error.code === 'auth/weak-password') {
+      errorMsg = '❌ Password too weak (min 6 characters).';
+    } else if (error.code === 'auth/user-not-found') {
+      errorMsg = '❌ Email not found. Sign up first.';
+    } else if (error.code === 'auth/wrong-password') {
+      errorMsg = '❌ Incorrect password.';
+    } else if (error.code === 'auth/invalid-email') {
+      errorMsg = '❌ Invalid email address.';
+    } else if (error.code === 'auth/network-request-failed') {
+      errorMsg = '❌ Network error. Check your connection.';
+    } else if (error.code === 'auth/operation-not-allowed') {
+      errorMsg = '❌ Email/Password not enabled in Firebase. Check Firebase console.';
+    }
+    
+    showError(errorMsg);
+  } finally {
+    btn.disabled = false;
+    spinner.classList.remove('active');
+  }
+}
+
+function updateUIOnLogin(user) {
+  document.getElementById('login-btn').style.display = 'none';
+  document.getElementById('user-badge').style.display = 'flex';
+  document.getElementById('user-email').textContent = user.email;
+  // ✅ Load saved map pins from Firebase when user logs in
+  loadSavedMapPins(user.uid);
+}
+
+function updateUIOnLogout() {
+  document.getElementById('login-btn').style.display = 'flex';
+  document.getElementById('user-badge').style.display = 'none';
+  // ✅ Clear map when logging out
+  clearPins();
+}
+
+async function logout() {
+  try {
+    await auth.signOut();
+    showToast('Logged out successfully');
+  } catch (error) {
+    showError('Logout failed: ' + error.message);
+  }
+}
+
+
+
+// ──────────────────────────────────────────────────────────
+// ── Init with 3D Terrain & Disease Heatmap ──
+window.addEventListener('load', () => {
+  // Enhanced style with disease heatmap
+  const rasterStyle = {
+    version: 8,
+    sources: {
+      'osm-source': {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '&copy; OpenStreetMap contributors'
+      },
+      'dem': {
+        type: 'raster-dem',
+        tiles: ['https://demotiles.maplibre.org/terrain/{z}/{x}/{y}.png'],
+        tileSize: 256
+      },
+      'disease-source': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      }
+    },
+    layers: [
+      {
+        id: 'osm-tiles',
+        type: 'raster',
+        source: 'osm-source',
+        paint: { 'raster-opacity': 1 }
+      },
+      {
+        id: 'disease-heatmap',
+        type: 'heatmap',
+        source: 'disease-source',
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'mag'], 0, 0, 20, 1],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 15, 3],
+          'heatmap-color': [
+            'interpolate',
+            ['linear'],
+            ['heatmap-density'],
+            0, 'rgba(0,255,0,0)',
+            0.25, '#90EE90',
+            0.5, '#FFD700',
+            0.75, '#FF8C00',
+            1, '#FF0000'
+          ],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 2, 15, 20],
+          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 7, 1, 9, 0.3]
+        }
+      }
+    ]
+  };
+  
+  // Initialize main disease map with 3D support
+  mainMap = new maplibregl.Map({
+    container: 'disease-map',
+    style: rasterStyle,
+    center: [baseLng, baseLat],
+    zoom: 15,
+    pitch: 0,
+    bearing: 0,
+    attributionControl: true
+  });
+  
+  // Add 3D terrain after map loads
+  mainMap.on('load', () => {
+    mainMap.addSource('dem-src', {
+      type: 'raster-dem',
+      tiles: ['https://demotiles.maplibre.org/terrain/{z}/{x}/{y}.png'],
+      tileSize: 256
+    });
+    
+    mainMap.setTerrain({ source: 'dem-src', exaggeration: 1.5 });
+    
+    // Add sky layer for better 3D visualization
+    mainMap.addLayer({
+      id: 'sky',
+      type: 'sky',
+      paint: {
+        'sky-type': 'gradient',
+        'sky-gradient': ['interpolate', ['linear'], ['sky-radial-progress'],
+          0.8, '#87CEEB',
+          1, '#E0F6FF'
+        ]
+      }
+    });
+    
+    mapsReady = true;
+    
+    // Add navigation controls for 3D (pitch, bearing, zoom)
+    const nav = new maplibregl.NavigationControl({ visualizePitch: true });
+    mainMap.addControl(nav, 'top-right');
+    
+    // Add fullscreen control
+    mainMap.addControl(new maplibregl.FullscreenControl(), 'top-right');
+  });
+  
+  // Initialize mini map (2D only)
+  miniMap = new maplibregl.Map({
+    container: 'mini-map',
+    style: rasterStyle,
+    center: [baseLng, baseLat],
+    zoom: 15,
+    pitch: 0,
+    bearing: 0,
+    attributionControl: false
+  });
+  
+  miniMap.on('load', () => {
+    const nav = new maplibregl.NavigationControl();
+    miniMap.addControl(nav, 'top-right');
+  });
+  
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(p=>{
+      baseLat=p.coords.latitude; baseLng=p.coords.longitude;
+      mainMap.flyTo({ center: [baseLng, baseLat], zoom: 15, pitch: 45, bearing: 0 });
+      miniMap.flyTo({ center: [baseLng, baseLat], zoom: 15 });
+    });
+  }
+});
+
+// ── Tabs ──
+function switchTab(name, btn) {
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.ntab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  btn.classList.add('active');
+  if(name!=='drone') stopDrone();
+  setTimeout(()=>{
+    if(name==='map' && mapsReady) mainMap.resize();
+    if(name==='drone' && mapsReady) miniMap.resize();
+  },60);
+}
+
+// ── Toast ──
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+
+// ── Helper ──
+function cls(label,conf){if(label==='healthy')return 'h';return conf<0.6?'w':'d';}
+function clsColor(c){return c==='h'?'var(--accent)':c==='w'?'var(--yellow)':'var(--red)';}
+
+// ── GPS ──
+function getGPS(cb){
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      p=>cb(p.coords.latitude,p.coords.longitude),
+      ()=>cb(baseLat+(Math.random()-.5)*.002,baseLng+(Math.random()-.5)*.002)
+    );
+  } else cb(baseLat+(Math.random()-.5)*.002,baseLng+(Math.random()-.5)*.002);
+}
+
+// ── Reverse Geocoding with Nominatim API ──
+const geoCache = {}; // Cache to avoid duplicate API calls
+async function reverseGeocode(lat, lng) {
+  const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  if(geoCache[key]) return geoCache[key];
+  
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+      { headers: { 'Accept-Language': 'en' } }
+    );
+    const data = await response.json();
+    
+    // Extract human-readable address - prioritize neighborhood/village/town
+    const addr = data.address || {};
+    const location = addr.village || addr.town || addr.city || addr.municipality || addr.county || 'Unknown Location';
+    const province = addr.state || addr.province || '';
+    const address = province ? `${location}, ${province}` : location;
+    
+    geoCache[key] = address;
+    return address;
+  } catch(err) {
+    console.warn('Geocoding failed:', err);
+    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; // Fallback to coordinates
+  }
+}
+
+// ✅ Save a single pin to Firebase
+async function savePinToFirebase(lat, lng, label, confidence, source) {
+  if (!currentUser) return;
+  
+  try {
+    const db = firebase.database();
+    const userPinsRef = db.ref(`users/${currentUser.uid}/map_pins`);
+    
+    const pinData = {
+      lat: lat,
+      lng: lng,
+      label: label,
+      confidence: confidence,
+      source: source,
+      timestamp: new Date().toISOString()
+    };
+    
+    await userPinsRef.push(pinData);
+    console.log('✅ Pin saved to Firebase:', pinData);
+  } catch (error) {
+    console.warn('⚠️  Failed to save pin to Firebase:', error);
+    // Don't break the UI if Firebase save fails
+  }
+}
+
+// ✅ Load all saved pins from Firebase and restore them on the map
+async function loadSavedMapPins(userId) {
+  try {
+    const db = firebase.database();
+    const userPinsRef = db.ref(`users/${userId}/map_pins`);
+    
+    userPinsRef.once('value', async snapshot => {
+      const pinsData = snapshot.val();
+      
+      if (!pinsData) {
+        console.log('ℹ️  No saved pins found for this user');
+        return;
+      }
+      
+      console.log('📍 Loading saved pins from Firebase:', Object.keys(pinsData).length, 'pins');
+      
+      // Clear current log and markers
+      log = [];
+      mainMarkers.forEach(m => mainMap.removeLayer(m));
+      miniMarkers.forEach(m => miniMap.removeLayer(m));
+      mainMarkers = [];
+      miniMarkers = [];
+      
+      // Restore each pin
+      for (const pinId in pinsData) {
+        const pin = pinsData[pinId];
+        if (pin.lat && pin.lng) {
+          addPin(pin.lat, pin.lng, pin.label, pin.confidence, pin.source);
+        }
+      }
+      
+      console.log('✅ Restored', Object.keys(pinsData).length, 'pins from Firebase');
+    });
+  } catch (error) {
+    console.warn('⚠️  Failed to load pins from Firebase:', error);
+  }
+}
+
+// ── Map pins ──
+// MapLibre uses GeoJSON features for markers - create element function
+function createMarkerElement(color){
+  const el = document.createElement('div');
+  el.style.width = '20px';
+  el.style.height = '20px';
+  el.style.borderRadius = '50%';
+  el.style.background = color;
+  el.style.border = '2.5px solid white';
+  el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
+  el.style.cursor = 'pointer';
+  return el;
+}
+
+function addPin(lat,lng,label,confidence,source){
+  const c=cls(label,confidence), color=clsColor(c), pct=Math.round(confidence*100);
+  const time=new Date().toLocaleTimeString();
+  const gMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  
+  // Build popup with loading state for address
+  let popupContent=`<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>Source: ${source}<br><span style="font-size:11px;color:#666">Loading location...</span><br>Time: ${time}<br><a href="${gMapsUrl}" target="_blank" style="color:#0066cc;text-decoration:none;font-weight:600;font-size:12px">📍 Get Directions</a>`;
+  
+  let markerElement = null;
+  let popup = null;
+  let miniPopup = null;
+  
+  if(mapsReady){
+    // Main map marker
+    markerElement = createMarkerElement(color);
+    popup = new maplibregl.Popup({offset: 25}).setHTML(popupContent);
+    const mainMarker = new maplibregl.Marker({element: markerElement})
+      .setLngLat([lng, lat])
+      .setPopup(popup)
+      .addTo(mainMap);
+    
+    // Mini map marker
+    const miniElement = createMarkerElement(color);
+    const miniMarker = new maplibregl.Marker({element: miniElement})
+      .setLngLat([lng, lat])
+      .addTo(miniMap);
+    
+    mainMarkers.push({marker: mainMarker, popup: popup}); 
+    miniMarkers.push(miniMarker);
+    miniMap.flyTo({center: [lng, lat], zoom: 16});
+    
+    // 📊 Add disease point to heatmap layer
+    const diseaseSource = mainMap.getSource('disease-source');
+    if (diseaseSource) {
+      const diseaseData = diseaseSource._data;
+      const severity = (c === 'd') ? confidence : (c === 'w') ? confidence * 0.6 : 0.1;
+      diseaseData.features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lng, lat] },
+        properties: { mag: severity * 100, label, confidence: pct }
+      });
+      diseaseSource.setData(diseaseData);
+    }
+  }
+  
+  const entry = {lat,lng,label,confidence,time,source,c,color,address:'Loading...',mainMarker: markerElement, popup: popup};
+  log.unshift(entry);
+  
+  // ✅ Save pin to Firebase if user is logged in
+  if (currentUser) {
+    savePinToFirebase(lat, lng, label, confidence, source);
+  }
+  
+  // Fetch and update address asynchronously
+  reverseGeocode(lat, lng).then(address => {
+    entry.address = address;
+    
+    // Update marker popup with real address
+    if(popup) {
+      const updatedPopup = `<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>📍 <b>${address}</b><br>Source: ${source}<br>Time: ${time}<br><a href="${gMapsUrl}" target="_blank" style="color:#0066cc;text-decoration:none;font-weight:600;font-size:12px">🗺️ Get Directions</a>`;
+      popup.setHTML(updatedPopup);
+    }
+    
+    renderLog(); // Re-render with address
+  });
+  
+  renderLog(); updateStats();
+  document.getElementById('pin-count').textContent=log.length+' pins';
+}
+
+function renderLog(){
+  const el=document.getElementById('events-list');
+  if(!log.length){el.innerHTML='<div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image.</div>';return;}
+  el.innerHTML=log.map((d,i)=>{
+    const gMapsUrl = `https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lng}`;
+    return `
+    <div class="eitem" onclick="flyTo(${i})">
+      <div class="edot" style="background:${d.color}"></div>
+      <div class="ebody">
+        <div class="elabel">${d.label.replace(/_/g,' ')}</div>
+        <div class="ecoords" style="font-weight:600;color:var(--text)">🌍 ${d.address}</div>
+        <div class="etime">${d.time} &middot; ${d.source}</div>
+        <div class="econf" style="color:${d.color}">${Math.round(d.confidence*100)}% confidence</div>
+        <a href="${gMapsUrl}" target="_blank" style="font-size:11px;color:#0066cc;text-decoration:none;font-weight:600;display:inline-block;margin-top:4px">🗺️ Directions →</a>
+      </div>
+    </div>`
+  }).join('');
+}
+
+function flyTo(i){
+  const d=log[i];
+  if(mapsReady){
+    mainMap.flyTo({center: [d.lng, d.lat], zoom: 17});
+    const markerData = mainMarkers[mainMarkers.length-1-i];
+    if(markerData && markerData.popup) markerData.popup.addTo(mainMap);
+  }
+  switchTab('map',document.querySelectorAll('.ntab')[2]);
+}
+function updateStats(){
+  const total=log.length, dis=log.filter(d=>d.label!=='healthy').length, ok=total-dis;
+  ['ms-total','ms-dis','ms-ok'].forEach((id,i)=>document.getElementById(id).textContent=[total,dis,ok][i]);
+}
+function clearPins(){
+  mainMarkers.forEach(m=>{
+    if(m && m.marker) m.marker.remove();
+  });
+  miniMarkers.forEach(m=>{
+    if(m && m.remove) m.remove();
+  });
+  mainMarkers=[];miniMarkers=[];log=[];
+  
+  // Clear heatmap data
+  const diseaseSource = mainMap.getSource('disease-source');
+  if (diseaseSource) {
+    diseaseSource.setData({ type: 'FeatureCollection', features: [] });
+  }
+  
+  renderLog();updateStats();
+  document.getElementById('pin-count').textContent='0 pins';
+  showToast('Map cleared.');
+}
+function exportCSV(){
+  if(!log.length){showToast('No data to export.');return;}
+  const rows=['label,confidence,lat,lng,time,source',...log.map(d=>`${d.label},${d.confidence.toFixed(3)},${d.lat.toFixed(6)},${d.lng.toFixed(6)},${d.time},${d.source}`)];
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));a.download='coconut_disease_log.csv';a.click();
+}
+
+// 3D View Toggle
+let is3DView = false;
+function toggle3DView() {
+  if (!mainMap) return;
+  
+  is3DView = !is3DView;
+  
+  if (is3DView) {
+    // Enter 3D mode - increase pitch and set bearing
+    mainMap.easeTo({
+      pitch: 60,
+      bearing: 45,
+      duration: 1000
+    });
+    showToast('📍 3D View Activated! Drag to rotate 🌍');
+  } else {
+    // Return to 2D mode
+    mainMap.easeTo({
+      pitch: 0,
+      bearing: 0,
+      duration: 1000
+    });
+    showToast('Returned to 2D View');
+  }
+}
+
+// ── Upload ──
+function handleDrop(e){
+  e.preventDefault();document.getElementById('upload-drop').classList.remove('over');
+  const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))detectImage(f);else showToast('Please drop an image file.');
+}
+async function detectImage(file){
+  if(!file)return;
+  if (!currentUser) {
+    showToast('Session expired, please refresh');
+    return;
+  }
+  document.getElementById('upload-loading').classList.add('on');
+  document.getElementById('result-area').style.display='none';
+  
+  // ✅ Get GPS location first
+  getGPS((gps_lat, gps_lng) => {
+    const fd=new FormData();
+    fd.append('file',file);
+    fd.append('lat', gps_lat);  // ✅ Send coordinates to backend
+    fd.append('lng', gps_lng);
+    
+    fetch('/detect/image',{
+      method:'POST',
+      body:fd,
+      headers: {
+        'Authorization': `Bearer ${currentToken}`
+      }
+    }).then(res=>{
+      if(!res.ok)throw new Error('Server error '+res.status);
+      return res.json();
+    }).then(data=>{
+      renderUpload(data);
+      // ✅ Use the GPS that was sent to server
+      data.detections.forEach(d=>addPin(gps_lat+(Math.random()-.5)*.0003,gps_lng+(Math.random()-.5)*.0003,d.class,d.confidence,'Upload'));
+      document.getElementById('upload-loading').classList.remove('on');
+    }).catch(err=>{
+      showToast('Detection failed: '+err.message);
+      document.getElementById('upload-loading').classList.remove('on');
+    });
+  });
+}
+function renderUpload(data){
+  document.getElementById('result-img').src='data:image/jpeg;base64,'+data.annotated_image_base64;
+  document.getElementById('result-area').style.display='block';
+  const n=data.detections.length;
+  document.getElementById('count-badge').textContent=n+' found';
+  const list=document.getElementById('det-list');
+  list.innerHTML=n===0?'<div class="empty-state">No diseases detected</div>':data.detections.map(d=>{
+    const c=cls(d.class,d.confidence),pct=Math.round(d.confidence*100);
+    return `<div class="ditem"><div class="ddot ${c}"></div><div class="dinfo"><div class="dlabel">${d.class.replace(/_/g,' ')}</div><div class="dbar-bg"><div class="dbar ${c}" style="width:${pct}%"></div></div><div class="dpct">${pct}% confidence</div></div></div>`;
+  }).join('');
+  const avg=n>0?Math.round(data.detections.reduce((a,d)=>a+d.confidence,0)/n*100)+'%':'—';
+  const bad=data.detections.some(d=>d.class!=='healthy');
+  document.getElementById('s-total').textContent=n;
+  document.getElementById('s-conf').textContent=avg;
+  document.getElementById('s-status').textContent=n===0?'Clear':bad?'Diseased':'Healthy';
+  document.getElementById('s-status').style.color=bad?'var(--red)':'var(--accent)';
+}
+
+// ── Drone ──
+let frameQueue=[], sendingFrame=false, droneFrameSkip=0;
+let droneDetectionCount = 0; // Track disease detections during flight
+let droneSessionPins = []; // Track pins added in current session
+let dronePath = []; // Track drone flight path
+let dronePathMarker = null; // Polyline for drone path
+const FRAME_SKIP = 2; // Send 1 out of every 3 frames (reduces to ~1.67 FPS for processing)
+const REDUCED_WIDTH = 416;
+const REDUCED_HEIGHT = 312;
+const JPEG_QUALITY = 0.5; // Reduce compression quality for faster transmission
+const MIN_CONFIDENCE = 0.5; // Only pin detections with 50%+ confidence
+
+async function startDrone(){
+  if (!currentUser) {
+    showToast('Session expired, please refresh');
+    return;
+  }
+  
+  // ✅ Refresh token before connecting WebSocket
+  try {
+    currentToken = await currentUser.getIdToken();
+    console.log('✅ Token refreshed before WebSocket connection');
+  } catch (e) {
+    showToast('Failed to refresh auth token: ' + e.message);
+    return;
+  }
+  
+  if (!currentToken) {
+    showToast('No valid authentication token');
+    return;
+  }
+  
+  try{
+    droneDetectionCount = 0; // Reset detection counter
+    droneSessionPins = [];
+    droneStream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'environment'}});
+    const v=document.getElementById('droneVideo'),c=document.getElementById('droneCanvas');
+    v.srcObject=droneStream;c.width=640;c.height=480;
+    droneRunning=true;frameCount=0;droneFrameSkip=0;frameQueue=[];sendingFrame=false;
+    document.getElementById('sdot').classList.add('live');
+    document.getElementById('sdot-lbl').textContent='Live • Detecting...';
+    document.getElementById('canvas-ph').classList.add('hidden');
+    ws=new WebSocket('ws://'+location.host+'/detect/stream?token='+currentToken);
+    ws.onmessage=e=>{
+      const data=JSON.parse(e.data);
+      if (data.error) {
+        showToast('WebSocket error: ' + data.error);
+        stopDrone();
+        return;
+      }
+      // ✅ Store drone GPS data from WebSocket
+      if(data.gps && data.gps.lat && data.gps.lng) {
+        lastDroneGPS = data;
+      }
+      const img=new Image();img.onload=()=>c.getContext('2d').drawImage(img,0,0,640,480);img.src=data.annotated_image;
+      const box=document.getElementById('live-dets');
+      
+      // 📍 Real-time disease detection and pinning during drone flight
+      if(!data.detections.length){
+        box.innerHTML='<span class="live-empty">📡 Scanning... No diseases this frame</span>';
+      }
+      else{
+        // Show all detections in real-time display
+        box.innerHTML=data.detections.map(d=>{const cl=cls(d.class,d.confidence);return `<span class="ltag ${cl}"><span class="ltdot"></span>${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`;}).join('');
+        
+        // 📌 Pin disease detections with high confidence (exclude healthy + low confidence)
+        if(data.gps && data.gps.lat && data.gps.lng){
+          const lat=data.gps.lat, lng=data.gps.lng;
+          data.detections.forEach(d=>{
+            // Only pin disease/warning with sufficient confidence
+            if(d.class!=='healthy' && d.confidence >= MIN_CONFIDENCE){
+              addPin(lat, lng, d.class, d.confidence, 'Drone');
+              droneDetectionCount++;
+              droneSessionPins.push({lat, lng, class: d.class, confidence: d.confidence});
+              
+              // Update detection counter badge
+              document.getElementById('pin-count').textContent = droneDetectionCount + ' diseases pinned';
+              
+              // Show toast notification for high-confidence detections
+              if(d.confidence >= 0.75){
+                showToast('🚨 ' + d.class.toUpperCase() + ' detected at ' + lat.toFixed(4) + ',' + lng.toFixed(4));
+              }
+            }
+          });
+        } else {
+          // Fallback to browser geolocation if drone GPS unavailable
+          getGPS((lat,lng)=>{
+            data.detections.forEach(d=>{
+              if(d.class!=='healthy' && d.confidence >= MIN_CONFIDENCE){
+                addPin(lat+(Math.random()-.5)*.0003, lng+(Math.random()-.5)*.0003, d.class, d.confidence, 'Drone');
+                droneDetectionCount++;
+              }
+            });
+          });
+        }
+      }
+      sendingFrame=false; // ✅ Mark frame sent, process queue
+      processFrameQueue();
+    };
+    
+    ws.onerror = (error) => {
+      console.error('❌ WebSocket error:', error);
+      showToast('Connection error - check backend server');
+      document.getElementById('sdot-lbl').textContent='Error';
+    };
+    
+    ws.onclose = () => {
+      if(droneRunning) {
+        console.warn('WebSocket closed unexpectedly');
+        showToast('Connection lost');
+        document.getElementById('sdot-lbl').textContent='Offline';
+      }
+    };
+    
+    captureLoop(v);
+  }catch(err){showToast('Camera error: '+err.message);}
+}
+
+function processFrameQueue(){
+  if(frameQueue.length>0 && !sendingFrame && ws && ws.readyState===WebSocket.OPEN){
+    sendingFrame=true;
+    ws.send(frameQueue.shift());
+  }
+}
+
+function captureLoop(v){
+  if(!droneRunning)return;
+  if(v.readyState===4){
+    frameCount++;document.getElementById('g-frames').textContent=frameCount;
+    
+    // Update GPS display from latest WebSocket data or browser location
+    if(lastDroneGPS && lastDroneGPS.gps){
+      const lat = lastDroneGPS.gps.lat;
+      const lng = lastDroneGPS.gps.lng;
+      
+      document.getElementById('g-lat').textContent=lat.toFixed(6);
+      document.getElementById('g-lng').textContent=lng.toFixed(6);
+      document.getElementById('g-alt').textContent=lastDroneGPS.gps.altitude.toFixed(1);
+      
+      // 📍 Track drone flight path on mini-map
+      dronePath.push([lng, lat]);
+      
+      // Update drone location on mini-map every 10 frames
+      if(frameCount % 10 === 0 && mapsReady){
+        // Update drone position marker on mini-map
+        const droneMarkerEl = document.createElement('div');
+        droneMarkerEl.style.width = '16px';
+        droneMarkerEl.style.height = '16px';
+        droneMarkerEl.style.borderRadius = '50%';
+        droneMarkerEl.style.background = '#4a7cf7';
+        droneMarkerEl.style.border = '3px solid white';
+        droneMarkerEl.style.boxShadow = '0 0 10px rgba(74,124,247,0.6)';
+        
+        if(!dronePathMarker) {
+          dronePathMarker = new maplibregl.Marker({element: droneMarkerEl, scale: 1.2})
+            .setLngLat([lng, lat])
+            .addTo(miniMap);
+        } else {
+          dronePathMarker.setLngLat([lng, lat]);
+        }
+        
+        // Auto-center mini-map on drone
+        miniMap.flyTo({center: [lng, lat], zoom: 16, duration: 300});
+      }
+    } else {
+      getGPS((lat,lng)=>{
+        document.getElementById('g-lat').textContent=lat.toFixed(6);
+        document.getElementById('g-lng').textContent=lng.toFixed(6);
+        document.getElementById('g-alt').textContent=(Math.random()*5+10).toFixed(1);
+      });
+    }
+    
+    // ✅ OPTIMIZATION: Skip frames to reduce processing load
+    if(droneFrameSkip++ % (FRAME_SKIP+1) === 0){
+      const canvas=document.createElement('canvas');
+      canvas.width=REDUCED_WIDTH;
+      canvas.height=REDUCED_HEIGHT;
+      canvas.getContext('2d').drawImage(v,0,0,REDUCED_WIDTH,REDUCED_HEIGHT);
+      frameQueue.push(canvas.toDataURL('image/jpeg',JPEG_QUALITY));
+      processFrameQueue(); // Try to send if not already sending
+    }
+  }
+  requestAnimationFrame(captureLoop.bind(null,v)); // ✅ Use RAF for smooth capture
+}
+function stopDrone(){
+  droneRunning=false;
+  if(ws)ws.close();
+  if(droneStream)droneStream.getTracks().forEach(t=>t.stop());
+  frameQueue=[];sendingFrame=false;droneFrameSkip=0;
+  
+  // Clean up drone path marker
+  if(dronePathMarker){
+    dronePathMarker.remove();
+    dronePathMarker = null;
+  }
+  dronePath = [];
+  
+  document.getElementById('sdot').classList.remove('live');
+  document.getElementById('sdot-lbl').textContent='Offline';
+  
+  // Show session summary
+ 
+  document.getElementById('live-dets').innerHTML='<span class="live-empty">Start camera to detect diseases</span>';
+  document.getElementById('canvas-ph').classList.remove('hidden');
+  document.getElementById('droneCanvas').getContext('2d').clearRect(0,0,640,480);
+  ['g-lat','g-lng','g-alt'].forEach(id=>document.getElementById(id).textContent='—');
+  
+  // Log drone session data
+  if(droneSessionPins.length > 0){
+    console.log('📊 Drone Session Summary:', {
+      totalDetections: droneDetectionCount,
+      pins: droneSessionPins,
+      flightPath: dronePath,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+// ── Load User Detection Records ──
+async function loadUserRecords() {
+  if (!currentToken) {
+    showToast('Please log in first');
+    return;
+  }
+  
+  const listEl = document.getElementById('records-list');
+  listEl.innerHTML = '<div class="no-records">Loading records...</div>';
+  
+  try {
+    const res = await fetch('/detections/my-records', {
+      headers: {
+        'Authorization': `Bearer ${currentToken}`
+      }
+    });
+    
+    if (!res.ok) throw new Error('Failed to load records');
+    
+    const data = await res.json();
+    console.log('📊 User records:', data);
+    
+    if (!data.records || data.records.length === 0) {
+      listEl.innerHTML = '<div class="no-records">No detection records yet.<br>Upload an image or start the drone to record detections.</div>';
+      return;
+    }
+    
+    listEl.innerHTML = data.records.map(record => {
+      const timestamp = new Date(record.timestamp).toLocaleString();
+      const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
+      const detections = record.detections || [];
+      
+      // ✅ Handle GPS from different sources (lat/lng or gps.lat/gps.lng)
+      let lat = record.lat || (record.gps && record.gps.lat);
+      let lng = record.lng || (record.gps && record.gps.lng);
+      const locationDisplay = lat && lng 
+        ? `<div style="font-size:11px;color:var(--text3);margin-top:6px">📍 ${parseFloat(lat).toFixed(5)}, ${parseFloat(lng).toFixed(5)}</div>`
+        : '';
+      
+      return `
+        <div class="record-item">
+          <span class="record-type ${record.type}">${typeLabel}</span>
+          <div class="record-meta">
+            <strong>${timestamp}</strong><br>
+            ${detections.length} detection${detections.length !== 1 ? 's' : ''} (≥50% confidence)
+          </div>
+          <div class="record-detections">
+            ${detections.map(d => `<span class="record-det high">${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`).join('')}
+          </div>
+          ${locationDisplay}
+        </div>
+      `;
+    }).join('');
+    
+  } catch (error) {
+    console.error('Error loading records:', error);
+    listEl.innerHTML = `<div class="no-records">❌ Error loading records<br>${error.message}</div>`;
+  }
+}
+
+// Initialize auth UI when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('Page loaded, initializing app');
+});
+</script>
+
+</div><!-- /app-screen -->
+</body>
+</html>
