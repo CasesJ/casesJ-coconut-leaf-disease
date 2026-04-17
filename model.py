@@ -162,24 +162,24 @@ class CoconutDiseaseDetector:
         # Recommendations database for coconut diseases in Davao
         recommendations = {
             'bud root': {
-                'fertilizer': 'Apply NPK 12:12:17 with micronutrients. Use 500g per tree every 3 months to strengthen root system.',
-                'treatment': 'Remove infected leaves. Apply fungicide (Mancozeb 80%) at 2g per liter of water weekly for 4 weeks.',
-                'prevention': 'Ensure good drainage. Avoid waterlogging. Maintain proper spacing between trees for air circulation.'
+                'fertilizer': 'Use slow-release potassium-rich fertilizer (NPK 10:10:20) only AFTER disease control. Avoid high-nitrogen fertilizers.',
+                'treatment': 'PRIMARY: Metalaxyl-based fungicide - spray 0.2% solution into central bud every 7-10 days for 3-4 applications (most effective). ALTERNATIVE: Copper-based (Bordeaux 1% or copper hydroxide 0.5%) sprayed every 2 weeks. SURGICAL: Remove affected spear leaf if only buds infected; apply fungicide paste to cuts. COMBO: Start metalaxyl (weeks 1-3), then copper (weeks 4+).',
+                'prevention': 'CRITICAL: Ensure excellent soil drainage (Phytophthora thrives in wet soil). Remove infected fronds immediately. Maintain 8-9m spacing for air circulation. Avoid crown injuries. Inspect central bud weekly during rainy season. Monitor for yellowing/browning.'
             },
             'caterpillars': {
                 'fertilizer': 'Use NPK 10:10:10 balanced fertilizer monthly to boost tree vigor and recovery.',
-                'treatment': 'Spray Bacillus thuringiensis (Bt) organic insecticide every 7 days until pest is controlled.',
-                'prevention': 'Monitor leaves regularly. Remove infected fronds manually. Encourage natural predators like birds.'
+                'treatment': 'PRIMARY: Spray Bacillus thuringiensis (Bt) at 1.5-2g per liter every 7 days for 3-4 weeks (organic option). ALTERNATIVE: Spinosad (0.5%) every 5-7 days or Phosphine (0.05%) for severe infestations. MANUAL: Handpick affected leaves in early morning when caterpillars are most active.',
+                'prevention': 'Monitor leaves regularly for egg clusters and caterpillar droppings. Remove heavily infested fronds. Encourage natural predators like birds and parasitic wasps. Maintain tree vigor.'
             },
             'cercospora': {
-                'fertilizer': 'Apply potassium-rich fertilizer (NPK 8:8:16) to improve leaf resistance. Every 4 weeks.',
-                'treatment': 'Prune affected leaves. Spray Chlorothalonil fungicide (1.5%) weekly for 3-4 weeks.',
-                'prevention': 'Remove fallen leaves. Space trees properly. Water at base, not on leaves. Improve air flow.'
+                'fertilizer': 'Apply potassium-rich fertilizer (NPK 8:8:16) to improve leaf resistance. Every 4 weeks during treatment.',
+                'treatment': 'PRIMARY: Spray Chlorothalonil (0.75%) weekly for 4-5 weeks. ALTERNATIVE: Copper-based fungicide (Bordeaux 1% or copper hydroxide 0.5%) every 10 days. COMBINATION: Alternate Chlorothalonil and Mancozeb (0.2%) weekly to prevent fungicide resistance. Prune ALL heavily infected leaves and burn them (do not compost).',
+                'prevention': 'Remove fallen leaves immediately. Space trees 8-9m apart for air circulation. Water at soil level, avoid wetting leaves. Ensure good drainage. Sanitize pruning tools with bleach between cuts.'
             },
             'drying of leaflets': {
-                'fertilizer': 'Feed with Magnesium sulfate (1kg per tree) and NPK 15:15:15 every 6 weeks.',
-                'treatment': 'Apply potassium nitrate solution (2%) via foliar spray twice weekly for 4 weeks.',
-                'prevention': 'Water deeply twice weekly during dry season. Mulch soil base. Use drip irrigation if possible.'
+                'fertilizer': 'CRITICAL: Apply Magnesium sulfate (Epsom salt) 1-2kg per tree monthly. NPK 12:8:20 with micronutrients (Zn, Fe, B) weekly via foliar spray for 6-8 weeks. Soil application every 3 months.',
+                'treatment': 'Foliar spray with potassium nitrate (2%) or potassium chloride (3%) twice weekly for 6 weeks. Include micronutrient complex (boron, zinc, iron). Systemic fungicide Carbendazim (0.1%) if fungal secondary infection suspected.',
+                'prevention': 'Water deeply 2-3 times weekly during dry season (morning and evening). Mulch 10cm around base to retain soil moisture. Use drip irrigation for consistent water delivery. Monitor soil pH (coconut prefers 5.5-8.0). Improve soil with compost/coconut husk.'
             },
             'healthy': {
                 'fertilizer': 'Apply balanced NPK 12:12:12 every 3 months. Use phosphate rich during flowering season.',
@@ -187,9 +187,9 @@ class CoconutDiseaseDetector:
                 'prevention': 'Maintain regular fertilization. Water consistently. Remove dead leaves. Monitor for pests.'
             },
             'pestaltiopsis': {
-                'fertilizer': 'Use NPK 10:10:20 with Zinc supplement (5kg Zn per hectare annually).',
-                'treatment': 'Remove all infected fronds. Spray Copper fungicide (1%) every 10 days for 6 weeks.',
-                'prevention': 'Maintain tree vigor with proper fertilization. Prune dead branches. Ensure soil drainage.'
+                'fertilizer': 'Use NPK 10:10:20 with Zinc supplement (5-10kg Zn per hectare annually). Apply monthly during treatment to strengthen tree immunity.',
+                'treatment': 'PRIMARY: Copper-based fungicide (Bordeaux mixture 1% or copper hydroxide 0.5%) sprayed every 10 days for 6-8 weeks. ALTERNATIVE: Azoxystrobin (0.1%) or Carbendazim (0.1%) every 7-10 days. CRITICAL: Remove ALL infected/dead fronds and burn them (not compost). Apply fungicide paste to all cut surfaces.',
+                'prevention': 'Prune dead/weak branches regularly to improve air circulation. Ensure excellent soil drainage. Remove fallen diseased fronds immediately. Maintain tree vigor with consistent fertilization. Space trees properly. Avoid wounding trees (main infection route).'
             }
         }
         
