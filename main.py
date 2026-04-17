@@ -205,6 +205,38 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
 
 
 
+# ─── Fertilizer Recommendation Endpoint ────────────────────────────────────────
+class RecommendationRequest(BaseModel):
+    disease: str
+    confidence: float
+
+@app.post("/recommendations/fertilizer")
+async def get_fertilizer_recommendation(request: RecommendationRequest, decoded: dict = Depends(verify_firebase_token)):
+    """
+    Get farmer-friendly fertilizer recommendations based on detected disease.
+    
+    Args:
+        disease: Disease name from detection
+        confidence: Confidence level (0-1 or 0-100)
+    
+    Returns:
+        Formatted recommendations for Fertilizer, Treatment, and Prevention
+    """
+    recommendation = detector.get_fertilizer_recommendation(request.disease, request.confidence)
+    
+    return {
+        "disease": recommendation['disease'],
+        "confidence_percent": recommendation['confidence'],
+        "recommendations": {
+            "fertilizer": recommendation['fertilizer'],
+            "treatment": recommendation['treatment'],
+            "prevention": recommendation['prevention']
+        },
+        "note": recommendation['note'],
+        "location": "Davao, Philippines"
+    }
+
+
 # ─── Get User's Detection Records ──────────────────────────────────────────────
 @app.get("/detections/my-records")
 async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_token)):

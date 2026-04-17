@@ -170,6 +170,14 @@
     .sval { font-family:'DM Serif Display',serif; font-size:26px; color:var(--deep); }
     .slbl { font-size:11px; color:var(--text3); margin-top:3px; }
 
+    /* RECOMMENDATIONS */
+    .rec-card { background:linear-gradient(135deg, rgba(38,134,90,.05) 0%, rgba(62,201,122,.05) 100%); border-radius:var(--r); padding:20px; margin-top:12px; border:1.5px solid rgba(38,134,90,.12); }
+    .rec-title { font-size:14px; font-weight:600; color:var(--deep); margin-bottom:16px; }
+    .rec-item { margin-bottom:16px; }
+    .rec-item:last-child { margin-bottom:0; }
+    .rec-label { font-size:11px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--mid); margin-bottom:6px; }
+    .rec-text { font-size:13px; color:var(--text); line-height:1.5; }
+
     /* DRONE */
     .drone-layout { display:grid; grid-template-columns:1fr 340px; gap:16px; }
     @media(max-width:860px){ .drone-layout{grid-template-columns:1fr;} }
@@ -422,6 +430,7 @@
         <div class="scard"><div class="sval" id="s-conf">—</div><div class="slbl">Avg. Confidence</div></div>
         <div class="scard"><div class="sval" id="s-status">—</div><div class="slbl">Overall Status</div></div>
       </div>
+      <div id="recommendations-area" style="display:none; margin-top:20px;"></div>
     </div>
   </div>
 
@@ -894,13 +903,9 @@ window.addEventListener('load', () => {
     miniMap.addControl(nav, 'top-right');
   });
   
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(p=>{
-      baseLat=p.coords.latitude; baseLng=p.coords.longitude;
-      mainMap.flyTo({ center: [baseLng, baseLat], zoom: 15, pitch: 45, bearing: 0 });
-      miniMap.flyTo({ center: [baseLng, baseLat], zoom: 15 });
-    });
-  }
+  // ✅ Don't request geolocation on page load - only request when user uploads or uses drone
+  // This prevents the permission prompt on every login
+  // The default Davao coordinates are used if location is not available
 });
 
 // ── Tabs ──
@@ -1247,6 +1252,58 @@ function renderUpload(data){
   document.getElementById('s-conf').textContent=avg;
   document.getElementById('s-status').textContent=n===0?'Clear':bad?'Diseased':'Healthy';
   document.getElementById('s-status').style.color=bad?'var(--red)':'var(--accent)';
+  
+  // ✅ Fetch and display recommendations for detected disease
+  if(n>0){
+    const primary=data.detections.reduce((a,d)=>d.confidence>a.confidence?d:a);
+    if(primary.class!=='healthy'){
+      fetchRecommendation(primary.class, primary.confidence);
+    }
+  }
+}
+
+async function fetchRecommendation(disease, confidence){
+  try{
+    const rec_url='/recommendations/fertilizer';
+    const response=await fetch(rec_url,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':`Bearer ${currentToken}`
+      },
+      body:JSON.stringify({disease:disease,confidence:confidence})
+    });
+    if(!response.ok)throw new Error('Failed to fetch recommendation');
+    const data=await response.json();
+    displayRecommendation(data);
+  }catch(err){
+    console.error('Recommendation error:',err);
+  }
+}
+
+function displayRecommendation(rec){
+  const recArea=document.getElementById('recommendations-area');
+  recArea.innerHTML=`
+    <div class="rec-card">
+      <div class="rec-title">🌾 Farmer Recommendation — ${rec.disease} (${rec.confidence_percent}%)</div>
+      <div class="rec-item">
+        <div class="rec-label">🧪 Fertilizer</div>
+        <div class="rec-text">${rec.recommendations.fertilizer}</div>
+      </div>
+      <div class="rec-item">
+        <div class="rec-label">💊 Treatment</div>
+        <div class="rec-text">${rec.recommendations.treatment}</div>
+      </div>
+      <div class="rec-item">
+        <div class="rec-label">🛡️ Prevention</div>
+        <div class="rec-text">${rec.recommendations.prevention}</div>
+      </div>
+      <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(11,42,31,.1); font-size:11px; color:var(--text3);">
+        ${rec.note}
+      </div>
+    </div>
+  `;
+  recArea.style.display='block';
 }
 
 // ── Drone ──
