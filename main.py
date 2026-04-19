@@ -204,7 +204,7 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
     }
 
 
-
+# ─── Video Detection Endpoint (Post-Processing) ────────────────────────────────
 # ─── Fertilizer Recommendation Endpoint ────────────────────────────────────────
 class RecommendationRequest(BaseModel):
     disease: str
@@ -457,3 +457,21 @@ def login():
 async def favicon():
     """Serve favicon endpoint"""
     return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n" + "="*70)
+    print("  🚀 Starting Coconut Disease Detector API")
+    print("="*70)
+    print("  📍 Access the web interface at: http://localhost:8000")
+    print("  📚 API documentation at: http://localhost:8000/docs")
+    print("  🔑 Press Ctrl+C to stop the server")
+    print("="*70 + "\n")
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info"
+    )

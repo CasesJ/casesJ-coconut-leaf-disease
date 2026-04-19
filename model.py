@@ -1,140 +1,239 @@
 import cv2
 import numpy as np
-from roboflow import Roboflow
-import tempfile
+from openvino import Core
 import os
-
-# Initialize Roboflow with your API key
-rf = Roboflow(api_key="aDUrwpjim8hRnimT1Mvp")
-project = rf.workspace().project("coconut_disease_detection-ln7be-dyfjs")
-roboflow_model = project.version(4).model
+from pathlib import Path
 
 class CoconutDiseaseDetector:
     def __init__(self):
-        # Load the Roboflow YOLO 11 model
-        self.model = roboflow_model
-        # Class names from Roboflow project (6 disease classes)
+        """Initialize OpenVINO detector with best.xml and best.bin model files"""
+        # Get the model path - navigate to best_openvino_model folder
+        current_dir = Path(__file__).parent
+        model_xml = current_dir / "best_openvino_model" / "best.xml"
+        model_bin = current_dir / "best_openvino_model" / "best.bin"
+        
+        # Verify model files exist
+        if not model_xml.exists() or not model_bin.exists():
+            raise FileNotFoundError(f"Model files not found. XML: {model_xml}, BIN: {model_bin}")
+        
+        print(f"✅ Loading OpenVINO model from {model_xml}")
+        
+        # Initialize OpenVINO
+        self.core = Core()
+        self.compiled_model = self.core.compile_model(str(model_xml), "CPU")
+        self.infer_request = self.compiled_model.create_infer_request()
+        
+        # Get model input/output info
+        self.input_layer = self.compiled_model.input(0)
+        self.output_layer = self.compiled_model.output(0)
+        
+        self.input_shape = self.input_layer.shape
+        self.model_height = int(self.input_shape[2])
+        self.model_width = int(self.input_shape[3])
+        
+        print(f"✅ Model loaded successfully. Input shape: {self.input_shape}")
+        
+        # Class names from metadata (YOLO11n model classes)
         self.class_names = {
-            0: 'bud root',
-            1: 'Caterpillars',
-            2: 'Cercospora',
-            3: 'Drying of Leaflets',
-            4: 'Healthy',
-            5: 'Pestaltiopsis'
+            0: 'Caterpillars',
+            1: 'Cercospora',
+            2: 'Drying of Leaflets',
+            3: 'Healthy',
+            4: 'Pestalotiopsis',
+            5: 'bud root'
         }
 
-    def predict(self, image: np.ndarray, conf: float = 20) -> dict:
+    def _non_max_suppression(self, detections, nms_threshold=0.45):
+        """
+        Apply Non-Maximum Suppression to remove overlapping detections
+        
+        Args:
+            detections: List of detection dicts with 'bbox', 'confidence', 'class'
+            nms_threshold: IOU threshold for NMS (default 0.45)
+        
+        Returns:
+            Filtered list of detections
+        """
+        if len(detections) == 0:
+            return detections
+        
+        # Convert to numpy for easier processing
+        boxes = np.array([d['bbox'] for d in detections])
+        confidences = np.array([d['confidence'] for d in detections])
+        
+        # Calculate areas
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+        
+        # Sort by confidence (descending)
+        order = np.argsort(-confidences)
+        
+        keep = []
+        while len(order) > 0:
+            i = order[0]
+            keep.append(i)
+            
+            if len(order) == 1:
+                break
+            
+            # Calculate IOU with all remaining boxes
+            ious = []
+            xi1 = np.maximum(x1[i], x1[order[1:]])
+            yi1 = np.maximum(y1[i], y1[order[1:]])
+            xi2 = np.minimum(x2[i], x2[order[1:]])
+            yi2 = np.minimum(y2[i], y2[order[1:]])
+            
+            inter = np.maximum(xi2 - xi1 + 1, 0) * np.maximum(yi2 - yi1 + 1, 0)
+            union = areas[i] + areas[order[1:]] - inter
+            iou = inter / union
+            
+            # Keep boxes with IOU below threshold
+            order = order[1:][iou < nms_threshold]
+        
+        return [detections[i] for i in keep]
+
+    def predict(self, image: np.ndarray, conf: float = 50) -> dict:
+        """
+        Real-time inference using OpenVINO model
+        
+        Args:
+            image: Input image as numpy array (BGR format)
+            conf: Confidence threshold (0-100, default 50 for better filtering)
+        
+        Returns:
+            dict with detections and annotated image
+        """
         try:
-            print(f"🔍 Starting prediction with confidence threshold: {conf}")
+            print(f"🔍 Starting OpenVINO prediction with confidence threshold: {conf}")
             
-            # ✅ FIX: Save image to temporary file (Roboflow API requires file path)
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-                temp_path = tmp_file.name
-                # Convert BGR to RGB for proper color handling
-                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                cv2.imwrite(temp_path, cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR))
+            # Normalize confidence to 0-1 range if needed
+            confidence_threshold = conf / 100.0 if conf > 1 else conf
             
-            # Pass file path to Roboflow API
-            results = self.model.predict(temp_path, confidence=conf)
+            # Store original image dimensions
+            original_height, original_width = image.shape[:2]
             
-            # Clean up temp file
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            # Preprocess image for model input
+            # YOLO11n expects 640x640 RGB images normalized to 0-1
+            resized_image = cv2.resize(image, (self.model_width, self.model_height))
+            resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
             
-            print(f"📦 Raw results type: {type(results)}")
-            print(f"📦 Raw results: {results}")
+            # Normalize to 0-1 range
+            input_data = resized_image.astype(np.float32) / 255.0
             
-            detections = []
-
-            # Try different ways to extract predictions from Roboflow response
-            predictions = []
+            # Add batch dimension (1, 3, 640, 640)
+            input_data = np.transpose(input_data, (2, 0, 1))
+            input_data = np.expand_dims(input_data, 0)
             
-            if hasattr(results, 'json'):
-                print("✅ Results has json() method")
-                predictions_data = results.json()
-                print(f"📋 JSON data: {predictions_data}")
-                predictions = predictions_data.get('predictions', [])
-            elif isinstance(results, dict) and 'predictions' in results:
-                print("✅ Results is dict with predictions key")
-                predictions = results.get('predictions', [])
-            elif isinstance(results, list):
-                print("✅ Results is a list")
-                predictions = results
+            print(f"✅ Input prepared - shape: {input_data.shape}")
+            
+            # Run inference
+            self.infer_request.infer([input_data])
+            output = self.infer_request.get_output_tensor(0).data
+            
+            print(f"📦 Model output shape: {output.shape}")
+            
+            # Parse YOLO11 output format: [1, 10, 8400]
+            # 10 = 4(bbox coords) + 6(class scores)
+            
+            raw_detections = []  # Collect all detections first
+            
+            # Reshape output: [1, 10, 8400] -> transpose to [8400, 10]
+            if len(output.shape) == 3:
+                predictions = output[0].T  # [num_detections, num_outputs]
             else:
-                print(f"⚠️ Unexpected results format: {type(results)}")
-                predictions = []
+                predictions = output.T if output.shape[0] < output.shape[1] else output
             
-            print(f"📊 Found {len(predictions)} predictions")
+            print(f"📊 Predictions shape after transpose: {predictions.shape}")
             
-            if len(predictions) == 0:
-                print("⚠️ No predictions found - model might not detect anything or confidence is too high")
-                return {"detections": detections, "image": image}
-            
-            for idx, pred in enumerate(predictions):
-                try:
-                    print(f"\n🎯 Processing prediction {idx + 1}: {pred}")
-                    
-                    x = int(pred.get('x', pred.get('X', 0)))
-                    y = int(pred.get('y', pred.get('Y', 0)))
-                    width = int(pred.get('width', pred.get('w', 1)))
-                    height = int(pred.get('height', pred.get('h', 1)))
-                    confidence = float(pred.get('confidence', pred.get('conf', 0)))
-                    
-                    # Extract class name from prediction
-                    # Roboflow might return class name or class ID, so handle both
-                    raw_class = pred.get('class', pred.get('predicted_classes', 'unknown'))
-                    
-                    if isinstance(raw_class, list):
-                        raw_class = raw_class[0] if raw_class else 'unknown'
-                    
-                    # Try to convert to int (class ID), otherwise use as string (class name)
+            # First pass: Collect all predictions above confidence threshold
+            if predictions.shape[0] > 0:
+                for pred in predictions:
                     try:
-                        class_id = int(raw_class)
-                        class_name = self.class_names.get(class_id, 'unknown')
-                    except (ValueError, TypeError):
-                        class_name = str(raw_class)
-                    
-                    print(f"   Class: {class_name}, Confidence: {confidence:.2%}")
-                    
-                    # Convert to bbox format (x1, y1, x2, y2)
-                    x1 = max(0, x - width // 2)
-                    y1 = max(0, y - height // 2)
-                    x2 = min(image.shape[1], x + width // 2)
-                    y2 = min(image.shape[0], y + height // 2)
-
-                    # Draw bounding box on image (Green for Healthy, Red for diseases)
-                    color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
-                    cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
-                    
-                    # Draw text with background for better visibility
-                    text = f"{class_name} {confidence:.2%}"
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.7
-                    thickness = 2
-                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-                    
-                    # Background rectangle for text
-                    text_x = x1
-                    text_y = max(30, y1 - 10)
-                    cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 6), 
-                                (text_x + text_size[0] + 3, text_y + 3), color, -1)
-                    
-                    # White text
-                    cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
-
-                    detections.append({
-                        "class": class_name,
-                        "confidence": round(confidence, 3),
-                        "bbox": [x1, y1, x2, y2]
-                    })
-                except Exception as e:
-                    print(f"❌ Error processing prediction {idx}: {e}")
-                    continue
-
-            print(f"✅ Successfully found {len(detections)} detections")
-            return {"detections": detections, "image": image}
+                        # Extract bbox coordinates and confidence
+                        x_center, y_center, width, height = pred[:4]
+                        class_scores = pred[4:]
+                        
+                        # Get class with highest confidence
+                        class_id = np.argmax(class_scores)
+                        class_conf = class_scores[class_id]
+                        
+                        # Filter by confidence threshold (more selective)
+                        if class_conf < confidence_threshold:
+                            continue
+                        
+                        # Scale coordinates back to original image size
+                        scale_x = original_width / self.model_width
+                        scale_y = original_height / self.model_height
+                        
+                        x_center *= scale_x
+                        y_center *= scale_y
+                        width *= scale_x
+                        height *= scale_y
+                        
+                        # Convert from center format to corner format
+                        x1 = int(max(0, x_center - width / 2))
+                        y1 = int(max(0, y_center - height / 2))
+                        x2 = int(min(original_width, x_center + width / 2))
+                        y2 = int(min(original_height, y_center + height / 2))
+                        
+                        # Skip invalid boxes
+                        if x2 <= x1 or y2 <= y1:
+                            continue
+                        
+                        # Get class name
+                        class_name = self.class_names.get(int(class_id), 'unknown')
+                        
+                        raw_detections.append({
+                            "class": class_name,
+                            "class_id": int(class_id),
+                            "confidence": float(class_conf),
+                            "bbox": [x1, y1, x2, y2]
+                        })
+                    except Exception as e:
+                        continue
+            
+            print(f"📋 Found {len(raw_detections)} raw detections before NMS")
+            
+            # Second pass: Apply NMS to remove overlapping boxes
+            detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
+            
+            print(f"✨ After NMS: {len(detections)} detections")
+            
+            # Draw detections on image
+            for det in detections:
+                x1, y1, x2, y2 = det['bbox']
+                class_name = det['class']
+                confidence = det['confidence']
+                
+                print(f"   ✓ {class_name} - Confidence: {confidence:.2%}")
+                
+                # Draw bounding box (Green for Healthy, Red for diseases)
+                color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
+                
+                # Draw text with background
+                text = f"{class_name} {confidence:.2%}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.7
+                thickness = 2
+                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                
+                text_x = x1
+                text_y = max(30, y1 - 10)
+                cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 6), 
+                            (text_x + text_size[0] + 3, text_y + 3), color, -1)
+                cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+            
+            # Format output detections
+            output_detections = [{
+                "class": d['class'],
+                "confidence": round(d['confidence'], 3),
+                "bbox": d['bbox']
+            } for d in detections]
+            
+            print(f"✅ Successfully processed with {len(output_detections)} final detections")
+            return {"detections": output_detections, "image": image}
+            
         except Exception as e:
             print(f"❌ Prediction error: {e}")
             import traceback

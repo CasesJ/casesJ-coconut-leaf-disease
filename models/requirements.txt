@@ -10,4 +10,4 @@ python-jose[cryptography]
 python-dotenv
 pydantic
 pyserial
-roboflow
+openvino>=2024.0.0
