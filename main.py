@@ -1,4 +1,3 @@
-import cv2
 import base64
 import numpy as np
 from typing import Any
@@ -9,6 +8,10 @@ from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from datetime import datetime
+
+# Import cv2 after other imports to avoid async/pickling issues
+import cv2
+from cv2 import imdecode, imencode, IMREAD_COLOR
 
 from model import detector
 from firebase_config import verify_token
@@ -126,7 +129,7 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
     
     contents = await file.read()
     np_arr = np.frombuffer(contents, np.uint8)
-    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    image = imdecode(np_arr, IMREAD_COLOR)
 
     result = detector.predict(image)
     all_detections = result["detections"]
@@ -136,7 +139,7 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= 0.50]
     print(f"💾 High Confidence (>=50%): {len(high_confidence_detections)}")
 
-    _, buffer = cv2.imencode(".jpg", result["image"])
+    _, buffer = imencode(".jpg", result["image"])
     encoded = base64.b64encode(buffer).decode("utf-8")
     
     # Save to Firebase only high-confidence detections
@@ -353,7 +356,7 @@ async def detect_stream(websocket: WebSocket):
             data = await websocket.receive_text()
             img_bytes = base64.b64decode(data.split(",")[-1])
             np_arr = np.frombuffer(img_bytes, np.uint8)
-            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            image = imdecode(np_arr, IMREAD_COLOR)
 
             result = detector.predict(image)
             all_detections = result["detections"]
@@ -381,7 +384,7 @@ async def detect_stream(websocket: WebSocket):
                         print(f"⚠️  Firebase save failed: {firebase_error}")
                         # Don't crash - stream still works!
 
-            _, buffer = cv2.imencode(".jpg", result["image"])
+            _, buffer = imencode(".jpg", result["image"])
             encoded = base64.b64encode(buffer).decode("utf-8")
             
             # ✅ Get drone GPS for WebSocket response
