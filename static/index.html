@@ -1217,13 +1217,17 @@ async function detectImage(file){
     fd.append('lat', gps_lat);  // ✅ Send coordinates to backend
     fd.append('lng', gps_lng);
     
-    fetch('/detect/image',{
+    const fetchOpts={
       method:'POST',
-      body:fd,
-      headers: {
-        'Authorization': `Bearer ${currentToken}`
-      }
-    }).then(res=>{
+      body:fd
+    };
+    
+    // ✅ Add auth header only if token exists (offline mode if missing)
+    if(currentToken){
+      fetchOpts.headers={'Authorization': `Bearer ${currentToken}`};
+    }
+    
+    fetch('/detect/image',fetchOpts).then(res=>{
       if(!res.ok)throw new Error('Server error '+res.status);
       return res.json();
     }).then(data=>{

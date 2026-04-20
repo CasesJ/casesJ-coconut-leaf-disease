@@ -1,7 +1,7 @@
 import base64
 import numpy as np
 from typing import Any
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Form
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
@@ -111,6 +111,36 @@ async def verify_firebase_token(credentials: Any = Depends(security)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+async def verify_firebase_token_optional(credentials: Any = Depends(security)) -> dict:
+    """Verify Firebase token - returns None if offline or token invalid (for offline support)"""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        decoded = verify_token(credentials.credentials)
+        return decoded
+    except Exception as e:
+        # Return None instead of raising - allows offline mode
+        print(f"[OFFLINE] Token verification failed (offline mode): {str(e)}")
+        return None
+
+async def get_token_optional() -> str:
+    """Get token from header - returns None if not present (for offline support)"""
+    return None
+
+async def verify_token_optional(request) -> dict:
+    """Optional token verification for offline mode"""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    try:
+        token = auth_header.split(" ", 1)[1]
+        decoded = verify_token(token)
+        return decoded
+    except Exception as e:
+        # Return None instead of raising - allows offline mode
+        print(f"[OFFLINE] Token verification failed: {str(e)}")
+        return None
+
 # ─── Authentication Endpoints ──────────────────────────────────────────────────
 @app.post("/auth/verify-token", response_model=UserResponse)
 async def verify_user_token(request: LoginRequest):
@@ -146,13 +176,31 @@ async def logout():
 
 # ─── Image Upload Endpoint ────────────────────────────────────────────────────
 @app.post("/detect/image")
-async def detect_image(file: UploadFile = File(...), lat: float = Form(None), lng: float = Form(None), decoded: dict = Depends(verify_firebase_token)):
-    """Detect disease in uploaded image (shows all detections, saves if confidence >= 50%)"""
-    user_id = decoded.get('uid')
-    email = decoded.get('email')
+async def detect_image(request: Request, file: UploadFile = File(...), lat: float = Form(None), lng: float = Form(None)):
+    """Detect disease in uploaded image (shows all detections, saves if confidence >= 50%, works offline)"""
+    # Try to extract and verify token from Authorization header
+    decoded = None
+    is_offline = False
+    
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+        try:
+            decoded = verify_token(token)
+        except Exception as e:
+            print(f"[OFFLINE] Token verification failed: {str(e)}")
+            decoded = None
+    else:
+        is_offline = True
+    
+    # Handle offline mode - user_id and email may be None
+    user_id = decoded.get('uid') if decoded else "offline_user"
+    email = decoded.get('email') if decoded else "offline@local"
+    if decoded is None:
+        is_offline = True
     
     print(f"\n{'='*60}")
-    print(f"[DETECT] DETECTION REQUEST STARTED")
+    print(f"[DETECT] DETECTION REQUEST STARTED {'[OFFLINE]' if is_offline else '[ONLINE]'}")
     print(f"{'='*60}")
     print(f"[USER] Email: {email}")
     print(f"[USER] ID: {user_id}")
@@ -174,7 +222,7 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
     _, buffer = imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 70])
     encoded = base64.b64encode(buffer).decode("utf-8")
     
-    # Save to Firebase only high-confidence detections
+    # Save to Firebase only high-confidence detections (skip if offline)
     if high_confidence_detections:
         try:
             print(f"\n[SAVE] SAVING DETECTION RECORD")
@@ -194,33 +242,40 @@ async def detect_image(file: UploadFile = File(...), lat: float = Form(None), ln
             
             saved = False
             
-            # Try Realtime Database first
-            try:
-                print(f"   [RTDB] Attempting Realtime Database save...")
-                ref = db.reference(f'users/{user_id}/uploads')
-                push_result = ref.push(detection_record)
-                print(f"[OK] SUCCESS: Saved to Realtime Database")
-                print(f"   Path: users/{user_id}/uploads/{push_result.key}")
-                saved = True
-            except Exception as rtdb_error:
-                print(f"[WARN] Realtime Database failed: {type(rtdb_error).__name__}")
-                
-                # Fallback to Firestore
-                if FIRESTORE_AVAILABLE and not saved:
-                    try:
-                        print(f"   [FIRESTORE] Falling back to Firestore...")
-                        doc_ref = fs.collection('users').document(user_id).collection('detections').add(detection_record)
-                        print(f"[OK] SUCCESS: Saved to Firestore")
-                        saved = True
-                    except Exception as firestore_error:
-                        print(f"[WARN] Firestore failed: {type(firestore_error).__name__}")
-                
-                # Final fallback: Local JSON storage
-                if not saved:
-                    print(f"   [LOCAL] Using local storage (records persist locally)...")
-                    if save_detection(user_id, email, high_confidence_detections):
-                        print(f"[OK] SUCCESS: Saved to local storage")
-                        saved = True
+            # OFFLINE MODE: Skip Firebase, save to local storage only
+            if is_offline:
+                print(f"   [OFFLINE] Saving to local storage only...")
+                if save_detection(user_id, email, high_confidence_detections):
+                    print(f"[OK] SUCCESS: Saved to local storage (offline mode)")
+                    saved = True
+            else:
+                # Try Realtime Database first
+                try:
+                    print(f"   [RTDB] Attempting Realtime Database save...")
+                    ref = db.reference(f'users/{user_id}/uploads')
+                    push_result = ref.push(detection_record)
+                    print(f"[OK] SUCCESS: Saved to Realtime Database")
+                    print(f"   Path: users/{user_id}/uploads/{push_result.key}")
+                    saved = True
+                except Exception as rtdb_error:
+                    print(f"[WARN] Realtime Database failed: {type(rtdb_error).__name__}")
+                    
+                    # Fallback to Firestore
+                    if FIRESTORE_AVAILABLE and not saved:
+                        try:
+                            print(f"   [FIRESTORE] Falling back to Firestore...")
+                            doc_ref = fs.collection('users').document(user_id).collection('detections').add(detection_record)
+                            print(f"[OK] SUCCESS: Saved to Firestore")
+                            saved = True
+                        except Exception as firestore_error:
+                            print(f"[WARN] Firestore failed: {type(firestore_error).__name__}")
+                    
+                    # Final fallback: Local JSON storage
+                    if not saved:
+                        print(f"   [LOCAL] Using local storage (records persist locally)...")
+                        if save_detection(user_id, email, high_confidence_detections):
+                            print(f"[OK] SUCCESS: Saved to local storage")
+                            saved = True
                     
         except Exception as firebase_error:
             print(f"[ERROR] ERROR: {type(firebase_error).__name__}: {firebase_error}")
