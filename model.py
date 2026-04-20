@@ -16,7 +16,7 @@ class CoconutDiseaseDetector:
         if not model_xml.exists() or not model_bin.exists():
             raise FileNotFoundError(f"Model files not found. XML: {model_xml}, BIN: {model_bin}")
         
-        print(f"✅ Loading OpenVINO model from {model_xml}")
+        print(f"[OK] Loading OpenVINO model from {model_xml}")
         
         # Initialize OpenVINO
         self.core = Core()
@@ -31,7 +31,7 @@ class CoconutDiseaseDetector:
         self.model_height = int(self.input_shape[2])
         self.model_width = int(self.input_shape[3])
         
-        print(f"✅ Model loaded successfully. Input shape: {self.input_shape}")
+        print(f"[OK] Model loaded successfully. Input shape: {self.input_shape}")
         
         # Class names from metadata (YOLO11n model classes)
         self.class_names = {
@@ -104,7 +104,7 @@ class CoconutDiseaseDetector:
             dict with detections and annotated image
         """
         try:
-            print(f"🔍 Starting OpenVINO prediction with confidence threshold: {conf}")
+            print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
             
             # Normalize confidence to 0-1 range if needed
             confidence_threshold = conf / 100.0 if conf > 1 else conf
@@ -124,13 +124,13 @@ class CoconutDiseaseDetector:
             input_data = np.transpose(input_data, (2, 0, 1))
             input_data = np.expand_dims(input_data, 0)
             
-            print(f"✅ Input prepared - shape: {input_data.shape}")
+            print(f"[OK] Input prepared - shape: {input_data.shape}")
             
             # Run inference
             self.infer_request.infer([input_data])
             output = self.infer_request.get_output_tensor(0).data
             
-            print(f"📦 Model output shape: {output.shape}")
+            print(f"[MODEL] Output shape: {output.shape}")
             
             # Parse YOLO11 output format: [1, 10, 8400]
             # 10 = 4(bbox coords) + 6(class scores)
@@ -143,7 +143,7 @@ class CoconutDiseaseDetector:
             else:
                 predictions = output.T if output.shape[0] < output.shape[1] else output
             
-            print(f"📊 Predictions shape after transpose: {predictions.shape}")
+            print(f"[DATA] Predictions shape after transpose: {predictions.shape}")
             
             # First pass: Collect all predictions above confidence threshold
             if predictions.shape[0] > 0:
@@ -192,12 +192,12 @@ class CoconutDiseaseDetector:
                     except Exception as e:
                         continue
             
-            print(f"📋 Found {len(raw_detections)} raw detections before NMS")
+            print(f"[NMS] Found {len(raw_detections)} raw detections before NMS")
             
             # Second pass: Apply NMS to remove overlapping boxes
             detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
             
-            print(f"✨ After NMS: {len(detections)} detections")
+            print(f"[FILTER] After NMS: {len(detections)} detections")
             
             # Draw detections on image
             for det in detections:
@@ -205,7 +205,7 @@ class CoconutDiseaseDetector:
                 class_name = det['class']
                 confidence = det['confidence']
                 
-                print(f"   ✓ {class_name} - Confidence: {confidence:.2%}")
+                print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
                 
                 # Draw bounding box (Green for Healthy, Red for diseases)
                 color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
@@ -231,11 +231,11 @@ class CoconutDiseaseDetector:
                 "bbox": d['bbox']
             } for d in detections]
             
-            print(f"✅ Successfully processed with {len(output_detections)} final detections")
+            print(f"[OK] Successfully processed with {len(output_detections)} final detections")
             return {"detections": output_detections, "image": image}
             
         except Exception as e:
-            print(f"❌ Prediction error: {e}")
+            print(f"[ERROR] Prediction error: {e}")
             import traceback
             traceback.print_exc()
             return {"detections": [], "image": image}

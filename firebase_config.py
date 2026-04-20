@@ -30,29 +30,29 @@ try:
         # If relative path, make it absolute
         if cred_path and not os.path.isabs(cred_path):
             cred_path = os.path.join(os.path.dirname(__file__), cred_path)
-            print(f"📁 Using service account: {cred_path}")
+            print(f"[CONFIG] Using service account: {cred_path}")
         
         if cred_path and os.path.exists(cred_path):
-            print(f"✅ Service account found: {cred_path}")
+            print(f"[OK] Service account found: {cred_path}")
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {
                 'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com'
             })
-            print("✅ Firebase initialized with service account")
+            print("[OK] Firebase initialized with service account")
         else:
             # Fallback - initialize with project ID only (limited functionality)
-            print(f"⚠️  Service account not found at {cred_path}, using project ID only")
+            print(f"[WARN] Service account not found at {cred_path}, using project ID only")
             options = {
                 'projectId': FIREBASE_CONFIG['projectId'],
                 'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com'
             }
             firebase_admin.initialize_app(options=options)
-            print("⚠️  Firebase initialized with project ID (read-only mode)")
+            print("[WARN] Firebase initialized with project ID (read-only mode)")
 except ValueError as e:
     # App already initialized
-    print(f"ℹ️  Firebase already initialized: {e}")
+    print(f"[INFO] Firebase already initialized: {e}")
 except Exception as e:
-    print(f"❌ Firebase init error: {e}")
+    print(f"[ERROR] Firebase init error: {e}")
     raise
 
 def verify_token(token: str):

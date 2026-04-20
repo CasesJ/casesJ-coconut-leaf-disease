@@ -43,19 +43,20 @@
       content:''; 
       position:absolute; 
       inset:0; 
-      background-color:rgba(11, 42, 31, 0.3); 
+      background: linear-gradient(180deg, rgba(11, 42, 31, 0.5) 0%, rgba(11, 42, 31, 0.6) 50%, rgba(11, 42, 31, 0.7) 100%);
       z-index:1;
       pointer-events:none;
     }
     .auth-screen.hidden { display:none; }
     .auth-container { width:90%; max-width:420px; position:relative; z-index:2; }
-    .auth-header { text-align:center; margin-bottom:40px; }
-    .auth-header .logo-icon { width:56px; height:56px; background:var(--deep); border-radius:12px; display:flex; align-items:center; justify-content:center; margin:0 auto 20px; }
-    .auth-header .logo-icon svg { width:28px; height:28px; stroke:var(--accent); fill:none; stroke-width:2; stroke-linecap:round; }
-    .auth-header h1 { font-family:'DM Serif Display',serif; font-size:32px; color:var(--deep); margin-bottom:8px; }
-    .auth-header p { font-size:13px; color:var(--text3); }
+    .auth-header { text-align:center; margin-bottom:40px; padding:20px; }
+    .auth-header .logo-icon { width:64px; height:64px; background: linear-gradient(135deg, var(--accent) 0%, var(--bright) 100%); border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 auto 24px; box-shadow: 0 8px 32px rgba(62, 201, 122, 0.3); }
+    .auth-header .logo-icon svg { width:32px; height:32px; stroke:#ffffff; fill:none; stroke-width:1.8; stroke-linecap:round; }
+    .auth-header h1 { font-family:'DM Serif Display',serif; font-size:48px; font-weight:700; color:#ffffff; margin-bottom:12px; text-shadow: 0 3px 12px rgba(11, 42, 31, 0.5); letter-spacing:-0.5px; }
+    .auth-header p { font-size:18px; font-weight:500; color:#ffffff; text-shadow: 0 2px 8px rgba(11, 42, 31, 0.4); letter-spacing:0.3px; line-height:1.5; }
     
-    .auth-form { background:var(--white); border-radius:var(--r); padding:32px; box-shadow:var(--shm); }
+    .auth-form { background:var(--white); border-radius:var(--r); padding:32px; box-shadow:var(--shm); margin-top:20px; }
+    .auth-form { background:rgba(255,255,255,0.98); border-radius:var(--r); padding:32px; box-shadow:0 16px 48px rgba(0,0,0,0.2); backdrop-filter: blur(10px); }
     .form-title { font-size:22px; font-weight:600; color:var(--deep); margin-bottom:24px; }
     .form-group { margin-bottom:18px; }
     .form-group label { display:block; font-size:12px; font-weight:600; margin-bottom:8px; color:var(--text2); letter-spacing:.5px; text-transform:uppercase; }
@@ -322,7 +323,7 @@
       <form id="auth-form" onsubmit="handleAuthSubmit(event)">
         <div class="form-group">
           <label for="email">Email</label>
-          <input type="email" id="email" required placeholder="your@email.com" />
+          <input type="email" id="email" required placeholder="Enter Your Email" />
         </div>
         <div class="form-group">
           <label for="password">Password</label>
@@ -1341,7 +1342,17 @@ async function startDrone(){
   try{
     droneDetectionCount = 0; // Reset detection counter
     droneSessionPins = [];
-    droneStream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'environment'}});
+    
+    // Try to get camera - support both mobile (environment) and laptop (user)
+    let constraints = {video:{width:640,height:480}};
+    try {
+      // First try: For mobile devices (back camera)
+      droneStream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'environment'}});
+    } catch (e) {
+      // Fallback: For laptops or if back camera not available (front camera)
+      droneStream = await navigator.mediaDevices.getUserMedia(constraints);
+    }
+    
     const v=document.getElementById('droneVideo'),c=document.getElementById('droneCanvas');
     v.srcObject=droneStream;c.width=640;c.height=480;
     droneRunning=true;frameCount=0;droneFrameSkip=0;frameQueue=[];sendingFrame=false;
@@ -1420,8 +1431,34 @@ async function startDrone(){
       }
     };
     
-    captureLoop(v);
-  }catch(err){showToast('Camera error: '+err.message);}
+    // Wait for video to be ready before starting capture
+    v.onloadedmetadata = () => {
+      console.log('[OK] Video loaded - dimensions:', v.videoWidth, 'x', v.videoHeight);
+      v.play().then(() => {
+        console.log('[OK] Video playing');
+        captureLoop(v);
+      }).catch(e => {
+        console.error('[ERROR] Video play failed:', e);
+        showToast('Failed to play camera: ' + e.message);
+        stopDrone();
+      });
+    };
+    
+    v.onerror = (e) => {
+      console.error('[ERROR] Video error:', e);
+      showToast('Camera error');
+      stopDrone();
+    };
+    
+  }catch(err){
+    console.error('[ERROR] Camera access error:', err);
+    showToast('Camera error: '+err.message);
+    if (err.name === 'NotAllowedError') {
+      showToast('Permission denied - check browser camera permissions');
+    } else if (err.name === 'NotFoundError') {
+      showToast('No camera found');
+    }
+  }
 }
 
 function processFrameQueue(){
@@ -1433,8 +1470,17 @@ function processFrameQueue(){
 
 function captureLoop(v){
   if(!droneRunning)return;
-  if(v.readyState===4){
-    frameCount++;document.getElementById('g-frames').textContent=frameCount;
+  
+  // ✅ Draw video frame to main canvas for preview
+  if(v.readyState===4){  // Video is ready
+    frameCount++;
+    
+    // Draw current frame to canvas for display
+    const c=document.getElementById('droneCanvas');
+    const ctx=c.getContext('2d');
+    ctx.drawImage(v,0,0,640,480);
+    
+    document.getElementById('g-frames').textContent=frameCount;
     
     // Update GPS display from latest WebSocket data or browser location
     if(lastDroneGPS && lastDroneGPS.gps){
@@ -1487,7 +1533,10 @@ function captureLoop(v){
       frameQueue.push(canvas.toDataURL('image/jpeg',JPEG_QUALITY));
       processFrameQueue(); // Try to send if not already sending
     }
+  } else {
+    if(frameCount % 60 === 0) console.log('[WAIT] Video not ready, state:', v.readyState);
   }
+  
   requestAnimationFrame(captureLoop.bind(null,v)); // ✅ Use RAF for smooth capture
 }
 function stopDrone(){

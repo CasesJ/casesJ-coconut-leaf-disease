@@ -1,0 +1,45 @@
+# Hybrid Storage System - Python Dependencies
+# Run: pip install -r requirements_hybrid.txt
+
+# Core FastAPI and Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+websockets>=12.0
+
+# Firebase Integration
+firebase-admin>=6.0.0
+google-cloud-firestore>=2.13.0
+
+# Authentication & Security
+python-jose[cryptography]>=3.3.0
+cryptography>=41.0.0
+python-dotenv>=1.0.0
+
+# Data Processing
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+
+# Inference Engines
+openvino>=2024.0.0
+
+# Hardware Communication
+pyserial>=3.5
+
+# Database
+# Note: sqlite3 is built-in with Python 3.7+
+
+# Optional: Performance & Monitoring
+psutil>=5.9.0  # System monitoring
+asyncio-contextmanager>=1.0.0  # Async context managers
+
+# Development & Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+black>=23.0.0
+flake8>=6.1.0
+mypy>=1.6.0

@@ -75,8 +75,8 @@ class DroneGPS:
                     return True
             
             # Fallback to simulation mode
-            print("⚠️  No drone hardware detected. Running in simulation mode.")
-            print("💡 To use real drone GPS:")
+            print("[WARN] No drone hardware detected. Running in simulation mode.")
+            print("[INFO] To use real drone GPS:")
             print("   - Option 1: Connect via network (Wi-Fi/Ethernet)")
             print("   - Option 2: Connect via serial port (USB/UART)")
             print("   - Option 3: Manually implement telemetry parsing")
@@ -86,7 +86,7 @@ class DroneGPS:
             return True
             
         except Exception as e:
-            print(f"❌ Connection error: {str(e)}")
+            print(f"[ERROR] Connection error: {str(e)}")
             return False
     
     async def _try_network_connection(self) -> bool:
@@ -101,7 +101,7 @@ class DroneGPS:
             data, _ = sock.recvfrom(1024)
             sock.close()
             
-            print(f"✅ Connected to drone at {self.drone_ip}:{self.port}")
+            print(f"[OK] Connected to drone at {self.drone_ip}:{self.port}")
             asyncio.create_task(self._network_gps_loop())
             return True
         except Exception as e:
@@ -132,7 +132,7 @@ class DroneGPS:
                 
                 await asyncio.sleep(0.2)
         except Exception as e:
-            print(f"Network GPS error: {str(e)}")
+            print(f"[ERROR] Network GPS error: {str(e)}")
     
     async def _simulation_loop(self):
         """Simulate realistic drone GPS movements (circular flight pattern)"""
@@ -162,7 +162,7 @@ class DroneGPS:
                 await asyncio.sleep(0.2)  # 5 Hz update rate
                 
             except Exception as e:
-                print(f"⚠️  Simulation error: {str(e)}")
+                print(f"[WARN] Simulation error: {str(e)}")
                 await asyncio.sleep(1)
     
     def _store_history(self):
@@ -191,7 +191,7 @@ class DroneGPS:
         self.is_connected = False
         if self.simulation_task:
             self.simulation_task.cancel()
-        print("🛑 Drone GPS disconnected")
+        print("[OK] Drone GPS disconnected")
 
 
 # Global drone GPS instance

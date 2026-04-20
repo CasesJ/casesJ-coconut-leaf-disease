@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-04-20T15:38:05.222180",
+  "email": "cases.james@gmail.com",
+  "detections": [
+    {
+      "class": "bud root",
+      "confidence": 0.724,
+      "bbox": [
+        256,
+        1,
+        621,
+        546
+      ]
+    }
+  ],
+  "count": 1,
+  "source": "upload"
+}
