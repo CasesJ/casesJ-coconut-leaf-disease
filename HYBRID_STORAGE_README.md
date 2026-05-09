@@ -31,58 +31,32 @@ python main_hybrid.py
 
 **Choose your learning path:**
 
-### 🏃 I Want to Get Started Quickly
-→ Read: [HYBRID_STORAGE_QUICK_REFERENCE.md](HYBRID_STORAGE_QUICK_REFERENCE.md) (10 min)
+### 🏃 Quick Start
+→ **Read this first:** [START_HERE.md](START_HERE.md) (5 min)
 
 **Covers:**
-- 5-minute setup
-- Most used API endpoints
-- Common tasks
-- Quick troubleshooting
+- One-command setup
+- How to run the system
+- Basic examples
+- Key features overview
 
-### 📖 I Want to Understand the System
-→ Read: [HYBRID_STORAGE_SETUP.md](HYBRID_STORAGE_SETUP.md) (30 min)
-
-**Covers:**
-- Complete architecture
-- All modules explained
-- Database schema
-- Full API reference
-- Error handling
-- Advanced configuration
-
-### 🚀 I Want to Deploy to Production
-→ Read: [HYBRID_STORAGE_DEPLOYMENT.md](HYBRID_STORAGE_DEPLOYMENT.md) (20 min)
+### 📖 Understanding the System
+→ **Read:** [HYBRID_STORAGE_AT_A_GLANCE.md](HYBRID_STORAGE_AT_A_GLANCE.md) (10 min)
 
 **Covers:**
-- Environment setup
-- Docker deployment
-- Cloud options (AWS, GCP, Heroku)
-- Security hardening
-- Monitoring setup
-- Backup procedures
-
-### ✅ I Want to Verify Everything Works
-→ Read: [HYBRID_STORAGE_VERIFICATION.md](HYBRID_STORAGE_VERIFICATION.md) (30 min)
-
-**Covers:**
-- Architecture diagrams
-- 25-point verification checklist
-- State machines
-- Timing diagrams
-- Performance testing
-- Security testing
-
-### 📋 I Want the Executive Summary
-→ Read: [HYBRID_STORAGE_SUMMARY.md](HYBRID_STORAGE_SUMMARY.md) (15 min)
-
-**Covers:**
-- What was implemented
-- Key features
-- Project structure
+- What the hybrid storage system does
+- Architecture overview
 - API endpoints summary
-- Next steps
-- Success criteria
+- Real-world scenarios
+
+### 🚀 Getting Help
+→ **Read:** [TROUBLESHOOTING.md](TROUBLESHOOTING.md) (As needed)
+
+**Covers:**
+- Installation issues
+- Runtime errors
+- Configuration problems
+- Common fixes
 
 ---
 
@@ -124,15 +98,15 @@ Traditional cloud-only systems fail when farmers are offline. Detections are los
 
 ### Documentation
 
-| File | Content | Size |
-|------|---------|------|
-| `HYBRID_STORAGE_SETUP.md` | Complete technical guide | 15 KB |
-| `HYBRID_STORAGE_QUICK_REFERENCE.md` | Quick reference card | 12 KB |
-| `HYBRID_STORAGE_DEPLOYMENT.md` | Production deployment | 18 KB |
-| `HYBRID_STORAGE_SUMMARY.md` | Implementation summary | 10 KB |
-| `HYBRID_STORAGE_VERIFICATION.md` | Verification checklist | 20 KB |
+| File | Purpose |
+|------|---------|
+| `START_HERE.md` | Quick start guide |
+| `HYBRID_STORAGE_README.md` | This file |
+| `HYBRID_STORAGE_AT_A_GLANCE.md` | Overview & features |
+| `TROUBLESHOOTING.md` | Common issues |
+| `OPENVINO_COMPLETE.md` | Technical reference |
 
-**Total: ~75 KB of documentation**
+**Total: Active & Maintained Documentation**
 
 ### Testing
 
@@ -351,11 +325,11 @@ Background Task (Every 60s)
 - [ ] Restore connectivity: wait 60s, check auto-sync
 
 ### Deployment (1 hour)
-- [ ] Review HYBRID_STORAGE_DEPLOYMENT.md
-- [ ] Choose deployment option (Docker/Cloud)
+- [ ] Set up Docker (optional)
 - [ ] Configure environment variables
-- [ ] Set up monitoring and backups
-- [ ] Run verification checklist
+- [ ] Enable monitoring
+- [ ] Test with real data
+- [ ] Verify all endpoints
 
 ### Monitoring (ongoing)
 - [ ] Check `/storage/health` regularly
@@ -365,27 +339,22 @@ Background Task (Every 60s)
 
 ---
 
-## 🎓 Learning Path
+## 🎓 Quick Learning Path
 
-### Day 1: Understanding
-1. Read HYBRID_STORAGE_QUICK_REFERENCE.md
-2. Run test_hybrid_storage.py
+### Day 1: Understanding (30 min)
+1. Read START_HERE.md
+2. Read HYBRID_STORAGE_AT_A_GLANCE.md
 3. Browse API docs at http://localhost:8000/docs
 
-### Day 2: Integration
-1. Read HYBRID_STORAGE_SETUP.md
-2. Study code in hybrid_storage/
+### Day 2: Integration (1 hour)
+1. Study code in hybrid_storage/
+2. Test endpoints with curl or Postman
 3. Integrate with your app
 
-### Day 3: Deployment
-1. Read HYBRID_STORAGE_DEPLOYMENT.md
-2. Choose deployment method
-3. Set up monitoring
-
-### Day 4: Operations
-1. Read HYBRID_STORAGE_VERIFICATION.md
-2. Run verification checklist
-3. Train team
+### Day 3: Operations (30 min)
+1. Enable monitoring
+2. Set up backups
+3. Train your team
 
 ---
 
@@ -403,17 +372,17 @@ Background Task (Every 60s)
 ### High database size
 → Run `storage.clear_old_synced_records(days=30)`
 
-### See more: HYBRID_STORAGE_QUICK_REFERENCE.md → Troubleshooting
+### See more: TROUBLESHOOTING.md → Common Issues
 
 ---
 
 ## 📞 Support
 
-1. **Quick Questions** → HYBRID_STORAGE_QUICK_REFERENCE.md
-2. **Technical Details** → HYBRID_STORAGE_SETUP.md
-3. **Deployment Issues** → HYBRID_STORAGE_DEPLOYMENT.md
-4. **Verification** → HYBRID_STORAGE_VERIFICATION.md
-5. **Architecture** → HYBRID_STORAGE_SUMMARY.md
+1. **Quick Start** → START_HERE.md
+2. **Technical Details** → HYBRID_STORAGE_README.md (this file)
+3. **Feature Overview** → HYBRID_STORAGE_AT_A_GLANCE.md
+4. **Troubleshooting** → TROUBLESHOOTING.md
+5. **API Reference** → http://localhost:8000/docs
 
 ---
 
@@ -444,13 +413,12 @@ coconut-disease-detector/
 ├── test_hybrid_storage.py             # Examples & tests (NEW)
 ├── requirements_hybrid.txt            # Dependencies (NEW)
 │
-├── Documentation (NEW):
+├── Documentation (Active):
+│   ├── START_HERE.md                 # Quick start
 │   ├── HYBRID_STORAGE_README.md      # This file
-│   ├── HYBRID_STORAGE_SETUP.md       # Complete guide
-│   ├── HYBRID_STORAGE_QUICK_REFERENCE.md
-│   ├── HYBRID_STORAGE_DEPLOYMENT.md
-│   ├── HYBRID_STORAGE_SUMMARY.md
-│   └── HYBRID_STORAGE_VERIFICATION.md
+│   ├── HYBRID_STORAGE_AT_A_GLANCE.md # Overview
+│   ├── OPENVINO_COMPLETE.md          # Technical
+│   └── TROUBLESHOOTING.md            # Help
 │
 ├── Auto-created:
 │   ├── hybrid_storage.db             # SQLite database
@@ -488,4 +456,4 @@ This hybrid storage system provides:
 *Hybrid Storage System v1.0*  
 *Production Ready ✅*
 
-**Questions? Start with HYBRID_STORAGE_QUICK_REFERENCE.md** 📖
+**Questions? Start with START_HERE.md** 📖

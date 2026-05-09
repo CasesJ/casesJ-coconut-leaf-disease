@@ -6,7 +6,7 @@
 
 **Solution:**
 ```bash
-pip install -r models/requirements.txt --upgrade
+pip install -r requirements_hybrid.txt --upgrade
 ```
 
 If still failing:
@@ -14,20 +14,20 @@ If still failing:
 pip install firebase-admin python-jose python-dotenv pydantic
 ```
 
-### Problem: "ModuleNotFoundError: No module named 'ultralytics'"
+### Problem: "ModuleNotFoundError: No module named 'openvino'"
 
 **Solution:**
 ```bash
-pip install ultralytics opencv-python-headless
+pip install openvino opencv-python-headless numpy
 ```
 
 ### Problem: pip installation never finishes
 
 **Solution:**
 ```bash
-# Use specific Python 3.10+
+# Use specific Python 3.9+
 python -m pip install --upgrade pip
-pip install -r models/requirements.txt -v
+pip install -r requirements_hybrid.txt -v
 ```
 
 ## Running the Application
@@ -204,8 +204,8 @@ ModuleNotFoundError: cannot import name 'verify_token'
 # Ensure file exists
 dir firebase_config.py
 
-# If missing, recreate from FIREBASE_SETUP.md guide
-# Or download again
+# If missing, reinstall dependencies
+pip install -r requirements_hybrid.txt
 ```
 
 ### Problem: Backend 401 Unauthorized error
@@ -438,8 +438,8 @@ When asking for help, provide:
 ---
 
 Still stuck? 
-- Check FIREBASE_SETUP.md for step-by-step guide
-- Check AUTHENTICATION_SUMMARY.md for overview
+- Check START_HERE.md for quick start
+- Check HYBRID_STORAGE_README.md for overview
 - Check browser console (always!)
 - Try with different email/password
 - Restart application completely

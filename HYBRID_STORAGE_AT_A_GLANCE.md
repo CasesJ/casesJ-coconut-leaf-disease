@@ -24,24 +24,18 @@ hybrid_storage/
 └── sync_manager.py      - Background orchestration
 ```
 
-### 1 FastAPI App (500 lines)
+### 1 FastAPI App
 ```
-main_hybrid.py          - 15 new API endpoints
-```
-
-### 5 Documentation Files (75 KB)
-```
-HYBRID_STORAGE_README.md           - Entry point (this folder)
-HYBRID_STORAGE_QUICK_REFERENCE.md  - 5-min quick start
-HYBRID_STORAGE_SETUP.md            - 30-min complete guide
-HYBRID_STORAGE_DEPLOYMENT.md       - 20-min deployment
-HYBRID_STORAGE_VERIFICATION.md     - 30-min verification
-HYBRID_STORAGE_SUMMARY.md          - Executive summary
+main.py                 - Main web interface
+main_hybrid.py          - Alternative with hybrid storage
 ```
 
-### 1 Test Script (300 lines)
+### 4 Documentation Files
 ```
-test_hybrid_storage.py  - 9 demo scenarios
+START_HERE.md               - Quick start guide
+HYBRID_STORAGE_README.md    - This system overview
+HYBRID_STORAGE_AT_A_GLANCE.md - At a glance (this file)
+TROUBLESHOOTING.md          - Common issues & fixes
 ```
 
 ### Auto-Created Files
@@ -192,12 +186,10 @@ For backup, debugging, or manual recovery
 
 | Document | Time | Purpose |
 |----------|------|---------|
-| README | 5 min | Overview & quick start |
-| QUICK_REFERENCE | 10 min | Most used endpoints |
-| SETUP | 30 min | Complete technical guide |
-| DEPLOYMENT | 20 min | Production deployment |
-| VERIFICATION | 30 min | Verification checklist |
-| SUMMARY | 15 min | Executive summary |
+| START_HERE.md | 5 min | Quick start |
+| HYBRID_STORAGE_README.md | 15 min | System overview |
+| HYBRID_STORAGE_AT_A_GLANCE.md | 10 min | Feature overview |
+| TROUBLESHOOTING.md | As needed | Common issues |
 
 ---
 
@@ -259,7 +251,7 @@ Start here to verify everything works:
 - [ ] Database file exists
 - [ ] JSON backups created
 
-See HYBRID_STORAGE_VERIFICATION.md for full 25-point checklist
+See HYBRID_STORAGE_README.md for more details
 
 ---
 
@@ -310,7 +302,7 @@ Every 60 seconds:
 | Firebase error | Set `GOOGLE_APPLICATION_CREDENTIALS` |
 | High disk usage | Run `clear_old_synced_records(days=30)` |
 
-See HYBRID_STORAGE_QUICK_REFERENCE.md for more
+See HYBRID_STORAGE_README.md for API details
 
 ---
 
@@ -334,15 +326,13 @@ See HYBRID_STORAGE_QUICK_REFERENCE.md for more
 
 ### I want to...
 
-**Use it now** → HYBRID_STORAGE_QUICK_REFERENCE.md (10 min)
+**Quick start** → START_HERE.md (5 min)
 
-**Understand it** → HYBRID_STORAGE_SETUP.md (30 min)
+**Understand it** → HYBRID_STORAGE_README.md (15 min)
 
-**Deploy it** → HYBRID_STORAGE_DEPLOYMENT.md (20 min)
+**Troubleshoot** → TROUBLESHOOTING.md (as needed)
 
-**Verify it works** → HYBRID_STORAGE_VERIFICATION.md (30 min)
-
-**See the summary** → HYBRID_STORAGE_SUMMARY.md (15 min)
+**See details** → HYBRID_STORAGE_AT_A_GLANCE.md (10 min)
 
 ---
 
@@ -370,7 +360,7 @@ python main_hybrid.py
 
 ## 📞 Need Help?
 
-1. Check HYBRID_STORAGE_QUICK_REFERENCE.md (most common issues)
+1. Check TROUBLESHOOTING.md (most common issues)
 2. Review code comments in hybrid_storage/
 3. Run test_hybrid_storage.py to see examples
 4. Check /storage/health endpoint for system status

@@ -1,102 +1,141 @@
-># 🎯 OpenVINO Real-Time Integration - START HERE
+># 🥥 Coconut Disease Detector - Quick Start
 
-## What Just Happened? ✨
+## 📋 System Status
 
-Your coconut disease detector has been **completely upgraded from Roboflow to OpenVINO** for **real-time, offline detection**!
-
-### Before vs After
-
-| Aspect | Before (Roboflow) | After (OpenVINO) |
-|--------|------------------|------------------|
-| **Speed** | 3-5 FPS | **8-12 FPS (CPU)** |
-| **Internet** | Required | ❌ Not needed |
-| **Offline** | ❌ No | ✅ Yes |
-| **Cost** | API quota | Free |
-| **Latency** | 500-2000ms | **80-120ms** |
+Your system is **fully configured** with:
+- ✅ **OpenVINO** real-time detection (8-12 FPS on CPU)
+- ✅ **Offline-first hybrid storage** (local SQLite + Firebase sync)
+- ✅ **Web interface** (FastAPI)
+- ✅ **Drone GPS integration** (for field mapping)
+- ✅ **Firebase integration** (for cloud backup)
 
 ---
 
-## 🚀 Get Started in 30 Seconds
+## 🚀 Quick Start (Choose One)
 
-### Step 1: One-Click Setup (Choose Your OS)
-
-**Windows:**
+### Option 1: Web Interface (Recommended)
 ```bash
-setup_openvino.bat
-```
+# Install dependencies (first time only)
+pip install -r requirements_hybrid.txt
 
-**Linux/Mac:**
-```bash
-chmod +x setup_openvino.sh
-./setup_openvino.sh
-```
-
-**Manual:**
-```bash
-pip install -r models/requirements.txt
-python setup_openvino.py
-```
-
-### Step 2: Start Using It
-
-```bash
-# Option A: Web Interface
+# Start the web server
 python main.py
-# Then open: http://localhost:8000
 
-# Option B: Real-Time Webcam
-python realtime_stream.py
+# Open browser
+http://localhost:8000
+```
 
-# Option C: Test Everything
-python test_openvino_realtime.py
+### Option 2: Hybrid Storage API
+```bash
+# Start with advanced storage features
+python main_hybrid.py
+
+# Access API docs
+http://localhost:8000/docs
+```
+
+### Option 3: Command Line (One Image)
+```python
+from model import detector
+import cv2
+
+# Load and detect
+image = cv2.imread("leaf.jpg")
+detections, annotated_image = detector.detect(image)
+print(detections)
 ```
 
 ---
 
-## 📊 What Works Now
+## 📁 Project Structure
 
-- ✅ **Real-time detection** from webcam/drone/video
-- ✅ **Offline inference** (no internet needed)
-- ✅ **GPU support** (30+ FPS if GPU available)
-- ✅ **Batch processing** (process folders of images)
-- ✅ **FastAPI integration** (already in main.py)
-- ✅ **Disease recommendations** (treatment + prevention)
-- ✅ **Drone GPS tagging** (coordinates with detections)
-- ✅ **Firebase logging** (save results to cloud)
+```
+├── main.py                           # Web interface (FastAPI)
+├── main_hybrid.py                    # Alternative with hybrid storage
+├── model.py                          # OpenVINO detector engine
+├── firebase_config.py                # Firebase authentication
+├── drone_gps.py                      # GPS coordinate tracking
+│
+├── hybrid_storage/                   # Offline-first storage system
+│   ├── local_storage.py              # SQLite local database
+│   ├── firebase_sync.py              # Cloud sync handler
+│   ├── connectivity.py               # Internet detection
+│   └── sync_manager.py               # Background sync orchestration
+│
+├── best_openvino_model/              # ML model (OpenVINO format)
+│   ├── best.xml                      # Model structure
+│   ├── best.bin                      # Model weights
+│   └── metadata.yaml                 # Model metadata
+│
+├── detection_records/                # Local detection history (auto-created)
+├── static/                           # Web UI files
+│   ├── index.html                    # Main dashboard
+│   └── stream_dashboard.html         # Live stream viewer
+│
+├── requirements_hybrid.txt           # All dependencies
+├── firebase_config.json              # Firebase credentials (not in git)
+└── .env                              # Environment variables (not in git)
+```
 
 ---
 
-## 📁 What's New
+## 🎯 Key Features
 
-### Modified Files
-- `model.py` - Now uses OpenVINO instead of Roboflow
-- `models/requirements.txt` - OpenVINO added, Roboflow removed
+| Feature | Status | Details |
+|---------|--------|---------|
+| **Real-time Detection** | ✅ Active | 8-12 FPS on CPU, 30+ FPS with GPU |
+| **Offline Mode** | ✅ Active | Works without internet, syncs when online |
+| **Disease Classification** | ✅ Active | Caterpillars, Cercospora, Drying, Healthy, Pestalotiopsis, Bud Root |
+| **Drone GPS Tagging** | ✅ Active | Records coordinates with each detection |
+| **Firebase Cloud Sync** | ✅ Active | Automatic retry on network changes |
+| **Web Dashboard** | ✅ Active | Image upload, real-time stream, history |
+| **REST API** | ✅ Active | 15+ endpoints for programmatic access |
 
-### New Setup Files
-- `setup_openvino.py` - Automated setup wizard
-- `setup_openvino.bat` - Windows one-click installer
-- `setup_openvino.sh` - Mac/Linux one-click installer
+---
 
-### New Testing Files
-- `test_openvino_realtime.py` - Comprehensive test suite
-- `realtime_stream.py` - Real-time streaming interface
+## 🔧 Setup & Configuration
 
-### New Configuration
-- `openvino_config.py` - Centralized settings
+### Step 1: Install Dependencies
+```bash
+pip install -r requirements_hybrid.txt
+```
 
-### New Documentation (📖 IMPORTANT)
-1. **`OPENVINO_INTEGRATION_CHECKLIST.md`** - What's been done
-2. **`OPENVINO_QUICK_REFERENCE.md`** - Quick commands
-3. **`OPENVINO_SETUP.md`** - Detailed setup guide
-4. **`OPENVINO_EXAMPLES.md`** - 10+ code examples
-5. **`OPENVINO_INTEGRATION.md`** - Complete guide
-6. **`START_HERE.md`** - This file!
+### Step 2: Configure Firebase (Optional)
+```bash
+# Copy your Firebase service account JSON
+cp /path/to/firebase-key.json .
+
+# Set environment variable
+export GOOGLE_APPLICATION_CREDENTIALS="firebase-key.json"
+```
+
+### Step 3: Configure .env (Optional)
+```bash
+# Create .env file
+SYNC_INTERVAL=300                          # Sync every 5 minutes
+MAX_RETRIES=5                              # Retry failed syncs 5 times
+DETECTION_CONFIDENCE_THRESHOLD=0.5         # Detection threshold
+```
+
+### Step 4: Run
+```bash
+python main.py
+```
+
+---
+
+## 📖 Documentation Files
+
+- **`OPENVINO_COMPLETE.md`** - Full OpenVINO integration details
+- **`HYBRID_STORAGE_README.md`** - Offline-first storage system
+- **`HYBRID_STORAGE_AT_A_GLANCE.md`** - 5-min overview
+- **`TROUBLESHOOTING.md`** - Common issues and fixes
 
 ---
 
 ## 💻 Real-World Examples
 
-### Example 1: Process a Leaf Image
+### Example 1: Detect Disease in Image
 ```python
 from model import detector
 import cv2
@@ -162,16 +201,15 @@ for detection in result['detections']:
 
 ---
 
-## 📚 Documentation Map
+## 📚 Documentation
 
-| Document | When to Read |
-|----------|--------------|
-| **`START_HERE.md`** (you are here) | First overview |
-| **`OPENVINO_QUICK_REFERENCE.md`** | Quick commands & tips |
-| **`OPENVINO_SETUP.md`** | Detailed setup instructions |
-| **`OPENVINO_EXAMPLES.md`** | Code examples & patterns |
-| **`OPENVINO_INTEGRATION.md`** | Complete technical guide |
-| **`OPENVINO_CONFIG.py`** | Configuration options |
+| Document | Purpose |
+|----------|---------|
+| **`START_HERE.md`** (you are here) | Quick start & overview |
+| **`OPENVINO_COMPLETE.md`** | Technical details |
+| **`HYBRID_STORAGE_README.md`** | Offline storage system |
+| **`HYBRID_STORAGE_AT_A_GLANCE.md`** | Storage overview |
+| **`TROUBLESHOOTING.md`** | Common issues & fixes |
 
 ---
 
@@ -219,7 +257,7 @@ for detection in result['detections']:
 **A:** Yes! Just install GPU plugin and change config to "GPU".
 
 ### Q: How do I get started?
-**A:** Run `python setup_openvino.py` (or .bat/.sh file)
+**A:** Run `python main.py` then open http://localhost:8000
 
 ### Q: What about my drone?
 **A:** Drone GPS integration still works! It will tag detections with coordinates.
@@ -246,40 +284,46 @@ result = detector.predict(image, conf=60)  # 0-100
 
 ---
 
-## 🎓 Learning Path
+## 🎓 Quick Start
 
-### Day 1: Get It Running ✅
+### Get Running (5 min)
 ```bash
-python setup_openvino.py
-python test_openvino_realtime.py
-```
-
-### Day 2: Try Examples 📖
-```bash
-python realtime_stream.py
-# See OPENVINO_EXAMPLES.md for more
-```
-
-### Day 3: Web Integration 🌐
-```bash
+pip install -r requirements_hybrid.txt
 python main.py
 # Open http://localhost:8000
 ```
 
-### Day 4: Production Deploy 🚀
-- Use with your drone
-- Scale to multiple devices
-- Monitor with Firebase
+### Test with Image (5 min)
+```python
+from model import detector
+import cv2
+
+image = cv2.imread("leaf.jpg")
+result = detector.detect(image)
+print(result)
+```
+
+### Enable Hybrid Storage (Optional)
+```bash
+python main_hybrid.py
+# Adds offline-first storage with Firebase sync
+```
+
+### Production Ready
+- Drone GPS integration (drone_gps.py)
+- Firebase cloud backup
+- Local SQLite cache
+- Automatic sync on reconnect
 
 ---
 
 ## 🆘 Having Issues?
 
-1. **Check setup**: `python setup_openvino.py`
-2. **Run tests**: `python test_openvino_realtime.py`
-3. **Read guide**: `OPENVINO_SETUP.md`
-4. **See examples**: `OPENVINO_EXAMPLES.md`
-5. **Quick ref**: `OPENVINO_QUICK_REFERENCE.md`
+1. **Check dependencies**: `pip install -r requirements_hybrid.txt`
+2. **Test model**: `python -c "from model import detector; print('OK')"`
+3. **Read troubleshooting**: See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+4. **Check app loads**: `python -c "from main import app; print('OK')"`
+5. **Verify Firebase**: Check service account JSON is in place
 
 ---
 
@@ -287,20 +331,24 @@ python main.py
 
 ### Choose One:
 
-**Option A: Fastest Start** ⚡
-```bash
-python setup_openvino.py
-python test_openvino_realtime.py
-```
-
-**Option B: Immediate Testing** 🎥
-```bash
-python realtime_stream.py  # Press 'q' to quit
-```
-
-**Option C: Web Interface** 🌐
+**Option A: Start Web Interface** 🌐
 ```bash
 python main.py
+# Open http://localhost:8000
+```
+
+**Option B: Test with Image** 📸
+```python
+from model import detector
+import cv2
+image = cv2.imread("coco-farm.jpg")
+result = detector.detect(image)
+```
+
+**Option C: Use Hybrid Storage** 💾
+```bash
+python main_hybrid.py
+# Offline storage + Firebase sync
 ```
 
 ---
@@ -353,23 +401,22 @@ Your system is now:
 
 ### Run This Now:
 ```bash
-python setup_openvino.py
+python main.py
+# Open http://localhost:8000
 ```
-
-Then choose your next action from the menu.
 
 ---
 
 ## 📞 Quick Links
 
-- **Quick Commands**: `OPENVINO_QUICK_REFERENCE.md`
-- **Setup Guide**: `OPENVINO_SETUP.md`
-- **Code Examples**: `OPENVINO_EXAMPLES.md`
-- **Full Guide**: `OPENVINO_INTEGRATION.md`
-- **Configuration**: `openvino_config.py`
+- **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- **OpenVINO Details**: [OPENVINO_COMPLETE.md](OPENVINO_COMPLETE.md)
+- **Storage System**: [HYBRID_STORAGE_README.md](HYBRID_STORAGE_README.md)
+- **System Overview**: [HYBRID_STORAGE_AT_A_GLANCE.md](HYBRID_STORAGE_AT_A_GLANCE.md)
+- **API Docs**: http://localhost:8000/docs
 
 ---
 
-**🎉 Congratulations! Real-time OpenVINO integration is complete!**
+**🎉 Congratulations! You're all set!**
 
-Start with: `python setup_openvino.py`
+Start with: `python main.py`
