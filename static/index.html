@@ -561,6 +561,7 @@ let currentUser = null;
 let currentToken = null;
 let authMode = 'login'; // 'login' or 'signup'
 let auth = null;
+let userHasExplicitlyLoggedIn = false; // ✅ Track if user clicked login button
 let ws, droneStream, droneRunning=false, frameCount=0;
 let mainMap, miniMap, mapsReady=false;
 let log=[]; let mainMarkers=[], miniMarkers=[];
@@ -596,12 +597,16 @@ auth.onAuthStateChanged(async (user) => {
     } catch (e) {
       console.warn('Token refresh failed:', e);
     }
-    document.getElementById('auth-screen').classList.add('hidden');
-    document.getElementById('app-screen').classList.add('active');
-    updateUIOnLogin(user);
+    // ✅ Only show app screen if user has explicitly logged in (clicked login button)
+    if (userHasExplicitlyLoggedIn) {
+      document.getElementById('auth-screen').classList.add('hidden');
+      document.getElementById('app-screen').classList.add('active');
+      updateUIOnLogin(user);
+    }
   } else {
     currentUser = null;
     currentToken = null;
+    userHasExplicitlyLoggedIn = false; // ✅ Reset flag on logout
     document.getElementById('auth-screen').classList.remove('hidden');
     document.getElementById('app-screen').classList.remove('active');
     updateUIOnLogout();
@@ -717,7 +722,13 @@ async function handleAuthSubmit(event) {
       if (verifyRes.ok) {
         form.reset();
         console.log('Auth complete');
-        // Auth state listener will handle showing app
+        // ✅ Set flag and show app immediately
+        userHasExplicitlyLoggedIn = true;
+        currentUser = userCred.user;
+        document.getElementById('auth-screen').classList.add('hidden');
+        document.getElementById('app-screen').classList.add('active');
+        updateUIOnLogin(userCred.user);
+        console.log('✅ Logged in and showing app');
       } else {
         const errData = await verifyRes.json();
         throw new Error('Backend error: ' + (errData.detail || 'Unknown'));

@@ -1,0 +1,62 @@
+[
+  {
+    "treatment_name": "Sulphur dust",
+    "treatment_type": "organic",
+    "cost": 45.0,
+    "application_date": "2026-04-18T09:57:32.772323",
+    "effectiveness_rating": 4.5,
+    "field_id": "field_1",
+    "disease_treated": "Cercospora",
+    "notes": null
+  },
+  {
+    "treatment_name": "Bacillus thuringiensis",
+    "treatment_type": "organic",
+    "cost": 55.0,
+    "application_date": "2026-04-23T09:57:32.772362",
+    "effectiveness_rating": 4.2,
+    "field_id": "field_2",
+    "disease_treated": "Caterpillars",
+    "notes": null
+  },
+  {
+    "treatment_name": "Neem oil",
+    "treatment_type": "organic",
+    "cost": 38.0,
+    "application_date": "2026-04-28T09:57:32.772372",
+    "effectiveness_rating": 4.0,
+    "field_id": "field_1",
+    "disease_treated": "Caterpillars",
+    "notes": null
+  },
+  {
+    "treatment_name": "Fungal antagonists",
+    "treatment_type": "biological",
+    "cost": 60.0,
+    "application_date": "2026-05-03T09:57:32.772379",
+    "effectiveness_rating": 4.7,
+    "field_id": "field_1",
+    "disease_treated": "Cercospora",
+    "notes": null
+  },
+  {
+    "treatment_name": "Improved irrigation",
+    "treatment_type": "mechanical",
+    "cost": 200.0,
+    "application_date": "2026-05-08T09:57:32.772387",
+    "effectiveness_rating": 4.3,
+    "field_id": "field_3",
+    "disease_treated": "Drying of Leaflets",
+    "notes": null
+  },
+  {
+    "treatment_name": "Synthetic pyrethroid",
+    "treatment_type": "chemical",
+    "cost": 32.0,
+    "application_date": "2026-05-13T09:57:32.772618",
+    "effectiveness_rating": 3.5,
+    "field_id": "field_2",
+    "disease_treated": "Caterpillars",
+    "notes": null
+  }
+]

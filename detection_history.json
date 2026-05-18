@@ -1,0 +1,58 @@
+[
+  {
+    "disease_name": "Cercospora",
+    "confidence": 0.92,
+    "severity": "high",
+    "field_id": "field_1",
+    "detection_date": "2026-05-18T09:57:32.735809",
+    "location": null
+  },
+  {
+    "disease_name": "Cercospora",
+    "confidence": 0.88,
+    "severity": "high",
+    "field_id": "field_1",
+    "detection_date": "2026-05-18T09:57:32.746639",
+    "location": null
+  },
+  {
+    "disease_name": "Caterpillars",
+    "confidence": 0.85,
+    "severity": "medium",
+    "field_id": "field_2",
+    "detection_date": "2026-05-18T09:57:32.751954",
+    "location": null
+  },
+  {
+    "disease_name": "Caterpillars",
+    "confidence": 0.79,
+    "severity": "medium",
+    "field_id": "field_2",
+    "detection_date": "2026-05-18T09:57:32.757170",
+    "location": null
+  },
+  {
+    "disease_name": "Drying of Leaflets",
+    "confidence": 0.76,
+    "severity": "medium",
+    "field_id": "field_3",
+    "detection_date": "2026-05-18T09:57:32.762899",
+    "location": null
+  },
+  {
+    "disease_name": "Healthy",
+    "confidence": 0.98,
+    "severity": "low",
+    "field_id": "field_1",
+    "detection_date": "2026-05-18T09:57:32.767136",
+    "location": null
+  },
+  {
+    "disease_name": "Cercospora",
+    "confidence": 0.89,
+    "severity": "high",
+    "field_id": "field_new",
+    "detection_date": "2026-05-18T09:57:33.970149",
+    "location": null
+  }
+]

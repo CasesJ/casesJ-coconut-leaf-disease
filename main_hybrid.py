@@ -48,7 +48,7 @@ from drone_gps import init_drone_gps, get_drone_gps, get_current_drone_position
 
 # ─── Import Hybrid Storage Modules ──────────────────────────────────────────────
 from hybrid_storage import (
-    check_internet_connectivity_sync,
+    check_internet_connectivity,
     LocalStorageManager,
     FirebaseSync,
     SyncManager,
@@ -57,11 +57,18 @@ from hybrid_storage.local_storage import DetectionRecord, get_local_storage
 from hybrid_storage.firebase_sync import get_firebase_sync
 from hybrid_storage.sync_manager import get_sync_manager
 
+# ─── Import ML Recommendation System ────────────────────────────────────────────
+from ai_recommendations_ml import RecommendationSystem, DetectionRecord as MLDetectionRecord, InventoryLog
+from recommendation_integration import InventoryManager, DetectionHistory
+
 # ─── Initialize Hybrid Storage ──────────────────────────────────────────────────
 local_storage = get_local_storage()
 firebase_sync = get_firebase_sync(fs)
 sync_manager = None
-
+# ─── Initialize ML Recommendation System ───────────────────────────────────────
+inventory_manager = InventoryManager("inventory_logs.json")
+detection_history = DetectionHistory("detection_history.json")
+recommendation_system = None  # Will be initialized in lifespan
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
 class SignupRequest(BaseModel):
@@ -127,6 +134,45 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Background sync manager started")
     except Exception as e:
         logger.error(f"❌ Failed to start sync manager: {e}")
+
+    # Initialize ML Recommendation System
+    global recommendation_system
+    try:
+        recommendation_system = RecommendationSystem()
+        
+        # Load historical data
+        detections = detection_history.detections
+        inventory_logs = inventory_manager.logs
+        
+        # Populate recommendation system with inventory logs
+        recommendation_system.inventory_logs = inventory_logs
+        
+        if len(detections) >= 10 and len(inventory_logs) >= 5:
+            # Train ML models if we have enough historical data
+            logger.info(f"🤖 Training ML recommendation engine with {len(detections)} detections and {len(inventory_logs)} inventory logs...")
+            
+            # Convert to ML format
+            ml_detections = [
+                MLDetectionRecord(
+                    disease_name=det.disease_name,
+                    confidence=det.confidence,
+                    severity=det.severity,
+                    field_id=det.field_id,
+                    detection_date=det.detection_date,
+                    location=det.location
+                )
+                for det in detections
+            ]
+            
+            metrics = recommendation_system.train_models(ml_detections, inventory_logs)
+            logger.info(f"✅ ML recommendation system trained successfully")
+            logger.info(f"   Metrics: {metrics}")
+        else:
+            logger.info(f"⚠️  Not enough historical data to train ML (need 10+ detections, 5+ logs). Using fallback recommendations.")
+            logger.info(f"   Current: {len(detections)} detections, {len(inventory_logs)} logs")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize ML recommendation system: {e}", exc_info=True)
+        recommendation_system = RecommendationSystem()
 
     logger.info("✅ Application startup complete")
     logger.info("=" * 70)
@@ -418,27 +464,87 @@ async def get_fertilizer_recommendation(
     request: RecommendationRequest,
     decoded: dict = Depends(verify_firebase_token_dep),
 ):
-    """Get farmer-friendly fertilizer recommendations"""
-    recommendation = detector.get_fertilizer_recommendation(request.disease, request.confidence)
-
-    return {
-        "disease": recommendation["disease"],
-        "confidence_percent": recommendation["confidence"],
-        "recommendations": {
-            "fertilizer": recommendation["fertilizer"],
-            "treatment": recommendation["treatment"],
-            "prevention": recommendation["prevention"],
-        },
-        "note": recommendation["note"],
-        "location": "Davao, Philippines",
-    }
+    """Get AI-based fertilizer recommendations using ML model or fallback"""
+    try:
+        # Use ML recommendation system if available
+        if recommendation_system:
+            logger.info(f"🤖 Generating recommendation for {request.disease} (confidence: {request.confidence})")
+            
+            # Create detection record for ML prediction
+            detection = MLDetectionRecord(
+                disease_name=request.disease,
+                confidence=request.confidence,
+                severity="high" if request.confidence > 0.8 else "medium" if request.confidence > 0.6 else "low",
+                field_id=decoded.get("uid", "unknown"),
+                detection_date=datetime.utcnow().isoformat(),
+                location=None
+            )
+            
+            # Get AI recommendation (ML or fallback)
+            rec = recommendation_system.generate_ai_recommendations(detection)
+            
+            return {
+                "disease": rec.disease_detected,
+                "confidence_percent": round(rec.confidence * 100, 2),
+                "recommendations": {
+                    "fertilizer": rec.recommended_fertilizer,
+                    "treatment": rec.recommended_treatment,
+                    "prevention": "\n".join(rec.preventive_measures),
+                },
+                "note": f"AI recommendation - Model: {rec.model_info} | Treatment confidence: {rec.treatment_confidence:.0%}, Fertilizer confidence: {rec.fertilizer_confidence:.0%}, Preventive confidence: {rec.preventive_confidence:.0%}",
+                "location": "Davao, Philippines",
+                "model_type": "ml" if not rec.is_cold_start else "fallback",
+                "sustainability_score": rec.sustainability_score,
+                "organic_alternative": rec.organic_alternative,
+            }
+        else:
+            # Fallback if recommendation system not initialized
+            logger.warning("⚠️  Recommendation system not available, using hardcoded fallback")
+            recommendation = detector.get_fertilizer_recommendation(request.disease, request.confidence)
+            
+            return {
+                "disease": recommendation["disease"],
+                "confidence_percent": recommendation["confidence"],
+                "recommendations": {
+                    "fertilizer": recommendation["fertilizer"],
+                    "treatment": recommendation["treatment"],
+                    "prevention": recommendation["prevention"],
+                },
+                "note": recommendation["note"],
+                "location": "Davao, Philippines",
+                "model_type": "hardcoded",
+            }
+    except Exception as e:
+        logger.error(f"❌ Recommendation error: {e}", exc_info=True)
+        # Final fallback to hardcoded
+        try:
+            recommendation = detector.get_fertilizer_recommendation(request.disease, request.confidence)
+            return {
+                "disease": recommendation["disease"],
+                "confidence_percent": recommendation["confidence"],
+                "recommendations": {
+                    "fertilizer": recommendation["fertilizer"],
+                    "treatment": recommendation["treatment"],
+                    "prevention": recommendation["prevention"],
+                },
+                "note": recommendation["note"] + " (Error in ML, using hardcoded fallback)",
+                "location": "Davao, Philippines",
+                "model_type": "hardcoded",
+            }
+        except Exception as e2:
+            logger.error(f"❌ Even hardcoded fallback failed: {e2}")
+            return {
+                "error": "Failed to generate recommendations",
+                "message": str(e2),
+                "status": 500
+            }
 
 
 # ─── Hybrid Storage Endpoints ───────────────────────────────────────────────────
 @app.get("/storage/connectivity")
 async def check_connectivity():
     """Check current internet connectivity status"""
-    connectivity = check_internet_connectivity_sync()
+    connectivity = check_internet_connectivity()
     return {
         "is_connected": connectivity.get("is_connected"),
         "method": connectivity.get("method"),
@@ -623,7 +729,7 @@ async def update_sync_interval(
 @app.get("/storage/health")
 async def storage_health():
     """Health check for hybrid storage system"""
-    connectivity = check_internet_connectivity_sync()
+    connectivity = check_internet_connectivity()
     stats = local_storage.get_storage_stats()
 
     return {
