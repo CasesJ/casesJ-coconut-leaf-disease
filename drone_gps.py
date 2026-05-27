@@ -1,22 +1,24 @@
 """
-Drone GPS Module
-Connects to drone for real-time GPS tracking via network or serial connection
-Runs in simulation mode if hardware unavailable (generates realistic GPS traces)
+Drone GPS Module - Post-Flight Approach (Fixed & Enhanced)
+Extracts GPS coordinates from geotagged drone photos via EXIF metadata.
+Falls back to high-accuracy browser geolocation if image metadata is stripped.
+Users upload images after flight, coordinates are extracted and saved to database.
+This is the standard approach used in commercial drone agriculture (DroneDeploy, WebODM).
 """
 
 import asyncio
 import json
-import random
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 from dataclasses import dataclass
 from datetime import datetime
-import math
+from io import BytesIO
 
 try:
-    import serial
-    HAVE_SERIAL = True
+    from PIL import Image
+    from PIL.ExifTags import TAGS
+    HAVE_PIL = True
 except ImportError:
-    HAVE_SERIAL = False
+    HAVE_PIL = False
 
 
 @dataclass
@@ -27,6 +29,7 @@ class DronePosition:
     altitude: float  # meters
     timestamp: str
     accuracy: float = 5.0  # meters
+    source: str = "drone_exif"  # Tracks metadata vs. browser fallback
     
     def to_dict(self) -> Dict:
         return {
@@ -34,164 +37,165 @@ class DronePosition:
             "lng": self.longitude,
             "altitude": self.altitude,
             "timestamp": self.timestamp,
-            "accuracy": self.accuracy
+            "accuracy": self.accuracy,
+            "source": self.source
         }
 
 
 class DroneGPS:
-    """Manages drone GPS connection and data streaming"""
+    """
+    POST-FLIGHT GPS EXTRACTION (Fixed & Enhanced)
+    Extracts GPS from drone EXIF, falls back to high-accuracy browser telemetry.
+    """
     
-    def __init__(self, drone_ip: str = "192.168.1.1", port: int = 8889, use_simulation: bool = False):
-        """
-        Initialize drone GPS connection
-        
-        Args:
-            drone_ip: IP address of drone (for network-based telemetry)
-            port: Port for drone communication
-            use_simulation: Force simulation mode (for testing without hardware)
-        """
-        self.drone_ip = drone_ip
-        self.port = port
-        self.is_connected = False
+    def __init__(self, drone_ip: str = None, port: int = None, use_simulation: bool = False):
+        """Initialize GPS extractor for drone photos"""
+        self.is_connected = True 
         self.current_position: Optional[DronePosition] = None
         self.position_history = []
         self.max_history = 500
-        self.use_simulation = use_simulation
-        self.simulation_task = None
-        
-        # Simulation parameters - Using Panabo, Davao, Philippines
-        self.sim_lat = 7.30806   # Panabo, Davao latitude
-        self.sim_lng = 125.68417  # Panabo, Davao longitude
-        self.sim_alt = 50.0  # Default altitude in meters (above ground)
-        self.sim_frame = 0
         
     async def connect(self) -> bool:
-        """Connect to drone GPS"""
-        try:
-            # Try network connection first
-            if not self.use_simulation:
-                connected = await self._try_network_connection()
-                if connected:
-                    return True
-            
-            # Fallback to simulation mode
-            print("[WARN] No drone hardware detected. Running in simulation mode.")
-            print("[INFO] To use real drone GPS:")
-            print("   - Option 1: Connect via network (Wi-Fi/Ethernet)")
-            print("   - Option 2: Connect via serial port (USB/UART)")
-            print("   - Option 3: Manually implement telemetry parsing")
-            
-            self.is_connected = True
-            self.simulation_task = asyncio.create_task(self._simulation_loop())
-            return True
-            
-        except Exception as e:
-            print(f"[ERROR] Connection error: {str(e)}")
-            return False
+        """
+        Connect (no-op for post-flight approach)
+        GPS data comes from:
+        1. Uploaded drone images with EXIF GPS metadata
+        2. Browser geolocation (when image has no GPS)
+        """
+        print("[INFO] 📸 POST-FLIGHT GPS MODE: Real location extraction enabled")
+        print("[INFO] ✅ Using: Image EXIF metadata (drone) + Browser geolocation")
+        print("[INFO] Waiting for geotagged drone images to be uploaded...")
+        self.is_connected = True
+        return True
     
-    async def _try_network_connection(self) -> bool:
-        """Try to connect via network (UDP/TCP)"""
+    def extract_gps_from_image(self, image_data: bytes, filename: str = "unknown", fallback_coords: Optional[Dict] = None) -> Optional[DronePosition]:
+        """
+        Extract GPS coordinates from image EXIF data.
+        
+        Args:
+            image_data: Raw image bytes from drone photo
+            filename: Original filename for reference
+            fallback_coords: High-accuracy browser GPS dictionary passed from frontend
+                            {'lat': float, 'lng': float, 'accuracy': float}
+            
+        Returns:
+            DronePosition with latitude, longitude, altitude, timestamp and source tracking
+        """
+        if not HAVE_PIL:
+            print("[ERROR] ❌ PIL/Pillow not installed. Run: pip install pillow")
+            return self._apply_fallback(fallback_coords, "missing_library")
+
         try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2)
+            image = Image.open(BytesIO(image_data))
+            exif_data = image._getexif()
             
-            # Try to ping drone
-            sock.sendto(b"ping", (self.drone_ip, self.port))
-            data, _ = sock.recvfrom(1024)
-            sock.close()
+            if not exif_data:
+                print(f"[WARN] No EXIF data in {filename}. Image was likely stripped.")
+                return self._apply_fallback(fallback_coords, "exif_stripped")
             
-            print(f"[OK] Connected to drone at {self.drone_ip}:{self.port}")
-            asyncio.create_task(self._network_gps_loop())
-            return True
-        except Exception as e:
-            return False
-    
-    async def _network_gps_loop(self):
-        """Receive GPS data via network"""
-        import socket
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind(("0.0.0.0", self.port + 1))
+            # Extract GPSInfo dictionary safely
+            gps_data = None
+            for tag_id, value in exif_data.items():
+                if TAGS.get(tag_id) == "GPSInfo":
+                    gps_data = value
+                    break
             
-            while self.is_connected:
-                try:
-                    data, _ = sock.recvfrom(1024)
-                    # Parse GPS data (expect JSON format: {"lat": ..., "lng": ..., "alt": ...})
-                    gps_data = json.loads(data.decode())
-                    self.current_position = DronePosition(
-                        latitude=gps_data.get("lat", 0.0),
-                        longitude=gps_data.get("lng", 0.0),
-                        altitude=gps_data.get("alt", 0.0),
-                        timestamp=datetime.now().isoformat(),
-                        accuracy=gps_data.get("accuracy", 5.0)
-                    )
-                    self._store_history()
-                except Exception:
-                    pass
-                
-                await asyncio.sleep(0.2)
-        except Exception as e:
-            print(f"[ERROR] Network GPS error: {str(e)}")
-    
-    async def _simulation_loop(self):
-        """Simulate realistic drone GPS movements (circular flight pattern)"""
-        while self.is_connected:
+            if not gps_data:
+                print(f"[WARN] No GPS block inside EXIF for {filename}")
+                return self._apply_fallback(fallback_coords, "no_gps_tags")
+            
+            # ✅ FIX: Safe conversion of PIL IFDRational / tuple structures to floats
             try:
-                # Simulate circular flight pattern
-                self.sim_frame += 1
-                progress = (self.sim_frame % 300) / 300.0  # Complete circle every 300 frames
+                lat_dms = [float(x) for x in gps_data.get(2, (0, 0, 0))]
+                lng_dms = [float(x) for x in gps_data.get(4, (0, 0, 0))]
                 
-                # Circular path with radius ~0.002 degrees (~200m at equator)
-                angle = progress * 2 * math.pi
-                offset_lat = 0.002 * math.cos(angle)
-                offset_lng = 0.002 * math.sin(angle)
+                lat_ref = gps_data.get(1, 'N')
+                lng_ref = gps_data.get(3, 'E')
                 
-                # Slight altitude variation
-                altitude_var = 5 * math.sin(progress * 2 * math.pi)
+                # ✅ FIX: Proper direction handling
+                lat = self._dms_to_decimal(lat_dms, lat_ref in ['S', 'W'])
+                lng = self._dms_to_decimal(lng_dms, lng_ref in ['S', 'W'])
                 
-                self.current_position = DronePosition(
-                    latitude=self.sim_lat + offset_lat + random.gauss(0, 0.0001),
-                    longitude=self.sim_lng + offset_lng + random.gauss(0, 0.0001),
-                    altitude=self.sim_alt + 15 + altitude_var + random.gauss(0, 0.5),
-                    timestamp=datetime.now().isoformat(),
-                    accuracy=5.0 + random.gauss(0, 1.0)
-                )
-                
-                self._store_history()
-                await asyncio.sleep(0.2)  # 5 Hz update rate
-                
-            except Exception as e:
-                print(f"[WARN] Simulation error: {str(e)}")
-                await asyncio.sleep(1)
-    
+                # Safely parse altitude fraction
+                raw_alt = gps_data.get(6, 0.0)
+                alt = float(raw_alt) if not isinstance(raw_alt, tuple) else float(raw_alt[0]) / float(raw_alt[1])
+            except Exception as parse_err:
+                print(f"[ERROR] Malformed GPS coordinates structure: {parse_err}")
+                return self._apply_fallback(fallback_coords, "corrupted_metadata")
+            
+            # ✅ FIX: Package valid position and SAVE TO STATE
+            position = DronePosition(
+                latitude=lat,
+                longitude=lng,
+                altitude=alt,
+                timestamp=exif_data.get("DateTime", datetime.now().isoformat()),
+                accuracy=5.0,
+                source="drone_exif"
+            )
+            
+            # ✅ CRITICAL FIX: State is now properly saved
+            self.current_position = position
+            self._store_history()
+            
+            print(f"[OK] ✅ GPS extracted from EXIF: {lat:.6f}, {lng:.6f}, alt={alt:.1f}m")
+            return position
+            
+        except Exception as e:
+            print(f"[ERROR] Critical failure processing {filename}: {str(e)}")
+            return self._apply_fallback(fallback_coords, "system_error")
+            
+    def _apply_fallback(self, fallback_coords: Optional[Dict], reason: str) -> Optional[DronePosition]:
+        """Injects high-accuracy browser coordinates if the file is stripped."""
+        if fallback_coords and "lat" in fallback_coords and "lng" in fallback_coords:
+            fallback = DronePosition(
+                latitude=float(fallback_coords["lat"]),
+                longitude=float(fallback_coords["lng"]),
+                altitude=float(fallback_coords.get("altitude", 0.0)),
+                timestamp=datetime.now().isoformat(),
+                accuracy=float(fallback_coords.get("accuracy", 10.0)),
+                source=f"browser_fallback_{reason}"
+            )
+            # ✅ Save fallback position to state
+            self.current_position = fallback
+            self._store_history()
+            print(f"[INFO] 🛰️ Fallback used ({reason}). Browser GPS Saved: {fallback.latitude:.6f}, {fallback.longitude:.6f}, accuracy={fallback.accuracy:.1f}m")
+            return fallback
+        
+        print("[WARN] ❌ No EXIF data and no high-accuracy fallback data was provided.")
+        return None
+
+    @staticmethod
+    def _dms_to_decimal(dms_list, is_negative):
+        """Convert degrees/minutes/seconds to decimal degrees"""
+        try:
+            decimal = dms_list[0] + (dms_list[1] / 60.0) + (dms_list[2] / 3600.0)
+            return -decimal if is_negative else decimal
+        except:
+            return 0.0
+
     def _store_history(self):
         """Store position in history"""
         if self.current_position:
             if len(self.position_history) >= self.max_history:
                 self.position_history.pop(0)
             self.position_history.append(self.current_position)
-    
+
     async def get_position(self) -> Optional[DronePosition]:
         """Get current drone position"""
         return self.current_position
     
     def get_position_sync(self) -> Optional[Dict]:
         """Get current drone position (synchronous)"""
-        if self.current_position:
-            return self.current_position.to_dict()
-        return None
+        return self.current_position.to_dict() if self.current_position else None
     
     def get_position_history(self, last_n: int = 100) -> list:
-        """Get last N position records"""
+        """Get all extracted GPS coordinates from photos"""
         return [p.to_dict() for p in self.position_history[-last_n:]]
     
     async def disconnect(self):
-        """Disconnect from drone"""
+        """Disconnect (no-op for post-flight approach)"""
         self.is_connected = False
-        if self.simulation_task:
-            self.simulation_task.cancel()
-        print("[OK] Drone GPS disconnected")
+        print("[OK] GPS extraction stopped")
 
 
 # Global drone GPS instance

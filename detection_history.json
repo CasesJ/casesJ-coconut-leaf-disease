@@ -54,5 +54,27 @@
     "field_id": "field_new",
     "detection_date": "2026-05-18T09:57:33.970149",
     "location": null
+  },
+  {
+    "disease_name": "bud root",
+    "confidence": 0.854,
+    "severity": "high",
+    "field_id": "ogDcjEdtviYOFjw0R1zDBiDtixS2",
+    "detection_date": "2026-05-19T14:12:05.843410",
+    "location": {
+      "lat": 7.308334954510225,
+      "lng": 125.68336701581049
+    }
+  },
+  {
+    "disease_name": "Cercospora",
+    "confidence": 0.62,
+    "severity": "medium",
+    "field_id": "ogDcjEdtviYOFjw0R1zDBiDtixS2",
+    "detection_date": "2026-05-19T14:15:02.215811",
+    "location": {
+      "lat": 7.308721204197154,
+      "lng": 125.68451808899556
+    }
   }
 ]

@@ -1,6 +1,7 @@
 import base64
 import numpy as np
-from typing import Any
+import logging
+from typing import Any, Optional
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +13,15 @@ import asyncio
 import threading
 import time
 from collections import deque
+import json
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Import cv2 after other imports to avoid async/pickling issues
 import cv2
@@ -30,6 +40,12 @@ except:
     
 from drone_gps import init_drone_gps, get_drone_gps, get_current_drone_position
 from hybrid_storage.local_storage import get_local_storage, DetectionRecord
+
+# CSV Export functionality
+import csv
+from io import StringIO
+from fastapi.responses import StreamingResponse
+from collections import defaultdict
 
 # ── Local Storage Compatibility Wrappers ──
 def save_detection(user_id: str, email: str, inference_results: dict, gps_data: dict = None) -> bool:
@@ -71,29 +87,57 @@ class UserResponse(BaseModel):
     email: str
     message: str
 
-app = FastAPI(title="Coconut Leaf Disease Detector", version="1.0.0")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ─── Startup/Shutdown Events ──────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup_event():
-    """Initialize drone GPS connection on startup"""
+class RecommendationRequest(BaseModel):
+    disease: str
+    confidence: float
+
+
+# ─── Lifecycle Management ──────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown"""
+    # Startup
+    logger.info("=" * 70)
+    logger.info("🚀 Coconut Disease Detector - Starting")
+    logger.info("=" * 70)
+
+    # Initialize drone GPS (post-flight mode - no connection needed)
     try:
-        drone_gps = init_drone_gps(drone_ip="192.168.1.1", port=8889)
+        drone_gps = init_drone_gps(drone_ip="192.168.1.1", port=8889, use_simulation=False)
         connected = await drone_gps.connect()
         if connected:
-            print("[OK] Drone GPS initialized")
+            logger.info("✅ Drone GPS initialized (will extract from image EXIF or browser geolocation)")
         else:
-            print("[WARN] Drone GPS connection failed (will use browser location)")
+            logger.warning("⚠️  Drone GPS connection failed (will use browser location)")
     except Exception as e:
-        print(f"[WARN] Drone GPS init error: {str(e)}")
+        logger.warning(f"⚠️  Drone GPS init error: {str(e)}")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Disconnect drone GPS on shutdown"""
+    logger.info("✅ Application startup complete")
+    logger.info("=" * 70)
+
+    yield
+
+    # Shutdown
+    logger.info("🛑 Shutting down...")
+
+    # Disconnect drone GPS
     drone_gps = get_drone_gps()
     if drone_gps:
         await drone_gps.disconnect()
+        logger.info("✅ Drone GPS disconnected")
+
+    logger.info("✅ Application shutdown complete")
+
+
+# Create FastAPI app with lifecycle management
+app = FastAPI(
+    title="Coconut Leaf Disease Detector",
+    version="2.0.0",
+    description="Disease detection and inventory management",
+    lifespan=lifespan,
+)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ─── Security ──────────────────────────────────────────────────────────────
 security = HTTPBearer()
@@ -173,11 +217,54 @@ async def logout():
     return {"message": "Logout successful"}
 
 
+# ─── Recommendations Endpoint ──────────────────────────────────────────────────
+@app.post("/recommendations/fertilizer")
+async def get_recommendations(request: RecommendationRequest):
+    """Get fertilizer, treatment, and prevention recommendations based on detected disease"""
+    try:
+        # Get recommendations from the detector model
+        recommendations = detector.get_fertilizer_recommendation(
+            disease_name=request.disease,
+            confidence=request.confidence
+        )
+        
+        # Format response for frontend
+        return {
+            "disease": recommendations['disease'],
+            "confidence_percent": recommendations['confidence'],
+            "recommendations": {
+                "fertilizer": recommendations['fertilizer'],
+                "treatment": recommendations['treatment'],
+                "prevention": recommendations['prevention']
+            },
+            "note": recommendations['note']
+        }
+    except Exception as e:
+        logger.error(f"Recommendation error: {str(e)}")
+        return {
+            "disease": request.disease,
+            "confidence_percent": request.confidence,
+            "recommendations": {
+                "fertilizer": "Unable to generate recommendations",
+                "treatment": "Please consult a local agricultural expert",
+                "prevention": "Monitor tree health regularly"
+            },
+            "note": f"Error: {str(e)}"
+        }
+
 
 # ─── Image Upload Endpoint ────────────────────────────────────────────────────
 @app.post("/detect/image")
-async def detect_image(request: Request, file: UploadFile = File(...), lat: float = Form(None), lng: float = Form(None)):
-    """Detect disease in uploaded image (shows all detections, saves if confidence >= 50%, works offline)"""
+async def detect_image(request: Request, file: UploadFile = File(...), lat: float = Form(None), lng: float = Form(None), accuracy: float = Form(None)):
+    """
+    Detect disease in uploaded image (shows all detections, saves if confidence >= 50%)
+    
+    POST-FLIGHT APPROACH:
+    - If image contains EXIF GPS data, extracts it automatically
+    - Otherwise uses browser-provided lat/lng coordinates as fallback
+    - Includes accuracy metadata for tracking data source reliability
+    - Works offline
+    """
     # Try to extract and verify token from Authorization header
     decoded = None
     is_offline = False
@@ -204,9 +291,34 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     print(f"{'='*60}")
     print(f"[USER] Email: {email}")
     print(f"[USER] ID: {user_id}")
-    print(f"[GPS] Location: lat={lat}, lng={lng}")
     
+    # Read image data
     contents = await file.read()
+    
+    # ✅ FIXED: TRY TO EXTRACT GPS FROM EXIF FIRST, WITH BROWSER FALLBACK
+    drone_gps = get_drone_gps()
+    exif_gps = None
+    
+    # Prepare fallback browser coordinates (if provided by frontend)
+    fallback_coords = None
+    if lat is not None and lng is not None:
+        fallback_coords = {
+            "lat": lat,
+            "lng": lng,
+            "accuracy": accuracy if accuracy else 10.0  # Default browser accuracy if not provided
+        }
+    
+    if drone_gps:
+        exif_gps = drone_gps.extract_gps_from_image(contents, file.filename, fallback_coords)
+        if exif_gps:
+            lat = exif_gps.latitude
+            lng = exif_gps.longitude
+            print(f"[GPS] Source: {exif_gps.source} | lat={lat:.6f}, lng={lng:.6f}, alt={exif_gps.altitude:.1f}m, accuracy={exif_gps.accuracy:.1f}m")
+        elif lat is not None and lng is not None:
+            print(f"[GPS] No EXIF GPS - Using provided coordinates: lat={lat}, lng={lng}")
+        else:
+            print(f"[GPS] ⚠️  No GPS data (no EXIF and no coordinates provided)")
+    
     np_arr = np.frombuffer(contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
 
@@ -237,7 +349,9 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                 'count': len(high_confidence_detections),
                 'source': 'upload',
                 'lat': lat,
-                'lng': lng
+                'lng': lng,
+                'filename': file.filename,
+                'gps_source': 'exif' if exif_gps else ('manual' if lat else 'none')
             }
             
             saved = False
@@ -290,41 +404,133 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         "total_detected": len(all_detections),
         "annotated_image_base64": encoded,
         "user_email": email,
-        "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= 50% confidence)"
+        "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= 50% confidence)",
+        # ✅ Return GPS data so frontend pins disease at correct location
+        "gps_lat": lat if lat is not None else 7.30806,
+        "gps_lng": lng if lng is not None else 125.68417,
+        "gps_source": exif_gps.source if exif_gps else "none"
     }
 
 
-# ─── Video Detection Endpoint (Post-Processing) ────────────────────────────────
-# ─── Fertilizer Recommendation Endpoint ────────────────────────────────────────
-class RecommendationRequest(BaseModel):
-    disease: str
-    confidence: float
+# ─── CSV Export Endpoint ──────────────────────────────────────────────────────
+@app.get("/api/export-csv")
+async def export_detections_csv(request: Request):
+    """
+    Export all disease detections as CSV with inventory summary
+    Works with or without authentication
+    """
+    try:
+        # Try to get token but don't fail if missing
+        auth_header = request.headers.get("Authorization", "")
+        user_info = None
+        
+        if auth_header.startswith("Bearer "):
+            try:
+                token = auth_header.split(" ", 1)[1]
+                user_info = verify_token(token)
+                logger.info(f"📊 CSV export for user: {user_info.get('email')}")
+            except Exception as e:
+                logger.warning(f"⚠️  Token verification failed: {e}")
+        
+        logger.info("📊 CSV export request received")
+        
+        # Read from detection_history.json
+        all_detections = []
+        detection_file = Path("detection_history.json")
+        
+        if detection_file.exists():
+            with open(detection_file, 'r') as f:
+                all_detections = json.load(f)
+                logger.info(f"✅ Loaded {len(all_detections)} detections from JSON")
+        
+        if not all_detections:
+            logger.warning("⚠️  No detections found")
+            csv_content = "Disease Name,Confidence,Severity,Field ID,Detection Date,Location,Email,Source\n"
+        else:
+            # Calculate disease statistics
+            disease_stats = defaultdict(lambda: {
+                'count': 0,
+                'high': 0,
+                'medium': 0,
+                'low': 0,
+                'avg_confidence': 0,
+                'total_confidence': 0
+            })
+            
+            for detection in all_detections:
+                disease = detection.get('disease_name', 'Unknown')
+                confidence = float(detection.get('confidence', 0))
+                severity = detection.get('severity', 'low')
+                
+                disease_stats[disease]['count'] += 1
+                disease_stats[disease]['total_confidence'] += confidence
+                
+                if severity == 'high':
+                    disease_stats[disease]['high'] += 1
+                elif severity == 'medium':
+                    disease_stats[disease]['medium'] += 1
+                else:
+                    disease_stats[disease]['low'] += 1
+            
+            # Calculate average confidence
+            for disease in disease_stats:
+                if disease_stats[disease]['count'] > 0:
+                    disease_stats[disease]['avg_confidence'] = round(
+                        disease_stats[disease]['total_confidence'] / disease_stats[disease]['count'], 4
+                    )
+            
+            # Build CSV
+            csv_buffer = StringIO()
+            csv_buffer.write("Disease Name,Confidence,Severity,Field ID,Detection Date,Location,Email,Source\n")
+            
+            # Write detections
+            for detection in all_detections:
+                disease = detection.get('disease_name', 'Unknown')
+                confidence = float(detection.get('confidence', 0))
+                severity = detection.get('severity', 'low')
+                
+                location_str = ""
+                if detection.get('location'):
+                    if isinstance(detection['location'], dict):
+                        location_str = f"{detection['location'].get('lat', '')},{detection['location'].get('lng', '')}"
+                
+                csv_buffer.write(f"{disease},{confidence:.4f},{severity},{detection.get('field_id', '')},{detection.get('detection_date', '')},{location_str},{detection.get('email', '')},detection\n")
+            
+            # Summary section
+            csv_buffer.write("\n=== INVENTORY SUMMARY ===\n\n")
+            csv_buffer.write("Disease,Total Count,Avg Confidence,High,Medium,Low\n")
+            
+            total_detections = 0
+            total_high = 0
+            total_medium = 0
+            total_low = 0
+            total_confidence = 0
+            
+            for disease in sorted(disease_stats.keys(), key=lambda x: disease_stats[x]['count'], reverse=True):
+                stats = disease_stats[disease]
+                csv_buffer.write(f"{disease},{stats['count']},{stats['avg_confidence']},{stats['high']},{stats['medium']},{stats['low']}\n")
+                total_detections += stats['count']
+                total_high += stats['high']
+                total_medium += stats['medium']
+                total_low += stats['low']
+                total_confidence += stats['total_confidence']
+            
+            csv_buffer.write(f"\nTOTAL,{total_detections},{round(total_confidence/total_detections, 4) if total_detections > 0 else 0},{total_high},{total_medium},{total_low}\n")
+            
+            csv_content = csv_buffer.getvalue()
+            logger.info(f"✅ CSV generated: {total_detections} detections")
+        
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=disease_detections.csv"}
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ CSV export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/recommendations/fertilizer")
-async def get_fertilizer_recommendation(request: RecommendationRequest, decoded: dict = Depends(verify_firebase_token)):
-    """
-    Get farmer-friendly fertilizer recommendations based on detected disease.
-    
-    Args:
-        disease: Disease name from detection
-        confidence: Confidence level (0-1 or 0-100)
-    
-    Returns:
-        Formatted recommendations for Fertilizer, Treatment, and Prevention
-    """
-    recommendation = detector.get_fertilizer_recommendation(request.disease, request.confidence)
-    
-    return {
-        "disease": recommendation['disease'],
-        "confidence_percent": recommendation['confidence'],
-        "recommendations": {
-            "fertilizer": recommendation['fertilizer'],
-            "treatment": recommendation['treatment'],
-            "prevention": recommendation['prevention']
-        },
-        "note": recommendation['note'],
-        "location": "Davao, Philippines"
-    }
+
 
 
 # ─── Get User's Detection Records ──────────────────────────────────────────────

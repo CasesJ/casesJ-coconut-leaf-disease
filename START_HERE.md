@@ -39,10 +39,10 @@ http://localhost:8000/docs
 from model import detector
 import cv2
 
-# Load and detect
-image = cv2.imread("leaf.jpg")
-detections, annotated_image = detector.detect(image)
-print(detections)
+# Load and detect any leaf image
+image = cv2.imread("your_leaf_image.jpg")
+result = detector.predict(image)
+print(result["detections"])
 ```
 
 ---
