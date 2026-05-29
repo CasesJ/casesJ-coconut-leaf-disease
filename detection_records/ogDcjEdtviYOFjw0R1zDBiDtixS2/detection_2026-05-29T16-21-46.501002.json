@@ -1,0 +1,22 @@
+{
+  "id": "ogDcjEdtviYOFjw0R1zDBiDtixS2_1780042906501",
+  "user_id": "ogDcjEdtviYOFjw0R1zDBiDtixS2",
+  "email": "cases.james@gmail.com",
+  "timestamp": "2026-05-29T16:21:46.501002",
+  "inference_results": [
+    {
+      "class": "bud root",
+      "confidence": 0.822,
+      "bbox": [
+        259,
+        2,
+        629,
+        547
+      ]
+    }
+  ],
+  "gps_data": null,
+  "image_path": "",
+  "is_synced": false,
+  "sync_attempts": 0
+}

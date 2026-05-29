@@ -647,6 +647,165 @@
         @media (max-width: 640px) {
             .confidence-display { font-size: 10px; }
         }
+        /* DESIGN REFRESH */
+        :root {
+            --deep:#08261c;
+            --mid:#14533c;
+            --bright:#247c57;
+            --accent:#43c978;
+            --text:#0c1712;
+            --text2:#40584d;
+            --text3:#64786d;
+            --cream:#f6f4ec;
+            --cream2:#e8eee3;
+            --surface:#fffdf8;
+            --surface-2:#f2f6ef;
+            --line:rgba(8,38,28,0.12);
+            --r:10px;
+            --rs:8px;
+            --sh:0 1px 2px rgba(8,38,28,0.05),0 12px 30px rgba(8,38,28,0.08);
+            --shm:0 16px 44px rgba(8,38,28,0.16);
+        }
+        body {
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.78), rgba(246,244,236,0.96)),
+                var(--cream);
+        }
+        .container { max-width: 1240px; }
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            box-shadow: var(--sh);
+        }
+        header h1 {
+            font-family:'DM Sans',sans-serif;
+            font-size: 24px;
+            letter-spacing: 0;
+        }
+        header p { color: var(--text3); line-height: 1.45; }
+        header::after {
+            content: "OpenVINO";
+            flex: 0 0 auto;
+            padding: 7px 11px;
+            border-radius: 999px;
+            background: #eef8f1;
+            color: #16563d;
+            border: 1px solid rgba(36,124,87,0.18);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .6px;
+            text-transform: uppercase;
+        }
+        .main-content {
+            grid-template-columns: minmax(0,1fr) 340px;
+            gap: 16px;
+        }
+        .video-container,
+        .sidebar,
+        .detections-panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            box-shadow: var(--sh);
+        }
+        .stream-placeholder {
+            background:
+                linear-gradient(135deg, rgba(67,201,120,0.08), transparent 40%),
+                #091812;
+            color: rgba(255,255,255,0.58);
+            min-height: 560px;
+        }
+        .status-overlay {
+            border-radius: 8px;
+            background: rgba(8, 38, 28, 0.88);
+            border-color: rgba(255,255,255,0.14);
+            color: rgba(255,255,255,0.82);
+        }
+        .sidebar {
+            display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr));
+            gap: 12px;
+            padding: 16px;
+        }
+        .sidebar h2,
+        .settings,
+        .controls {
+            grid-column: 1 / -1;
+        }
+        .stats-item {
+            margin: 0;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface-2);
+        }
+        .stats-value {
+            font-family:'DM Sans',sans-serif;
+            font-size: 20px;
+            color: var(--deep);
+        }
+        .settings {
+            margin-top: 0;
+            padding-top: 14px;
+        }
+        .settings h3 {
+            color: var(--deep) !important;
+            font-size: 13px !important;
+            font-weight: 700;
+        }
+        .btn {
+            border-radius: 8px;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .btn-primary {
+            background: var(--deep);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .btn-danger {
+            background: var(--red-bg);
+            color: var(--red-text);
+            border: 1px solid rgba(139,32,32,0.18);
+        }
+        input[type="number"],
+        select {
+            background: var(--surface);
+            border-color: var(--line);
+            border-radius: 8px;
+        }
+        .detections-panel h2,
+        .sidebar h2 {
+            color: var(--deep);
+            letter-spacing: .7px;
+        }
+        .detection-item {
+            background: var(--surface-2);
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--bright);
+            border-radius: 8px;
+        }
+        .no-detections {
+            background: var(--surface-2);
+            border: 1px dashed var(--line);
+            border-radius: 8px;
+        }
+        @media (max-width: 900px) {
+            header { align-items: flex-start; }
+            .main-content { grid-template-columns: 1fr; }
+            .sidebar { grid-template-columns: repeat(4,minmax(0,1fr)); }
+        }
+        @media (max-width: 640px) {
+            header { display: block; }
+            header::after { display: inline-block; margin-top: 12px; }
+            .sidebar { grid-template-columns: 1fr 1fr; }
+            .stream-placeholder { min-height: 300px; }
+        }
     </style>
 </head>
 <body>
