@@ -1,0 +1,35 @@
+# Firebase credentials and secrets
+*-firebase-adminsdk-*.json
+*.key
+*.pem
+secrets/
+.env
+.env.local
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Large model files
+weights.pt
+*.bin
+*.onnx
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

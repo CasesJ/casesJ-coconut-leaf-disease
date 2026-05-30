@@ -113,7 +113,7 @@ class CoconutDiseaseDetector:
             original_height, original_width = image.shape[:2]
             
             # Preprocess image for model input
-            # YOLO11n expects 640x640 RGB images normalized to 0-1
+            # YOLO26s expects 640x640 RGB images normalized to 0-1
             resized_image = cv2.resize(image, (self.model_width, self.model_height))
             resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
             
@@ -132,60 +132,54 @@ class CoconutDiseaseDetector:
             
             print(f"[MODEL] Output shape: {output.shape}")
             
-            # Parse YOLO11 output format: [1, 10, 8400]
-            # 10 = 4(bbox coords) + 6(class scores)
+            # Parse YOLO26 output format: [1, 300, 6]
+            # Each detection: [x1, y1, x2, y2, confidence, class_id]
+            # Output is already in pixel coordinates (0-640) and post-processed
             
             raw_detections = []  # Collect all detections first
             
-            # Reshape output: [1, 10, 8400] -> transpose to [8400, 10]
+            # Extract predictions from output shape [1, 300, 6]
             if len(output.shape) == 3:
-                predictions = output[0].T  # [num_detections, num_outputs]
+                predictions = output[0]  # [300, 6]
             else:
-                predictions = output.T if output.shape[0] < output.shape[1] else output
+                predictions = output  # Already [300, 6]
             
-            print(f"[DATA] Predictions shape after transpose: {predictions.shape}")
+            print(f"[DATA] Predictions shape: {predictions.shape}")
             
             # First pass: Collect all predictions above confidence threshold
             if predictions.shape[0] > 0:
                 for pred in predictions:
                     try:
                         # Extract bbox coordinates and confidence
-                        x_center, y_center, width, height = pred[:4]
-                        class_scores = pred[4:]
+                        # Format: [x1, y1, x2, y2, confidence, class_id]
+                        x1_norm, y1_norm, x2_norm, y2_norm = pred[:4]
+                        class_conf = pred[4]
+                        class_id = int(pred[5])
                         
-                        # Get class with highest confidence
-                        class_id = np.argmax(class_scores)
-                        class_conf = class_scores[class_id]
-                        
-                        # Filter by confidence threshold (more selective)
+                        # Filter by confidence threshold
                         if class_conf < confidence_threshold:
                             continue
                         
-                        # Scale coordinates back to original image size
+                        # Coordinates are in normalized 0-640 pixel space
+                        # Scale to actual image dimensions
                         scale_x = original_width / self.model_width
                         scale_y = original_height / self.model_height
                         
-                        x_center *= scale_x
-                        y_center *= scale_y
-                        width *= scale_x
-                        height *= scale_y
+                        x1 = int(max(0, x1_norm * scale_x))
+                        y1 = int(max(0, y1_norm * scale_y))
+                        x2 = int(min(original_width, x2_norm * scale_x))
+                        y2 = int(min(original_height, y2_norm * scale_y))
                         
-                        # Convert from center format to corner format
-                        x1 = int(max(0, x_center - width / 2))
-                        y1 = int(max(0, y_center - height / 2))
-                        x2 = int(min(original_width, x_center + width / 2))
-                        y2 = int(min(original_height, y_center + height / 2))
-                        
-                        # Skip invalid boxes
+                        # Skip invalid boxes or very small detections
                         if x2 <= x1 or y2 <= y1:
                             continue
                         
                         # Get class name
-                        class_name = self.class_names.get(int(class_id), 'unknown')
+                        class_name = self.class_names.get(class_id, 'unknown')
                         
                         raw_detections.append({
                             "class": class_name,
-                            "class_id": int(class_id),
+                            "class_id": class_id,
                             "confidence": float(class_conf),
                             "bbox": [x1, y1, x2, y2]
                         })

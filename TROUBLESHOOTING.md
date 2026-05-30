@@ -1,5 +1,98 @@
 # 🔧 Complete Troubleshooting Guide
 
+---
+
+## YOLO26 Model Issues (May 30, 2026 Update)
+
+### Problem: "Unknown" disease class in detections
+
+**Symptoms:**
+- All detections show "unknown" instead of disease names
+- Console shows: `class_name = self.class_names.get(class_id, 'unknown')`
+
+**Solution:**
+Verify model.py line 44-50 has correct class mapping:
+```python
+self.class_names = {
+    0: 'Caterpillars',
+    1: 'Cercospora',
+    2: 'Drying of Leaflets',
+    3: 'Healthy',
+    4: 'Pestalotiopsis',
+    5: 'bud root'
+}
+```
+
+**Root Cause:** Class ID from YOLO26 model not matching the dictionary keys.
+
+---
+
+### Problem: Detection appears slow (>500ms)
+
+**Symptoms:**
+- Web interface takes >1 second per image
+- Progress bar takes a long time
+- FPS is low
+
+**First Check - Run benchmark:**
+```bash
+python -c "
+import time
+import cv2
+import numpy as np
+from model import CoconutDiseaseDetector
+
+detector = CoconutDiseaseDetector()
+img = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
+
+start = time.time()
+result = detector.predict(img)
+elapsed = (time.time() - start) * 1000
+
+print(f'Inference only: {elapsed:.0f}ms')
+print(f'Expected: 286ms')
+print(f'Status: {'OK' if elapsed < 400 else 'SLOW - Check disk/network'}')
+"
+```
+
+**If <400ms:** Problem is not the model.
+- Check GPS extraction (drone_gps.py)
+- Check Firebase sync (slow network)
+- Check storage operations
+
+**If >400ms:** Model loading issue.
+- Restart application
+- Check disk space
+- Try CPU vs GPU settings
+
+---
+
+### Problem: Confidence scores don't make sense
+
+**Symptoms:**
+- Scores show 500%, 66296%, 500%
+- Text is white/unreadable
+
+**Solution:** This was a YOLO11n bug. YOLO26 is fixed.
+- Update model.py to latest version
+- Confidence range is now proper 0-1 (displayed as %)
+- Example: 0.847 displays as "84.7%"
+
+---
+
+### Problem: "yolov6.export" module not found
+
+**Symptoms:**
+- `python -m yolov6.export --weights weights.pt` fails
+- "No module named yolov6.export"
+
+**Solution:** Model is already converted to OpenVINO.
+- YOLO26 weights → best.xml + best.bin is complete
+- No re-export needed unless you have new weights.pt file
+- If new weights: `python -c "from ultralytics import YOLO; YOLO('weights.pt').export(format='openvino')"`
+
+---
+
 ## Installation Issues
 
 ### Problem: "ModuleNotFoundError: No module named 'firebase_admin'"

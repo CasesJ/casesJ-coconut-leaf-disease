@@ -3,11 +3,12 @@
 ## 📋 System Status
 
 Your system is **fully configured** with:
-- ✅ **OpenVINO** real-time detection (8-12 FPS on CPU)
+- ✅ **OpenVINO + YOLO26s** - Real-time detection (~300ms per image, optimized for CPU)
 - ✅ **Offline-first hybrid storage** (local SQLite + Firebase sync)
-- ✅ **Web interface** (FastAPI)
-- ✅ **Drone GPS integration** (for field mapping)
-- ✅ **Firebase integration** (for cloud backup)
+- ✅ **Web interface** (FastAPI) - Stream drone feed or upload images
+- ✅ **Drone GPS integration** (EXIF extraction + browser fallback)
+- ✅ **Firebase integration** (for cloud backup and sync)
+- ✅ **Post-flight detection** (Process photos after drone landing)
 
 ---
 
