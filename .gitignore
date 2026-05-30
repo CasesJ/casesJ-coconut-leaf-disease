@@ -33,3 +33,6 @@ weights.pt
 *.swo
 .DS_Store
 Thumbs.db
+
+coconut-leaf-disease-dcf9a-firebase-adminsdk-fbsvc-54bd5a7488.json
+*.json
