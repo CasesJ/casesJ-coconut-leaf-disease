@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lanticse Coconut Farm - Location</title>
+    <link href="https://unpkg.com/maplibre-gl@2.15.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@2.15.0/dist/maplibre-gl.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content-wrapper {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .location-box {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            height: fit-content;
+        }
+
+        .location-box h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.4em;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .location-item {
+            margin-bottom: 18px;
+            padding-bottom: 18px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .location-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .label {
+            font-size: 0.9em;
+            color: #666;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .value {
+            font-size: 1.1em;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .coordinates-display {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            font-family: 'Courier New', monospace;
+        }
+
+        .copy-button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-top: 10px;
+            width: 100%;
+            transition: background 0.3s ease;
+        }
+
+        .copy-button:hover {
+            background: #764ba2;
+        }
+
+        .copy-button.copied {
+            background: #10b981;
+        }
+
+        .info-section {
+            background: #f0f4ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .info-section p {
+            color: #333;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            .content-wrapper {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 1.8em;
+            }
+
+            #map {
+                height: 350px;
+            }
+        }
+
+        .map-marker-info {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            max-width: 200px;
+        }
+
+        .map-marker-info h3 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 1em;
+        }
+
+        .map-marker-info p {
+            margin: 0;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🥥 Lanticse Coconut Farm</h1>
+            <p>Barangay New Malitbog, Panabo City | Real-Time Location Tracking</p>
+        </div>
+
+        <div class="content-wrapper">
+            <div id="map"></div>
+
+            <div class="location-box">
+                <h2>📍 Location Details</h2>
+
+                <div class="location-item">
+                    <div class="label">Farm Name</div>
+                    <div class="value">Lanticse Coconut Farm</div>
+                </div>
+
+                <div class="location-item">
+                    <div class="label">Owner</div>
+                    <div class="value">Ms. Margareta M. Lanticse</div>
+                </div>
+
+                <div class="location-item">
+                    <div class="label">Barangay</div>
+                    <div class="value">New Malitbog</div>
+                </div>
+
+                <div class="location-item">
+                    <div class="label">City/Municipality</div>
+                    <div class="value">Panabo City</div>
+                </div>
+
+                <div class="location-item">
+                    <div class="label">Latitude</div>
+                    <div class="value coordinates-display">7.3400° N</div>
+                    <small style="color: #999;">(or 7° 20' 24" N)</small>
+                </div>
+
+                <div class="location-item">
+                    <div class="label">Longitude</div>
+                    <div class="value coordinates-display">125.5600° E</div>
+                    <small style="color: #999;">(or 125° 33' 36" E)</small>
+                </div>
+
+                <button class="copy-button" onclick="copyCoordinates()">📋 Copy Coordinates</button>
+
+                <div class="info-section">
+                    <p><strong>System Integration:</strong> This location is configured for your coconut disease detection system's GPS reference point and drone flight planning.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize map with MapLibre
+        let map;
+        let diseaseMarkers = []; // Store disease markers
+        const farmLatitude = 7.3400;
+        const farmLongitude = 125.5600;
+
+        // Disease color mapping
+        const diseaseColors = {
+            'bud_rot': '#e04f4f',           // Red
+            'leaf_spot': '#f0b429',         // Yellow
+            'black_pepper': '#f0b429',      // Yellow
+            'healthy': '#10b981',           // Green
+            'unknown': '#8b5cf6'            // Purple
+        };
+
+        // Get color for disease type
+        function getDiseasePinColor(diseaseType) {
+            const color = diseaseColors[diseaseType] || '#8b5cf6';
+            return color;
+        }
+
+        // Create disease marker element with color
+        function createDiseaseMarkerElement(color) {
+            const element = document.createElement('div');
+            element.style.width = '24px';
+            element.style.height = '24px';
+            element.style.borderRadius = '50%';
+            element.style.backgroundColor = color;
+            element.style.border = '3px solid white';
+            element.style.boxShadow = '0 0 8px rgba(0,0,0,0.3)';
+            element.style.cursor = 'pointer';
+            return element;
+        }
+
+        // Add disease pin to map
+        function addDiseasePin(lat, lng, diseaseType, confidence) {
+            if (!map) return;
+
+            const color = getDiseasePinColor(diseaseType);
+            const pct = Math.round(confidence * 100);
+            const time = new Date().toLocaleTimeString();
+
+            const markerElement = createDiseaseMarkerElement(color);
+            const popup = new maplibregl.Popup({ offset: 25 }).setHTML(`
+                <div style="font-family: 'DM Sans', sans-serif; font-size: 12px;">
+                    <strong style="text-transform: capitalize; display: block; margin-bottom: 4px;">
+                        ${diseaseType.replace(/_/g, ' ')}
+                    </strong>
+                    <p style="margin: 4px 0; font-size: 11px;">
+                        <strong>Confidence:</strong> ${pct}%
+                    </p>
+                    <p style="margin: 4px 0; font-size: 11px;">
+                        <strong>Coordinates:</strong> ${lat.toFixed(4)}, ${lng.toFixed(4)}
+                    </p>
+                    <p style="margin: 4px 0; font-size: 11px;">
+                        <strong>Time:</strong> ${time}
+                    </p>
+                </div>
+            `);
+
+            const marker = new maplibregl.Marker({ element: markerElement })
+                .setLngLat([lng, lat])
+                .setPopup(popup)
+                .addTo(map);
+
+            diseaseMarkers.push(marker);
+
+            // Optional: animate the new marker
+            markerElement.style.animation = 'pulse-in 0.4s ease-out';
+        }
+
+        // Poll for new disease detections from sessionStorage
+        function checkForNewDetections() {
+            try {
+                const detectionsStr = sessionStorage.getItem('farmPins');
+                if (detectionsStr) {
+                    const detections = JSON.parse(detectionsStr);
+                    const savedCount = parseInt(sessionStorage.getItem('farmPinsCount') || '0');
+                    
+                    if (detections.length > savedCount) {
+                        // Add new pins that weren't already shown
+                        for (let i = savedCount; i < detections.length; i++) {
+                            const detection = detections[i];
+                            addDiseasePin(detection.lat, detection.lng, detection.label, detection.confidence);
+                        }
+                        sessionStorage.setItem('farmPinsCount', detections.length.toString());
+                    }
+                }
+            } catch (error) {
+                console.log('Checking for detections:', error);
+            }
+        }
+
+        function initMap() {
+            const farmLocation = [farmLongitude, farmLatitude]; // MapLibre uses [lng, lat]
+
+            map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://tile.openstreetmap.org/styles/osm-bright/style.json', // OSM style
+                center: farmLocation,
+                zoom: 18,
+                pitch: 0
+            });
+
+            // Add zoom and rotation controls
+            map.addControl(new maplibregl.NavigationControl(), 'top-right');
+            map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
+
+            // Create farm center marker element
+            const markerElement = document.createElement('div');
+            markerElement.className = 'map-marker';
+            markerElement.innerHTML = '🥥';
+            markerElement.style.fontSize = '28px';
+            markerElement.style.cursor = 'pointer';
+
+            // Add marker with click handler
+            const marker = new maplibregl.Marker(markerElement)
+                .setLngLat(farmLocation)
+                .setPopup(
+                    new maplibregl.Popup({ offset: 25 }).setHTML(`
+                        <div class="map-marker-info" style="font-family: 'DM Sans', sans-serif;">
+                            <h3 style="margin: 0 0 6px 0;">🥥 Lanticse Coconut Farm</h3>
+                            <p style="margin: 4px 0; font-size: 11px;"><strong>Lat:</strong> 7.3400° N</p>
+                            <p style="margin: 4px 0; font-size: 11px;"><strong>Lng:</strong> 125.5600° E</p>
+                            <p style="margin: 8px 0 0 0; font-size: 10px; color: #666;">Barangay New Malitbog<br>Panabo City</p>
+                        </div>
+                    `)
+                )
+                .addTo(map);
+
+            // Click marker to center and zoom to farm
+            markerElement.addEventListener('click', () => {
+                map.flyTo({
+                    center: farmLocation,
+                    zoom: 18,
+                    duration: 1000
+                });
+                marker.togglePopup();
+            });
+
+            // Open popup on load
+            marker.togglePopup();
+
+            // Add farm area boundary (rectangle box)
+            map.on('load', () => {
+                // Define farm boundary coordinates (approximate 200m x 200m farm area)
+                const farmBoxBuffer = 0.0018; // Approximately 200 meters
+
+                const farmBoundary = [
+                    [farmLongitude - farmBoxBuffer, farmLatitude - farmBoxBuffer],
+                    [farmLongitude + farmBoxBuffer, farmLatitude - farmBoxBuffer],
+                    [farmLongitude + farmBoxBuffer, farmLatitude + farmBoxBuffer],
+                    [farmLongitude - farmBoxBuffer, farmLatitude + farmBoxBuffer],
+                    [farmLongitude - farmBoxBuffer, farmLatitude - farmBoxBuffer]
+                ];
+
+                // Add farm area boundary as polygon
+                map.addSource('farm-boundary', {
+                    type: 'geojson',
+                    data: {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Polygon',
+                            coordinates: [farmBoundary]
+                        }
+                    }
+                });
+
+                // Add fill layer for farm area
+                map.addLayer({
+                    id: 'farm-area-fill',
+                    type: 'fill',
+                    source: 'farm-boundary',
+                    paint: {
+                        'fill-color': '#10b981',
+                        'fill-opacity': 0.15
+                    }
+                });
+
+                // Add outline for farm area
+                map.addLayer({
+                    id: 'farm-area-outline',
+                    type: 'line',
+                    source: 'farm-boundary',
+                    paint: {
+                        'line-color': '#059669',
+                        'line-width': 3,
+                        'line-opacity': 0.8
+                    }
+                });
+
+                // Create circle points for detection zone (500m radius)
+                const radius = 500; // meters
+                const points = 64;
+                const circleCoordinates = [];
+
+                for (let i = 0; i <= points; i++) {
+                    const angle = (i / points) * Math.PI * 2;
+                    const dx = (radius / 111000) * Math.cos(angle);
+                    const dy = (radius / 111000) * Math.sin(angle);
+                    circleCoordinates.push([farmLongitude + dx, farmLatitude + dy]);
+                }
+
+                // Add detection zone
+                map.addSource('detection-zone', {
+                    type: 'geojson',
+                    data: {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Polygon',
+                            coordinates: [circleCoordinates]
+                        }
+                    }
+                });
+
+                map.addLayer({
+                    id: 'detection-zone-fill',
+                    type: 'fill',
+                    source: 'detection-zone',
+                    paint: {
+                        'fill-color': '#667eea',
+                        'fill-opacity': 0.08
+                    }
+                });
+
+                map.addLayer({
+                    id: 'detection-zone-outline',
+                    type: 'line',
+                    source: 'detection-zone',
+                    paint: {
+                        'line-color': '#667eea',
+                        'line-width': 1.5,
+                        'line-opacity': 0.4,
+                        'line-dasharray': [5, 5]
+                    }
+                });
+
+                // Load and display any existing disease detections
+                checkForNewDetections();
+
+                // Poll for new detections every 2 seconds
+                setInterval(checkForNewDetections, 2000);
+            });
+        }
+
+        // Copy coordinates to clipboard
+        function copyCoordinates() {
+            const coordinates = `7.3400°N, 125.5600°E`;
+            navigator.clipboard.writeText(coordinates).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✅ Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // Animation for new pins
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes pulse-in {
+                0% {
+                    transform: scale(0.5);
+                    opacity: 0;
+                }
+                100% {
+                    transform: scale(1);
+                    opacity: 1;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Initialize map when page loads
+        window.addEventListener('load', initMap);
+    </script>
+</body>
+</html>

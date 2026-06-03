@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, D
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from datetime import datetime
@@ -91,6 +92,15 @@ class UserResponse(BaseModel):
 class RecommendationRequest(BaseModel):
     disease: str
     confidence: float
+    
+    class Config:
+        # Provide better error messages
+        json_schema_extra = {
+            "example": {
+                "disease": "Cercospora",
+                "confidence": 0.95
+            }
+        }
 
 
 # ─── Lifecycle Management ──────────────────────────────────────────────────────
@@ -137,6 +147,16 @@ app = FastAPI(
     description="Disease detection and inventory management",
     lifespan=lifespan,
 )
+
+# ✅ Add CORS middleware to allow frontend communication
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (adjust for production)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ─── Security ──────────────────────────────────────────────────────────────
@@ -190,16 +210,29 @@ async def verify_token_optional(request) -> dict:
 async def verify_user_token(request: LoginRequest):
     """Verify Firebase ID token (called after Firebase login on client)"""
     try:
+        print(f"\n{'='*60}")
+        print(f"🔐 VERIFYING FIREBASE TOKEN")
+        print(f"{'='*60}")
+        print(f"   Token length: {len(request.token)}")
+        
         decoded = verify_token(request.token)
+        
+        print(f"   ✅ Token verified successfully")
+        print(f"   UID: {decoded.get('uid')}")
+        print(f"   Email: {decoded.get('email')}")
+        print(f"{'='*60}\n")
+        
         return {
             "uid": decoded.get('uid'),
             "email": decoded.get('email'),
             "message": "Token verified successfully"
         }
     except Exception as e:
+        print(f"   ❌ Token verification failed: {str(e)}")
+        print(f"{'='*60}\n")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
+            detail=f"Invalid token: {str(e)}"
         )
 
 @app.get("/auth/user")
@@ -219,36 +252,112 @@ async def logout():
 
 # ─── Recommendations Endpoint ──────────────────────────────────────────────────
 @app.post("/recommendations/fertilizer")
-async def get_recommendations(request: RecommendationRequest):
-    """Get fertilizer, treatment, and prevention recommendations based on detected disease"""
+async def get_recommendations(request: RecommendationRequest, lat: float = None, lng: float = None, accuracy: float = None):
+    """Get fertilizer, treatment, and prevention recommendations based on detected disease
+    
+    Accepts optional GPS coordinates:
+    - lat, lng: Browser/device geolocation (fallback)
+    - accuracy: GPS accuracy in meters
+    """
     try:
+        # Validate request data
+        if not request.disease or not isinstance(request.disease, str):
+            logger.error(f"Invalid disease parameter: {request.disease}")
+            return {
+                "disease": "Error",
+                "confidence_percent": 0,
+                "model_used": "Error",
+                "recommendations": {
+                    "fertilizer": "Invalid disease name",
+                    "treatment": "Please provide a valid disease name",
+                    "prevention": ["Ensure detection data is valid"]
+                },
+                "location": {},
+                "note": "Error: Invalid disease parameter"
+            }
+        
+        # Validate confidence is a valid number
+        if not isinstance(request.confidence, (int, float)) or request.confidence is None:
+            logger.error(f"Invalid confidence parameter: {request.confidence} (type: {type(request.confidence)})")
+            return {
+                "disease": request.disease,
+                "confidence_percent": 0,
+                "model_used": "Error",
+                "recommendations": {
+                    "fertilizer": "Unable to generate recommendations",
+                    "treatment": "Invalid confidence value provided",
+                    "prevention": ["Monitor tree health regularly"]
+                },
+                "location": {},
+                "note": "Error: Invalid confidence value (must be a number between 0-100 or 0-1)"
+            }
+        
+        # Check for NaN or Infinity
+        import math
+        if math.isnan(request.confidence) or math.isinf(request.confidence):
+            logger.error(f"Invalid confidence value: {request.confidence}")
+            return {
+                "disease": request.disease,
+                "confidence_percent": 0,
+                "model_used": "Error",
+                "recommendations": {
+                    "fertilizer": "Unable to generate recommendations",
+                    "treatment": "Confidence value is invalid (NaN or Infinity)",
+                    "prevention": ["Monitor tree health regularly"]
+                },
+                "location": {},
+                "note": "Error: Invalid confidence value"
+            }
+        
+        # Prepare GPS data for recommendation
+        gps_data = None
+        user_location = None
+        
+        if lat is not None and lng is not None:
+            user_location = {
+                "lat": lat,
+                "lng": lng,
+                "accuracy": accuracy if accuracy else 10.0
+            }
+        
         # Get recommendations from the detector model
         recommendations = detector.get_fertilizer_recommendation(
             disease_name=request.disease,
-            confidence=request.confidence
+            confidence=request.confidence,
+            gps_data=None,  # Would come from image EXIF if available
+            user_location=user_location
         )
+        
+        # Extract prevention list
+        prevention = recommendations.get('prevention', [])
+        if isinstance(prevention, str):
+            prevention = [prevention]
         
         # Format response for frontend
         return {
             "disease": recommendations['disease'],
             "confidence_percent": recommendations['confidence'],
+            "model_used": recommendations.get('model', 'Unknown'),
             "recommendations": {
                 "fertilizer": recommendations['fertilizer'],
                 "treatment": recommendations['treatment'],
-                "prevention": recommendations['prevention']
+                "prevention": prevention
             },
+            "location": recommendations.get('location', {}),
             "note": recommendations['note']
         }
     except Exception as e:
-        logger.error(f"Recommendation error: {str(e)}")
+        logger.error(f"Recommendation error: {str(e)}", exc_info=True)
         return {
-            "disease": request.disease,
-            "confidence_percent": request.confidence,
+            "disease": request.disease if request else "Unknown",
+            "confidence_percent": request.confidence if request else 0,
+            "model_used": "Error",
             "recommendations": {
                 "fertilizer": "Unable to generate recommendations",
                 "treatment": "Please consult a local agricultural expert",
-                "prevention": "Monitor tree health regularly"
+                "prevention": ["Monitor tree health regularly"]
             },
+            "location": {},
             "note": f"Error: {str(e)}"
         }
 
@@ -298,6 +407,8 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     # ✅ FIXED: TRY TO EXTRACT GPS FROM EXIF FIRST, WITH BROWSER FALLBACK
     drone_gps = get_drone_gps()
     exif_gps = None
+    gps_source = "none"
+    gps_accuracy = None
     
     # Prepare fallback browser coordinates (if provided by frontend)
     fallback_coords = None
@@ -313,11 +424,33 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         if exif_gps:
             lat = exif_gps.latitude
             lng = exif_gps.longitude
-            print(f"[GPS] Source: {exif_gps.source} | lat={lat:.6f}, lng={lng:.6f}, alt={exif_gps.altitude:.1f}m, accuracy={exif_gps.accuracy:.1f}m")
+            gps_source = exif_gps.source
+            gps_accuracy = exif_gps.accuracy
+            print(f"[GPS] Source: {gps_source} | lat={lat:.6f}, lng={lng:.6f}, alt={exif_gps.altitude:.1f}m, accuracy={gps_accuracy:.1f}m")
         elif lat is not None and lng is not None:
-            print(f"[GPS] No EXIF GPS - Using provided coordinates: lat={lat}, lng={lng}")
+            gps_source = "browser_geolocation"
+            gps_accuracy = accuracy if accuracy else 15.0
+            print(f"[GPS] No EXIF GPS - Using browser geolocation: lat={lat:.6f}, lng={lng:.6f}, accuracy={gps_accuracy:.1f}m")
         else:
-            print(f"[GPS] ⚠️  No GPS data (no EXIF and no coordinates provided)")
+            # No GPS from any source - use Davao default fallback
+            print(f"[GPS] ⚠️  Location access denied or unavailable")
+            lat = 7.0731  # Davao default center
+            lng = 125.6123
+            gps_source = "davao_default_fallback"
+            gps_accuracy = 50000.0
+            print(f"[GPS] FALLBACK: Using Davao region default: lat={lat:.6f}, lng={lng:.6f}")
+    else:
+        if lat is not None and lng is not None:
+            gps_source = "browser_geolocation"
+            gps_accuracy = accuracy if accuracy else 15.0
+            print(f"[GPS] Using browser geolocation: lat={lat:.6f}, lng={lng:.6f}")
+        else:
+            # Fallback to Davao
+            lat = 7.0731
+            lng = 125.6123
+            gps_source = "davao_default_fallback"
+            gps_accuracy = 50000.0
+            print(f"[GPS] FALLBACK: Using Davao region default coordinates")
     
     np_arr = np.frombuffer(contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
@@ -341,25 +474,36 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
             print(f"   User: {user_id}")
             print(f"   Email: {email}")
             print(f"   Detections: {len(high_confidence_detections)}")
+            print(f"   GPS Source: {gps_source} | lat={lat:.6f}, lng={lng:.6f}")
             
+            # Create GPS data dict for storage
+            gps_data = {
+                'latitude': lat,
+                'longitude': lng,
+                'accuracy': gps_accuracy,
+                'source': gps_source,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Create detection record for Firebase
             detection_record = {
                 'timestamp': datetime.now().isoformat(),
                 'email': email,
+                'user_id': user_id,
                 'detections': high_confidence_detections,
                 'count': len(high_confidence_detections),
                 'source': 'upload',
-                'lat': lat,
-                'lng': lng,
-                'filename': file.filename,
-                'gps_source': 'exif' if exif_gps else ('manual' if lat else 'none')
+                'gps_data': gps_data,
+                'filename': file.filename
             }
             
             saved = False
             
             # OFFLINE MODE: Skip Firebase, save to local storage only
+            # Also save to local storage in online mode (hybrid approach)
             if is_offline:
                 print(f"   [OFFLINE] Saving to local storage only...")
-                if save_detection(user_id, email, high_confidence_detections):
+                if save_detection(user_id, email, high_confidence_detections, gps_data):
                     print(f"[OK] SUCCESS: Saved to local storage (offline mode)")
                     saved = True
             else:
@@ -370,6 +514,13 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                     push_result = ref.push(detection_record)
                     print(f"[OK] SUCCESS: Saved to Realtime Database")
                     print(f"   Path: users/{user_id}/uploads/{push_result.key}")
+                    
+                    # Also save to local storage (hybrid)
+                    try:
+                        save_detection(user_id, email, high_confidence_detections, gps_data)
+                    except:
+                        pass
+                    
                     saved = True
                 except Exception as rtdb_error:
                     print(f"[WARN] Realtime Database failed: {type(rtdb_error).__name__}")
@@ -380,6 +531,13 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                             print(f"   [FIRESTORE] Falling back to Firestore...")
                             doc_ref = fs.collection('users').document(user_id).collection('detections').add(detection_record)
                             print(f"[OK] SUCCESS: Saved to Firestore")
+                            
+                            # Also save to local storage (hybrid)
+                            try:
+                                save_detection(user_id, email, high_confidence_detections, gps_data)
+                            except:
+                                pass
+                            
                             saved = True
                         except Exception as firestore_error:
                             print(f"[WARN] Firestore failed: {type(firestore_error).__name__}")
@@ -387,7 +545,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                     # Final fallback: Local JSON storage
                     if not saved:
                         print(f"   [LOCAL] Using local storage (records persist locally)...")
-                        if save_detection(user_id, email, high_confidence_detections):
+                        if save_detection(user_id, email, high_confidence_detections, gps_data):
                             print(f"[OK] SUCCESS: Saved to local storage")
                             saved = True
                     
@@ -406,9 +564,10 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         "user_email": email,
         "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= 50% confidence)",
         # ✅ Return GPS data so frontend pins disease at correct location
-        "gps_lat": lat if lat is not None else 7.30806,
-        "gps_lng": lng if lng is not None else 125.68417,
-        "gps_source": exif_gps.source if exif_gps else "none"
+        "gps_lat": lat,
+        "gps_lng": lng,
+        "gps_accuracy": gps_accuracy,
+        "gps_source": gps_source
     }
 
 
@@ -611,8 +770,60 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
     # Sort by timestamp (newest first)
     all_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
+    # ✅ Normalize records for frontend: extract lat/lng from gps_data
+    for record in all_records:
+        # Try to extract lat/lng from gps_data (handle both dict and JSON string)
+        if isinstance(record.get('gps_data'), dict):
+            # Extract from nested structure
+            record['lat'] = record['gps_data'].get('latitude')
+            record['lng'] = record['gps_data'].get('longitude')
+            record['gps_source'] = record['gps_data'].get('source', 'unknown')
+        elif isinstance(record.get('gps_data'), str):
+            # Parse JSON string if needed
+            try:
+                gps = json.loads(record['gps_data'])
+                record['lat'] = gps.get('latitude')
+                record['lng'] = gps.get('longitude')
+                record['gps_source'] = gps.get('source', 'unknown')
+            except:
+                pass
+        
+        # Also check for direct lat/lng fields (from some sources)
+        if 'gps_lat' in record:
+            record['lat'] = record.get('lat') or record['gps_lat']
+        if 'gps_lng' in record:
+            record['lng'] = record.get('lng') or record['gps_lng']
+        if 'gps_source' in record and not record.get('gps_source'):
+            record['gps_source'] = record['gps_source']
+        
+        # Ensure we have detections array in correct format
+        if not record.get('detections') and record.get('inference_results'):
+            if isinstance(record['inference_results'], str):
+                try:
+                    record['detections'] = json.loads(record['inference_results'])
+                except:
+                    record['detections'] = []
+            else:
+                record['detections'] = record['inference_results']
+        
+        # Ensure detections is a list
+        if not isinstance(record.get('detections'), list):
+            record['detections'] = []
+    
+    print(f"\n{'='*60}")
     print(f"\n{'='*60}")
     print(f"[OK] TOTAL RECORDS RETRIEVED: {len(all_records)}")
+    
+    # Log GPS data availability
+    gps_count = sum(1 for r in all_records if r.get('lat') or r.get('lng'))
+    print(f"[OK] Records with GPS coordinates: {gps_count}/{len(all_records)}")
+    
+    for idx, record in enumerate(all_records[:5]):  # Log first 5 records for debugging
+        lat = record.get('lat')
+        lng = record.get('lng')
+        gps_source = record.get('gps_source', 'none')
+        print(f"     Record {idx}: Type={record.get('type')}, GPS={lat is not None and lng is not None}, Source={gps_source}")
+    
     print(f"{'='*60}\n")
     
     return {
@@ -621,6 +832,122 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
         'records': all_records
     }
 
+
+# ─── Get User Detection Records (Public endpoint for frontend) ──────────────────
+@app.get("/records")
+async def get_records(user_id: str = None):
+    """Get detection records for a user (public endpoint, accepts user_id as query param)"""
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id query parameter is required"
+        )
+    
+    try:
+        all_records = []
+        
+        # Try local storage first (most reliable)
+        print(f"\n   [LOCAL] Checking local storage for user {user_id}...")
+        local_records = get_user_detections(user_id)
+        if local_records:
+            all_records.extend(local_records)
+            print(f"   [OK] Found {len(local_records)} records in local storage")
+        
+        # Try Realtime Database - get both uploads and drone_log
+        try:
+            print(f"\n   [RTDB] Checking Realtime Database (uploads) for user {user_id}...")
+            uploads_ref = db.reference(f'users/{user_id}/uploads')
+            uploads_data = uploads_ref.get()
+            
+            if uploads_data:
+                print(f"   [OK] Found {len(uploads_data)} upload records in RTDB")
+                for key, record in uploads_data.items():
+                    record['id'] = key
+                    record['type'] = 'upload'
+                    record['source'] = 'rtdb'
+                    all_records.append(record)
+        except Exception as rtdb_error:
+            print(f"   [WARN] RTDB Upload Error: {type(rtdb_error).__name__}")
+        
+        # Also check drone_log records
+        try:
+            print(f"\n   [RTDB] Checking Realtime Database (drone_log) for user {user_id}...")
+            drone_ref = db.reference(f'users/{user_id}/drone_log')
+            drone_data = drone_ref.get()
+            
+            if drone_data:
+                print(f"   [OK] Found {len(drone_data)} drone records in RTDB")
+                for key, record in drone_data.items():
+                    record['id'] = key
+                    record['type'] = 'drone'
+                    record['source'] = 'rtdb_drone'
+                    all_records.append(record)
+        except Exception as drone_error:
+            print(f"   [WARN] RTDB Drone Error: {type(drone_error).__name__}")
+        
+        # Try Firestore as last resort
+        if FIRESTORE_AVAILABLE and len(all_records) < 5:
+            try:
+                print(f"\n   [FIRESTORE] Checking Firestore for user {user_id}...")
+                docs = fs.collection('users').document(user_id).collection('detections').stream()
+                for doc in docs:
+                    record = doc.to_dict()
+                    record['id'] = doc.id
+                    record['type'] = 'upload'
+                    record['source'] = 'firestore'
+                    all_records.append(record)
+                
+                if all_records:
+                    print(f"   [OK] Found {len(all_records)} records in Firestore")
+            except Exception as firestore_error:
+                print(f"   [WARN] Firestore Error: {type(firestore_error).__name__}")
+        
+        # Sort by timestamp (newest first)
+        all_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        # ✅ Normalize records for frontend: extract lat/lng from gps_data
+        for record in all_records:
+            if isinstance(record.get('gps_data'), dict):
+                record['lat'] = record['gps_data'].get('latitude')
+                record['lng'] = record['gps_data'].get('longitude')
+                record['gps_source'] = record['gps_data'].get('source', 'unknown')
+            elif isinstance(record.get('gps_data'), str):
+                try:
+                    gps = json.loads(record['gps_data'])
+                    record['lat'] = gps.get('latitude')
+                    record['lng'] = gps.get('longitude')
+                    record['gps_source'] = gps.get('source', 'unknown')
+                except:
+                    pass
+            
+            if 'gps_lat' in record:
+                record['lat'] = record.get('lat') or record['gps_lat']
+            if 'gps_lng' in record:
+                record['lng'] = record.get('lng') or record['gps_lng']
+            
+            # Ensure we have detections array in correct format
+            if not record.get('detections') and record.get('inference_results'):
+                if isinstance(record['inference_results'], str):
+                    try:
+                        record['detections'] = json.loads(record['inference_results'])
+                    except:
+                        record['detections'] = []
+                else:
+                    record['detections'] = record['inference_results']
+            
+            if not isinstance(record.get('detections'), list):
+                record['detections'] = []
+        
+        print(f"\n   [OK] Total records for user {user_id}: {len(all_records)}")
+        
+        return all_records
+
+    except Exception as e:
+        print(f"   [ERROR] Error fetching records: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching records: {str(e)}"
+        )
 
 
 # ─── WebSocket Webcam Stream ──────────────────────────────────────────────────
@@ -818,7 +1145,8 @@ def login():
 @app.get("/favicon.ico")
 async def favicon():
     """Serve favicon endpoint"""
-    return {"status": "ok"}
+    # Return a 204 No Content response - browser will use the SVG data URI from HTML
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":
