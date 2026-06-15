@@ -44,7 +44,7 @@
       --sidebar-width: clamp(200px, 16vw, 320px);
     }
     html { scroll-behavior:smooth; font-size: clamp(14px, 2vw, 16px); }
-    body { font-family:'DM Sans',sans-serif; background:var(--cream); color:var(--text); min-height:100vh; display:flex; }
+    body { font-family:'DM Sans',sans-serif; background:var(--cream); color:var(--text); min-height:100vh; display:flex; overflow-x:hidden; width:100vw; }
 
     /* SIDEBAR NAVIGATION */
     .sidebar {
@@ -68,9 +68,9 @@
     .sidebar-nav a svg { width:clamp(1rem, 2.5vw, 1.4rem); height:clamp(1rem, 2.5vw, 1.4rem); }
 
     /* MAIN CONTENT WRAPPER */
-    .main-wrapper { margin-left:0; flex:1; display:flex; flex-direction:column; min-height:100vh; transition: margin-left 0.3s ease; background:linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(246,244,236,0.3) 100%); flex-grow:1; width:100%; }
+    .main-wrapper { margin-left:0; flex:1; display:flex; flex-direction:column; min-height:100vh; transition: margin-left 0.3s ease; background:linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(246,244,236,0.3) 100%); flex-grow:1; width:100%; overflow-x:hidden; }
     @media(min-width:1024px) {
-      .main-wrapper { margin-left:var(--sidebar-width); }
+      .main-wrapper { margin-left:var(--sidebar-width); width:calc(100% - var(--sidebar-width)); flex:none; }
     }
     .main-wrapper.sidebar-open { margin-left:var(--sidebar-width); }
     @media(max-width:768px) {
@@ -142,6 +142,9 @@
       gap:var(--spacing-lg);
       flex-wrap:wrap;
       width:100%;
+      box-sizing:border-box;
+      height:auto;
+      min-height:70px;
     }
     #menu-toggle { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; color:var(--deep); font-size:1.5rem; z-index:250; }
     #menu-toggle.show { display:block; }
@@ -196,14 +199,14 @@
     }
 
     /* PANELS */
-    .panels { margin:0 auto; padding:0 clamp(1rem, 2.5vw, 2rem); position:relative; z-index:1; background:transparent; width:100%; box-sizing:border-box; max-width:1400px; }\n    @media(min-width:1600px) {
-      .panels { padding:clamp(2rem, 3vw, 3rem) clamp(1.75rem, 3vw, 3rem); }
+    .panels { margin:0 auto; padding:var(--spacing-lg) clamp(1rem, 2.5vw, 2rem) 0; position:relative; z-index:1; background:transparent; width:100%; box-sizing:border-box; max-width:1400px; }\n    @media(min-width:1600px) {
+      .panels { padding:clamp(2rem, 3vw, 3rem) clamp(1.75rem, 3vw, 3rem) 0; }
     }
     @media(max-width:1024px) {
-      .panels { padding:clamp(1.25rem, 2.5vw, 2rem) clamp(1rem, 2vw, 1.5rem); }
+      .panels { padding:clamp(1.25rem, 2.5vw, 2rem) clamp(1rem, 2vw, 1.5rem) 0; }
     }
     @media(max-width:768px) {
-      .panels { padding:clamp(1rem, 2vw, 1.5rem) clamp(0.75rem, 1.5vw, 1rem); }
+      .panels { padding:clamp(1rem, 2vw, 1.5rem) clamp(0.75rem, 1.5vw, 1rem) 0; }
     }
 
     .dashboard-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:clamp(1rem, 2vw, 1.5rem); margin-bottom:clamp(1.5rem, 2.5vw, 2rem); width:100%; }
@@ -219,17 +222,17 @@
     .stat-box { background:linear-gradient(135deg, #ffffff 0%, #fffaf5 100%); border-radius:14px; padding:clamp(1.25rem, 2.5vw, 1.75rem); border:1.5px solid rgba(11,42,31,0.08); box-shadow:0 2px 8px rgba(11,42,31,0.06), inset 0 1px 0 rgba(255,255,255,0.8); min-height:clamp(100px, 12vh, 140px); display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; transition:all 0.3s ease; }
     .stat-box:hover { transform:translateY(-3px); box-shadow:0 6px 20px rgba(11,42,31,0.1), inset 0 1px 0 rgba(255,255,255,0.8); }
 
-    .panel { display:none; animation:fadeUp .35s ease both; background:var(--white); border-radius:12px; padding:clamp(1.5rem, 2.5vw, 2.25rem) clamp(0.5rem, 1vw, 1rem); margin:0 auto clamp(1rem, 2vw, 1.5rem); box-shadow:0 2px 8px rgba(11,42,31,0.08); width:100%; box-sizing:border-box; max-width:1400px; }
+    .panel { display:none; animation:fadeUp .35s ease both; background:var(--white); border-radius:12px; padding:clamp(1.5rem, 2.5vw, 2.25rem) clamp(0.5rem, 1vw, 1rem); margin:0 auto clamp(1rem, 2vw, 1.5rem); box-shadow:0 2px 8px rgba(11,42,31,0.08); width:100%; box-sizing:border-box; max-width:1400px; user-select:none; -webkit-user-select:none; -moz-user-select:none; }
     .panel.active { display:block; }
     .section-label { font-size:var(--text-xs); font-weight:700; letter-spacing:2.5px; text-transform:uppercase; color:var(--bright); margin-bottom:clamp(0.75rem, 1.5vw, 1rem); margin-top:clamp(1rem, 2vw, 1.5rem); padding-left:0.5rem; border-left:3px solid var(--bright); }
     .section-label:first-of-type { margin-top:0; }
 
     /* UPLOAD */
-    .upload-feed-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; margin-bottom:clamp(1rem, 2vw, 1.5rem); }
+    .upload-feed-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; margin-bottom:clamp(1rem, 2vw, 1.5rem); user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; }
     .upload-drop-inner {
       border:2px dashed rgba(11,42,31,0.18); border-radius:var(--r); background:var(--white);
       padding:clamp(2rem, 6vw, 3rem) var(--spacing-md); text-align:center; cursor:pointer; transition:all .22s ease; position:relative; overflow:hidden;
-      box-shadow:0 1px 3px rgba(11,42,31,0.05);
+      box-shadow:0 1px 3px rgba(11,42,31,0.05); user-select:none; -webkit-user-select:none; -moz-user-select:none;
     }
     .upload-drop-inner:hover,.upload-drop-inner.over { border-color:var(--bright); background:rgba(208,237,223,0.18); transform:translateY(-2px); box-shadow:var(--shm); }
     .upload-drop {
@@ -248,10 +251,14 @@
     .loverlay { display:none; position:absolute; inset:0; background:rgba(245,242,235,0.88); backdrop-filter:blur(4px); z-index:5; flex-direction:column; align-items:center; justify-content:center; gap:var(--spacing-md); }
     .loverlay.on { display:flex; }
     .spin { width:clamp(2rem, 6vw, 2.5rem); height:clamp(2rem, 6vw, 2.5rem); border:3px solid var(--pale); border-top-color:var(--bright); border-radius:50%; animation:spin .8s linear infinite; }
+    
+    /* ✅ Prevent dragging of UI elements */
+    .panel img, .panel svg { user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; pointer-events:auto; }
+    .panel * { -webkit-user-drag:none; }
     @keyframes spin { to{transform:rotate(360deg)} }
     .loverlay p { font-size:var(--text-base); color:var(--text2); font-weight:500; }
 
-    .result-grid { display:grid; grid-template-columns:1fr minmax(300px, 32%); gap:clamp(1rem, 2.5vw, 1.5rem); margin-top:clamp(1.5rem, 2.5vw, 2rem); align-items:start; }
+    .result-grid { display:grid; grid-template-columns:1fr minmax(300px, 32%); gap:clamp(1rem, 2.5vw, 1.5rem); margin-top:clamp(1.5rem, 2.5vw, 2rem); align-items:start; width:100%; box-sizing:border-box; }
     @media(max-width:1400px) {
       .result-grid { grid-template-columns:1fr minmax(270px, 30%); gap:clamp(1rem, 2vw, 1.25rem); }
     }
@@ -271,17 +278,17 @@
       box-shadow:var(--sh); 
       border:1px solid rgba(11,42,31,0.06); 
       height:fit-content; 
-      max-height:min(700px, 75vh);
+      max-height:min(700px, 50vh);
       width:100%;
       max-width:100%;
     }
     .img-card img { 
       width:100%; 
-      height:auto; 
+      height:100%; 
       display:block; 
       object-fit:contain;
       object-position:center; 
-      max-height:min(700px, 75vh);
+      max-height:min(700px, 50vh);
       max-width:100%;
     }
     .img-footer { padding:clamp(0.6rem, 2vw, 0.875rem) var(--spacing-sm); font-size:var(--text-xs); font-weight:500; color:var(--text3); letter-spacing:.5px; text-transform:uppercase; border-top:1px solid rgba(11,42,31,0.05); }
@@ -372,7 +379,7 @@
     .live-empty { color:var(--text3); font-size:var(--text-sm); padding:0.4rem 0; width:100%; text-align:center; }
 
     /* MAP */
-    .map-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; }
+    .map-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); overflow:hidden; user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; }
     .map-head { padding:var(--spacing-sm); display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(11,42,31,0.06); flex-wrap:wrap; gap:var(--spacing-sm); }
     .map-head h4 { font-size:var(--text-base); font-weight:600; color:var(--deep); }
     .map-actions { display:flex; gap:0.375rem; flex-wrap:wrap; }
@@ -1010,8 +1017,8 @@
           </div>
         </div>
         <div id="upload-drop" class="upload-drop-inner"
-             ondragover="event.preventDefault();this.classList.add('over')"
-             ondragleave="this.classList.remove('over')"
+             ondragover="event.preventDefault();event.stopPropagation();this.classList.add('over')"
+             ondragleave="event.stopPropagation();this.classList.remove('over')"
              ondrop="handleDrop(event)">
           <input type="file" id="fileInput" accept="image/*" onchange="detectImage(this.files[0])"/>
           <div class="loverlay" id="upload-loading"><div class="spin"></div><p>Analyzing leaf...</p></div>
@@ -1033,6 +1040,9 @@
             <div class="det-head"><h4>Detections</h4><span class="cbadge" id="count-badge">0 found</span></div>
             <div class="det-list" id="det-list"><div class="empty-state">No detections yet</div></div>
           </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:16px; justify-content:flex-end;">
+          <button class="btn btn-o" onclick="clearUploadResults()" style="padding:8px 16px;font-size:12px;">Clear</button>
         </div>
       </div>
       <div class="stats-row">
@@ -1068,10 +1078,18 @@
           </div>
         </div>
       </div>
-      <div class="events-card">
-        <div class="events-head"><h4>Detection Log</h4></div>
-        <div class="events-list" id="events-list">
-          <div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image with GPS enabled.</div>
+      <div style="display:flex;flex-direction:column;gap:var(--spacing-md);">
+        <div class="map-card">
+          <div class="map-head">
+            <h4>Overview Map</h4>
+          </div>
+          <div id="mini-map"></div>
+        </div>
+        <div class="events-card">
+          <div class="events-head"><h4>Detection Log</h4></div>
+          <div class="events-list" id="events-list">
+            <div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image with GPS enabled.</div>
+          </div>
         </div>
       </div>
     </div>

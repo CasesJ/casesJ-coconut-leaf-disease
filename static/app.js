@@ -332,19 +332,6 @@ window.addEventListener('load', () => {
     
     mainMap.setTerrain({ source: 'dem-src', exaggeration: 1.5 });
     
-    // Add sky layer for better 3D visualization
-    mainMap.addLayer({
-      id: 'sky',
-      type: 'sky',
-      paint: {
-        'sky-type': 'gradient',
-        'sky-gradient': ['interpolate', ['linear'], ['sky-radial-progress'],
-          0.8, '#87CEEB',
-          1, '#E0F6FF'
-        ]
-      }
-    });
-    
     // ✅ Precise bounding coordinates mapped exclusively around the inner tree block
     const farmBoundaryCoordinates = [
         [125.64055, 7.35295], // Top-Left corner of the tree grid
@@ -703,7 +690,10 @@ function flyTo(i){
 }
 function updateStats(){
   const total=log.length, dis=log.filter(d=>d.label!=='healthy').length, ok=total-dis;
-  ['ms-total','ms-dis','ms-ok'].forEach((id,i)=>document.getElementById(id).textContent=[total,dis,ok][i]);
+  ['ms-total','ms-dis','ms-ok'].forEach((id,i)=>{
+    const el=document.getElementById(id);
+    if(el) el.textContent=[total,dis,ok][i];
+  });
 }
 function clearPins(){
   mainMarkers.forEach(m=>{
@@ -718,9 +708,11 @@ function clearPins(){
   sessionStorage.removeItem('farmPinsCount');
   
   // Clear heatmap data
-  const diseaseSource = mainMap.getSource('disease-source');
-  if (diseaseSource) {
-    diseaseSource.setData({ type: 'FeatureCollection', features: [] });
+  if (mainMap && mainMap.getSource) {
+    const diseaseSource = mainMap.getSource('disease-source');
+    if (diseaseSource) {
+      diseaseSource.setData({ type: 'FeatureCollection', features: [] });
+    }
   }
   
   renderLog();updateStats();
@@ -756,7 +748,9 @@ function toggle3DView() {
 
 // ── Upload ──
 function handleDrop(e){
-  e.preventDefault();document.getElementById('upload-drop').classList.remove('over');
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById('upload-drop').classList.remove('over');
   const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))detectImage(f);else showToast('Please drop an image file.');
 }
 async function detectImage(file){
@@ -800,13 +794,25 @@ async function detectImage(file){
     // ✅ Pin detections to farm center with slight random spread within bounds
     data.detections.forEach(d=>addPin(gps_lat+(Math.random()-.5)*.0003,gps_lng+(Math.random()-.5)*.0003,d.class,d.confidence,'Upload'));
     document.getElementById('upload-loading').classList.remove('on');
+    // ✅ Clear drag-over state after successful upload
+    document.getElementById('upload-drop').classList.remove('over');
+    // ✅ Reset file input
+    document.getElementById('fileInput').value='';
   }).catch(err=>{
     showToast('Detection failed: '+err.message);
     document.getElementById('upload-loading').classList.remove('on');
+    // ✅ Clear drag-over state on error
+    document.getElementById('upload-drop').classList.remove('over');
+    // ✅ Restore toolbar visibility on error
+    document.querySelector('.feed-toolbar').style.display='';
+    document.getElementById('upload-drop').style.display='';
   });
 }
 function renderUpload(data){
   document.getElementById('result-img').src='data:image/jpeg;base64,'+data.annotated_image_base64;
+  // ✅ Hide upload toolbar and zone when showing results
+  document.querySelector('.feed-toolbar').style.display='none';
+  document.getElementById('upload-drop').style.display='none';
   document.getElementById('result-area').style.display='block';
   const n=data.detections.length;
   document.getElementById('count-badge').textContent=n+' found';
@@ -829,6 +835,21 @@ function renderUpload(data){
       fetchRecommendation(primary.class, primary.confidence);
     }
   }
+}
+
+// ✅ Clear upload results and restore upload UI
+function clearUploadResults(){
+  document.getElementById('result-area').style.display='none';
+  document.querySelector('.feed-toolbar').style.display='';
+  document.getElementById('upload-drop').style.display='';
+  document.getElementById('fileInput').value='';
+  document.getElementById('det-list').innerHTML='<div class="empty-state">No detections yet</div>';
+  document.getElementById('count-badge').textContent='0 found';
+  document.getElementById('s-total').textContent='0';
+  document.getElementById('s-conf').textContent='—';
+  document.getElementById('s-status').textContent='—';
+  document.getElementById('s-status').style.color='';
+  document.getElementById('recommendations-area').style.display='none';
 }
 
 async function fetchRecommendation(disease, confidence){
@@ -1339,4 +1360,33 @@ async function loadUserRecords() {
 // Initialize auth UI when page loads
 document.addEventListener('DOMContentLoaded', () => {
   console.log('Page loaded, initializing app');
+  
+  // ✅ Prevent drag events from affecting the map or other elements
+  document.addEventListener('dragover', (e) => {
+    const uploadDrop = document.getElementById('upload-drop');
+    // Only allow drag events on the upload drop zone
+    if (!uploadDrop || !uploadDrop.contains(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, false);
+  
+  document.addEventListener('drop', (e) => {
+    const uploadDrop = document.getElementById('upload-drop');
+    // Only allow drop events on the upload drop zone
+    if (!uploadDrop || !uploadDrop.contains(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, false);
+  
+  // ✅ Prevent dragging of UI elements
+  document.addEventListener('dragstart', (e) => {
+    // Prevent dragging of any elements inside panels except file input
+    const panel = e.target.closest('.panel');
+    if (panel && e.target.id !== 'fileInput') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, false);
 });
