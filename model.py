@@ -1,11 +1,24 @@
 import cv2
 import numpy as np
-from openvino import Core
 import os
 from pathlib import Path
 import pickle
 from datetime import datetime
 import json
+
+# Keep Ultralytics from touching the user's profile directory on Windows.
+_ultralytics_config_dir = Path(__file__).resolve().parent / ".ultralytics"
+_ultralytics_config_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("YOLO_CONFIG_DIR", str(_ultralytics_config_dir))
+
+try:
+    from ultralytics import YOLO
+    ULTRALYTICS_AVAILABLE = True
+except Exception:
+    YOLO = None
+    ULTRALYTICS_AVAILABLE = False
+
+from openvino import Core
 
 # --- NEW DATA MINING INTEGRATION CLASS ---
 class CoconutDiseaseRegressorEngine:
@@ -55,42 +68,62 @@ class CoconutDiseaseRegressorEngine:
 
 class CoconutDiseaseDetector:
     def __init__(self):
-        """Initialize OpenVINO detector with best.xml and best.bin model files"""
-        # Get the model path - navigate to best_openvino_model folder
+        """Initialize detector using weights.pt when available, with OpenVINO fallback."""
         current_dir = Path(__file__).parent
+        self.current_dir = current_dir
+        self.backend = "openvino"
+        self.active_model_path = None
+
+        # Default class names from the existing dataset
+        self.class_names = {
+            0: "Caterpillars",
+            1: "Cercospora",
+            2: "Drying of Leaflets",
+            3: "Healthy",
+            4: "Pestalotiopsis",
+            5: "bud root",
+        }
+
+        model_pt = current_dir / "weights.pt"
         model_xml = current_dir / "best_openvino_model" / "best.xml"
         model_bin = current_dir / "best_openvino_model" / "best.bin"
-        
-        # Verify model files exist
-        if not model_xml.exists() or not model_bin.exists():
-            raise FileNotFoundError(f"Model files not found. XML: {model_xml}, BIN: {model_bin}")
-        
-        print(f"[OK] Loading OpenVINO model from {model_xml}")
-        
-        # Initialize OpenVINO
-        self.core = Core()
-        self.compiled_model = self.core.compile_model(str(model_xml), "CPU")
-        self.infer_request = self.compiled_model.create_infer_request()
-        
-        # Get model input/output info
-        self.input_layer = self.compiled_model.input(0)
-        self.output_layer = self.compiled_model.output(0)
-        
-        self.input_shape = self.input_layer.shape
-        self.model_height = int(self.input_shape[2])
-        self.model_width = int(self.input_shape[3])
-        
-        print(f"[OK] Model loaded successfully. Input shape: {self.input_shape}")
-        
-        # Class names from metadata (YOLO11n model classes)
-        self.class_names = {
-            0: 'Caterpillars',
-            1: 'Cercospora',
-            2: 'Drying of Leaflets',
-            3: 'Healthy',
-            4: 'Pestalotiopsis',
-            5: 'bud root'
-        }
+
+        if model_pt.exists() and ULTRALYTICS_AVAILABLE:
+            try:
+                print(f"[OK] Loading Ultralytics model from {model_pt}")
+                self.yolo_model = YOLO(str(model_pt))
+                self.backend = "ultralytics"
+                self.active_model_path = model_pt
+                self.model_height = 640
+                self.model_width = 640
+                self.class_names = self._normalize_class_names(getattr(self.yolo_model, "names", self.class_names))
+                print("[OK] Ultralytics model loaded successfully")
+            except Exception as e:
+                print(f"[WARNING] Could not load weights.pt, falling back to OpenVINO: {e}")
+                self.yolo_model = None
+
+        if self.backend != "ultralytics":
+            # Verify model files exist
+            if not model_xml.exists() or not model_bin.exists():
+                raise FileNotFoundError(f"Model files not found. XML: {model_xml}, BIN: {model_bin}")
+
+            print(f"[OK] Loading OpenVINO model from {model_xml}")
+
+            # Initialize OpenVINO
+            self.core = Core()
+            self.compiled_model = self.core.compile_model(str(model_xml), "CPU")
+            self.infer_request = self.compiled_model.create_infer_request()
+
+            # Get model input/output info
+            self.input_layer = self.compiled_model.input(0)
+            self.output_layer = self.compiled_model.output(0)
+
+            self.input_shape = self.input_layer.shape
+            self.model_height = int(self.input_shape[2])
+            self.model_width = int(self.input_shape[3])
+            self.active_model_path = model_xml
+
+            print(f"[OK] Model loaded successfully. Input shape: {self.input_shape}")
         
         # ──── Instantiate Data Mining Regressor Engine ────
         self.regressor_engine = CoconutDiseaseRegressorEngine()
@@ -167,6 +200,20 @@ class CoconutDiseaseDetector:
             9: "Apply mulch (10cm) around base to retain soil moisture"
         }
 
+    def _normalize_class_names(self, names) -> dict[int, str]:
+        """Convert Ultralytics class metadata into a simple integer->label map."""
+        if isinstance(names, dict):
+            normalized = {}
+            for key, value in names.items():
+                try:
+                    normalized[int(key)] = str(value)
+                except Exception:
+                    continue
+            return normalized or self.class_names
+        if isinstance(names, (list, tuple)):
+            return {idx: str(name) for idx, name in enumerate(names)}
+        return self.class_names
+
     def _non_max_suppression(self, detections, nms_threshold=0.45):
         """
         Apply Non-Maximum Suppression to remove overlapping detections
@@ -218,7 +265,7 @@ class CoconutDiseaseDetector:
 
     def predict(self, image: np.ndarray, conf: float = 50) -> dict:
         """
-        Real-time inference using OpenVINO model
+        Real-time inference using the active detector backend
         
         Args:
             image: Input image as numpy array (BGR format)
@@ -228,160 +275,16 @@ class CoconutDiseaseDetector:
             dict with detections and annotated image
         """
         try:
-            print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
-            
-            # Normalize confidence to 0-1 range if needed
-            confidence_threshold = conf / 100.0 if conf > 1 else conf
-            
-            # Store original image dimensions
-            original_height, original_width = image.shape[:2]
-            image_total_area = original_width * original_height  # For disease severity calculation
-            
-            # Preprocess image for model input
-            # YOLO26s expects 640x640 RGB images normalized to 0-1
-            resized_image = cv2.resize(image, (self.model_width, self.model_height))
-            resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
-            
-            # Normalize to 0-1 range
-            input_data = resized_image.astype(np.float32) / 255.0
-            
-            # Add batch dimension (1, 3, 640, 640)
-            input_data = np.transpose(input_data, (2, 0, 1))
-            input_data = np.expand_dims(input_data, 0)
-            
-            print(f"[OK] Input prepared - shape: {input_data.shape}")
-            
-            # Run inference
-            self.infer_request.infer([input_data])
-            output = self.infer_request.get_output_tensor(0).data
-            
-            print(f"[MODEL] Output shape: {output.shape}")
-            
-            # Parse YOLO26 output format: [1, 300, 6]
-            # Each detection: [x1, y1, x2, y2, confidence, class_id]
-            # Output is already in pixel coordinates (0-640) and post-processed
-            
-            raw_detections = []  # Collect all detections first
-            total_disease_bbox_area = 0  # For data mining analysis
-            primary_class_id = 3  # Default fallback to healthy
-            
-            # Extract predictions from output shape [1, 300, 6]
-            if len(output.shape) == 3:
-                predictions = output[0]  # [300, 6]
-            else:
-                predictions = output  # Already [300, 6]
-            
-            print(f"[DATA] Predictions shape: {predictions.shape}")
-            
-            # First pass: Collect all predictions above confidence threshold
-            if predictions.shape[0] > 0:
-                for pred in predictions:
-                    try:
-                        # Extract bbox coordinates and confidence
-                        # Format: [x1, y1, x2, y2, confidence, class_id]
-                        x1_norm, y1_norm, x2_norm, y2_norm = pred[:4]
-                        class_conf = pred[4]
-                        class_id = int(pred[5])
-                        
-                        # Filter by confidence threshold
-                        if class_conf < confidence_threshold:
-                            continue
-                        
-                        # Coordinates are in normalized 0-640 pixel space
-                        # Scale to actual image dimensions
-                        scale_x = original_width / self.model_width
-                        scale_y = original_height / self.model_height
-                        
-                        x1 = int(max(0, x1_norm * scale_x))
-                        y1 = int(max(0, y1_norm * scale_y))
-                        x2 = int(min(original_width, x2_norm * scale_x))
-                        y2 = int(min(original_height, y2_norm * scale_y))
-                        
-                        # Skip invalid boxes or very small detections
-                        if x2 <= x1 or y2 <= y1:
-                            continue
-                        
-                        # Data Mining Prep: Accumulate defect areas if leaf isn't completely healthy
-                        if class_id != 3:
-                            bbox_area = (x2 - x1) * (y2 - y1)
-                            total_disease_bbox_area += bbox_area
-                            primary_class_id = class_id  # Track the dominant issue
-                        
-                        # Get class name
-                        class_name = self.class_names.get(class_id, 'unknown')
-                        
-                        raw_detections.append({
-                            "class": class_name,
-                            "class_id": class_id,
-                            "confidence": float(class_conf),
-                            "bbox": [x1, y1, x2, y2]
-                        })
-                    except Exception as e:
-                        continue
-            
-            print(f"[NMS] Found {len(raw_detections)} raw detections before NMS")
-            
-            # Second pass: Apply NMS to remove overlapping boxes
-            detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
-            
-            print(f"[FILTER] After NMS: {len(detections)} detections")
-            
-            # Draw detections on image
-            for det in detections:
-                x1, y1, x2, y2 = det['bbox']
-                class_name = det['class']
-                confidence = det['confidence']
-                
-                print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
-                
-                # Draw bounding box (Green for Healthy, Red for diseases)
-                color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
-                cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
-                
-                # Draw text with background
-                text = f"{class_name} {confidence:.2%}"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.7
-                thickness = 2
-                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-                
-                text_x = x1
-                text_y = max(30, y1 - 10)
-                cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 6), 
-                            (text_x + text_size[0] + 3, text_y + 3), color, -1)
-                cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
-            
-            # Format output detections
-            output_detections = [{
-                "class": d['class'],
-                "confidence": round(d['confidence'], 3),
-                "bbox": d['bbox']
-            } for d in detections]
-            
-            # --- EXECUTE THE 3 NEW REGRESSION ALGORITHMS ---
-            # Calculate what percentage of the image layout is structurally impaired
-            infection_percentage = (total_disease_bbox_area / image_total_area) * 100
-            data_mining_forecasts = self.regressor_engine.calculate_yield_impact(primary_class_id, infection_percentage)
-            
-            print(f"[OK] Successfully processed with {len(output_detections)} final detections")
-            print(f"[DATA MINING] Leaf severity: {infection_percentage:.2f}% | Best Model: {data_mining_forecasts['Best_Performing_Technique']}")
-            
-            return {
-                "detections": output_detections, 
-                "image": image,
-                "data_mining_analysis": {
-                    "leaf_severity_pct": round(infection_percentage, 2),
-                    "yield_loss_prediction_pct": data_mining_forecasts["Random_Forest_Regressor_Loss"],
-                    "model_used": "Random Forest Regressor"
-                }
-            }
-            
+            print(f"[PREDICT] Starting {self.backend} prediction with confidence threshold: {conf}")
+            if self.backend == "ultralytics":
+                return self._predict_with_ultralytics(image, conf)
+            return self._predict_with_openvino(image, conf)
         except Exception as e:
             print(f"[ERROR] Prediction error: {e}")
             import traceback
             traceback.print_exc()
             return {
-                "detections": [], 
+                "detections": [],
                 "image": image,
                 "data_mining_analysis": {
                     "leaf_severity_pct": 0.0,
@@ -389,6 +292,254 @@ class CoconutDiseaseDetector:
                     "model_used": "Error - Analysis unavailable"
                 }
             }
+
+    def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50) -> dict:
+        """Run inference directly on weights.pt using Ultralytics."""
+        confidence_threshold = conf / 100.0 if conf > 1 else conf
+        original_height, original_width = image.shape[:2]
+        image_total_area = original_width * original_height
+        annotated_image = image.copy()
+
+        results = self.yolo_model.predict(source=image, imgsz=640, conf=confidence_threshold, verbose=False)
+        result = results[0] if results else None
+
+        raw_detections = []
+        total_disease_bbox_area = 0
+        primary_class_id = 3
+
+        if result is not None and getattr(result, "boxes", None) is not None:
+            xyxy = result.boxes.xyxy.cpu().numpy() if len(result.boxes) else np.empty((0, 4))
+            confs = result.boxes.conf.cpu().numpy() if len(result.boxes) else np.empty((0,))
+            clss = result.boxes.cls.cpu().numpy() if len(result.boxes) else np.empty((0,))
+
+            for box, class_conf, class_id in zip(xyxy, confs, clss):
+                try:
+                    class_id = int(class_id)
+                    class_conf = float(class_conf)
+                    if class_conf < confidence_threshold:
+                        continue
+
+                    x1, y1, x2, y2 = [int(max(0, value)) for value in box]
+                    x2 = min(original_width, x2)
+                    y2 = min(original_height, y2)
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
+                    if class_id != 3:
+                        total_disease_bbox_area += (x2 - x1) * (y2 - y1)
+                        primary_class_id = class_id
+
+                    class_name = self.class_names.get(class_id, "unknown")
+                    raw_detections.append({
+                        "class": class_name,
+                        "class_id": class_id,
+                        "confidence": class_conf,
+                        "bbox": [x1, y1, x2, y2]
+                    })
+                except Exception:
+                    continue
+
+        print(f"[NMS] Found {len(raw_detections)} raw detections before NMS")
+        detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
+        print(f"[FILTER] After NMS: {len(detections)} detections")
+
+        for det in detections:
+            x1, y1, x2, y2 = det['bbox']
+            class_name = det['class']
+            confidence = det['confidence']
+
+            print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
+
+            color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 3)
+
+            text = f"{class_name} {confidence:.2%}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.7
+            thickness = 2
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+
+            text_x = x1
+            text_y = max(30, y1 - 10)
+            cv2.rectangle(
+                annotated_image,
+                (text_x - 3, text_y - text_size[1] - 6),
+                (text_x + text_size[0] + 3, text_y + 3),
+                color,
+                -1
+            )
+            cv2.putText(annotated_image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
+        output_detections = [{
+            "class": d['class'],
+            "confidence": round(d['confidence'], 3),
+            "bbox": d['bbox']
+        } for d in detections]
+
+        infection_percentage = (total_disease_bbox_area / image_total_area) * 100
+        data_mining_forecasts = self.regressor_engine.calculate_yield_impact(primary_class_id, infection_percentage)
+
+        print(f"[OK] Successfully processed with {len(output_detections)} final detections")
+        print(f"[DATA MINING] Leaf severity: {infection_percentage:.2f}% | Best Model: {data_mining_forecasts['Best_Performing_Technique']}")
+
+        return {
+            "detections": output_detections,
+            "image": annotated_image,
+            "data_mining_analysis": {
+                "leaf_severity_pct": round(infection_percentage, 2),
+                "yield_loss_prediction_pct": data_mining_forecasts["Random_Forest_Regressor_Loss"],
+                "model_used": "Random Forest Regressor"
+            }
+        }
+
+    def _predict_with_openvino(self, image: np.ndarray, conf: float = 50) -> dict:
+        """Run inference using the OpenVINO export."""
+        print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
+        # Normalize confidence to 0-1 range if needed
+        confidence_threshold = conf / 100.0 if conf > 1 else conf
+
+        # Store original image dimensions
+        original_height, original_width = image.shape[:2]
+        image_total_area = original_width * original_height  # For disease severity calculation
+
+        # Preprocess image for model input
+        # YOLO26s expects 640x640 RGB images normalized to 0-1
+        resized_image = cv2.resize(image, (self.model_width, self.model_height))
+        resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+
+        # Normalize to 0-1 range
+        input_data = resized_image.astype(np.float32) / 255.0
+
+        # Add batch dimension (1, 3, 640, 640)
+        input_data = np.transpose(input_data, (2, 0, 1))
+        input_data = np.expand_dims(input_data, 0)
+
+        print(f"[OK] Input prepared - shape: {input_data.shape}")
+
+        # Run inference
+        self.infer_request.infer([input_data])
+        output = self.infer_request.get_output_tensor(0).data
+
+        print(f"[MODEL] Output shape: {output.shape}")
+
+        # Parse YOLO26 output format: [1, 300, 6]
+        # Each detection: [x1, y1, x2, y2, confidence, class_id]
+        # Output is already in pixel coordinates (0-640) and post-processed
+
+        raw_detections = []  # Collect all detections first
+        total_disease_bbox_area = 0  # For data mining analysis
+        primary_class_id = 3  # Default fallback to healthy
+
+        # Extract predictions from output shape [1, 300, 6]
+        if len(output.shape) == 3:
+            predictions = output[0]  # [300, 6]
+        else:
+            predictions = output  # Already [300, 6]
+
+        print(f"[DATA] Predictions shape: {predictions.shape}")
+
+        # First pass: Collect all predictions above confidence threshold
+        if predictions.shape[0] > 0:
+            for pred in predictions:
+                try:
+                    # Extract bbox coordinates and confidence
+                    # Format: [x1, y1, x2, y2, confidence, class_id]
+                    x1_norm, y1_norm, x2_norm, y2_norm = pred[:4]
+                    class_conf = pred[4]
+                    class_id = int(pred[5])
+
+                    # Filter by confidence threshold
+                    if class_conf < confidence_threshold:
+                        continue
+
+                    # Coordinates are in normalized 0-640 pixel space
+                    # Scale to actual image dimensions
+                    scale_x = original_width / self.model_width
+                    scale_y = original_height / self.model_height
+
+                    x1 = int(max(0, x1_norm * scale_x))
+                    y1 = int(max(0, y1_norm * scale_y))
+                    x2 = int(min(original_width, x2_norm * scale_x))
+                    y2 = int(min(original_height, y2_norm * scale_y))
+
+                    # Skip invalid boxes or very small detections
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
+                    # Data Mining Prep: Accumulate defect areas if leaf isn't completely healthy
+                    if class_id != 3:
+                        bbox_area = (x2 - x1) * (y2 - y1)
+                        total_disease_bbox_area += bbox_area
+                        primary_class_id = class_id  # Track the dominant issue
+
+                    # Get class name
+                    class_name = self.class_names.get(class_id, 'unknown')
+
+                    raw_detections.append({
+                        "class": class_name,
+                        "class_id": class_id,
+                        "confidence": float(class_conf),
+                        "bbox": [x1, y1, x2, y2]
+                    })
+                except Exception:
+                    continue
+
+        print(f"[NMS] Found {len(raw_detections)} raw detections before NMS")
+
+        # Second pass: Apply NMS to remove overlapping boxes
+        detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
+
+        print(f"[FILTER] After NMS: {len(detections)} detections")
+
+        # Draw detections on image
+        for det in detections:
+            x1, y1, x2, y2 = det['bbox']
+            class_name = det['class']
+            confidence = det['confidence']
+
+            print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
+
+            # Draw bounding box (Green for Healthy, Red for diseases)
+            color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
+
+            # Draw text with background
+            text = f"{class_name} {confidence:.2%}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.7
+            thickness = 2
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+
+            text_x = x1
+            text_y = max(30, y1 - 10)
+            cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 6),
+                          (text_x + text_size[0] + 3, text_y + 3), color, -1)
+            cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
+        # Format output detections
+        output_detections = [{
+            "class": d['class'],
+            "confidence": round(d['confidence'], 3),
+            "bbox": d['bbox']
+        } for d in detections]
+
+        # --- EXECUTE THE 3 NEW REGRESSION ALGORITHMS ---
+        # Calculate what percentage of the image layout is structurally impaired
+        infection_percentage = (total_disease_bbox_area / image_total_area) * 100
+        data_mining_forecasts = self.regressor_engine.calculate_yield_impact(primary_class_id, infection_percentage)
+
+        print(f"[OK] Successfully processed with {len(output_detections)} final detections")
+        print(f"[DATA MINING] Leaf severity: {infection_percentage:.2f}% | Best Model: {data_mining_forecasts['Best_Performing_Technique']}")
+
+        return {
+            "detections": output_detections,
+            "image": image,
+            "data_mining_analysis": {
+                "leaf_severity_pct": round(infection_percentage, 2),
+                "yield_loss_prediction_pct": data_mining_forecasts["Random_Forest_Regressor_Loss"],
+                "model_used": "Random Forest Regressor"
+            }
+        }
 
     def get_fertilizer_recommendation(self, disease_name: str, confidence: float, gps_data: dict = None, user_location: dict = None) -> dict:
         """

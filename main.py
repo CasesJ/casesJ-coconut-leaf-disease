@@ -8,13 +8,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+from datetime import datetime, timezone
 import asyncio
 import threading
 import time
 from collections import deque
 import json
+import hashlib
 from pathlib import Path
 
 # Configure logging
@@ -48,8 +49,72 @@ from io import StringIO
 from fastapi.responses import StreamingResponse
 from collections import defaultdict
 
+UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.20
+UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.20
+
+
+def _build_record_signature(record: dict) -> str:
+    """Create a stable signature so the same upload is not counted twice across storage backends."""
+    try:
+        # ✅ FIXED: Handle both 'detections' and 'inference_results' field names
+        detections = record.get('detections') or record.get('inference_results') or []
+        if isinstance(detections, str):
+            try:
+                detections = json.loads(detections)
+            except:
+                detections = []
+        if not isinstance(detections, list):
+            detections = []
+        normalized_detections = []
+        for detection in detections:
+            if isinstance(detection, dict):
+                normalized_detections.append({
+                    'class': str(detection.get('class', '')).lower(),
+                    'confidence': round(float(detection.get('confidence', 0) or 0), 4)
+                })
+        normalized_detections.sort(key=lambda item: (item['class'], item['confidence']))
+
+        gps_data = record.get('gps_data') or {}
+        if isinstance(gps_data, str):
+            try:
+                gps_data = json.loads(gps_data)
+            except:
+                gps_data = {}
+        if isinstance(gps_data, dict):
+            lat = gps_data.get('latitude')
+            lng = gps_data.get('longitude')
+        else:
+            lat = record.get('lat')
+            lng = record.get('lng')
+
+        signature_payload = {
+            'user_id': str(record.get('user_id') or ''),
+            'filename': str(record.get('filename') or record.get('image_path') or ''),  # ✅ Check both filename and image_path
+            'lat': round(float(lat), 6) if lat is not None else None,
+            'lng': round(float(lng), 6) if lng is not None else None,
+            'detections': normalized_detections,
+            'source': str(record.get('source') or 'upload')
+        }
+        payload = json.dumps(signature_payload, sort_keys=True, separators=(',', ':'))
+        return hashlib.md5(payload.encode('utf-8')).hexdigest()
+    except Exception:
+        return json.dumps(record, sort_keys=True, default=str)
+
+
+def deduplicate_records(records: list[dict]) -> list[dict]:
+    """Remove duplicate upload records that appear in multiple storage backends."""
+    seen = set()
+    deduped = []
+    for record in records or []:
+        signature = _build_record_signature(record)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(record)
+    return deduped
+
 # ── Local Storage Compatibility Wrappers ──
-def save_detection(user_id: str, email: str, inference_results: dict, gps_data: dict = None) -> bool:
+def save_detection(user_id: str, email: str, inference_results: dict, gps_data: dict = None, filename: str = None) -> bool:
     """Save detection to local storage - compatibility wrapper"""
     try:
         storage = get_local_storage()
@@ -58,7 +123,8 @@ def save_detection(user_id: str, email: str, inference_results: dict, gps_data: 
             email=email,
             inference_results=inference_results,
             gps_data=gps_data,
-            timestamp=datetime.utcnow().isoformat()
+            image_path=filename or "",  # ✅ Store filename for deduplication matching
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
         storage.save_detection(record)
         return True
@@ -93,14 +159,14 @@ class RecommendationRequest(BaseModel):
     disease: str
     confidence: float
     
-    class Config:
-        # Provide better error messages
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "disease": "Cercospora",
                 "confidence": 0.95
             }
         }
+    )
 
 
 # ─── Lifecycle Management ──────────────────────────────────────────────────────
@@ -156,6 +222,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def prevent_frontend_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path in {"/", "/static/app.js"}:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -366,7 +443,7 @@ async def get_recommendations(request: RecommendationRequest, lat: float = None,
 @app.post("/detect/image")
 async def detect_image(request: Request, file: UploadFile = File(...), lat: float = Form(None), lng: float = Form(None), accuracy: float = Form(None)):
     """
-    Detect disease in uploaded image (shows all detections, saves if confidence >= 50%)
+    Detect disease in uploaded image (shows reviewable detections, saves if confidence >= configured upload threshold)
     
     POST-FLIGHT APPROACH:
     - If image contains EXIF GPS data, extracts it automatically
@@ -455,13 +532,14 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     np_arr = np.frombuffer(contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
 
-    result = detector.predict(image)
+    result = detector.predict(image, conf=UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
     all_detections = result["detections"]
     print(f"[DETECT] Total Detections: {len(all_detections)}")
     
-    # Filter: Only SAVE detections with >= 50% confidence to Firebase
-    high_confidence_detections = [d for d in all_detections if d["confidence"] >= 0.50]
-    print(f"[FILTER] High Confidence (>=50%): {len(high_confidence_detections)}")
+    # Save reviewable upload detections. The frontend still shows the exact confidence
+    # so lower-confidence leaf diseases are not silently hidden from the farmer.
+    high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
+    print(f"[FILTER] Reviewable Upload Detections (>={UPLOAD_RECORD_CONFIDENCE_THRESHOLD:.0%}): {len(high_confidence_detections)}")
 
     # FAST JPEG encoding (70% quality = 3x faster)
     _, buffer = imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -503,7 +581,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
             # Also save to local storage in online mode (hybrid approach)
             if is_offline:
                 print(f"   [OFFLINE] Saving to local storage only...")
-                if save_detection(user_id, email, high_confidence_detections, gps_data):
+                if save_detection(user_id, email, high_confidence_detections, gps_data, file.filename):
                     print(f"[OK] SUCCESS: Saved to local storage (offline mode)")
                     saved = True
             else:
@@ -517,7 +595,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                     
                     # Also save to local storage (hybrid)
                     try:
-                        save_detection(user_id, email, high_confidence_detections, gps_data)
+                        save_detection(user_id, email, high_confidence_detections, gps_data, file.filename)
                     except:
                         pass
                     
@@ -534,7 +612,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                             
                             # Also save to local storage (hybrid)
                             try:
-                                save_detection(user_id, email, high_confidence_detections, gps_data)
+                                save_detection(user_id, email, high_confidence_detections, gps_data, file.filename)
                             except:
                                 pass
                             
@@ -545,14 +623,14 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                     # Final fallback: Local JSON storage
                     if not saved:
                         print(f"   [LOCAL] Using local storage (records persist locally)...")
-                        if save_detection(user_id, email, high_confidence_detections, gps_data):
+                        if save_detection(user_id, email, high_confidence_detections, gps_data, file.filename):
                             print(f"[OK] SUCCESS: Saved to local storage")
                             saved = True
                     
         except Exception as firebase_error:
             print(f"[ERROR] ERROR: {type(firebase_error).__name__}: {firebase_error}")
     else:
-        print(f"[WARN] No high-confidence detections to save (all < 50%)")
+        print(f"[WARN] No reviewable upload detections to save (all < {UPLOAD_RECORD_CONFIDENCE_THRESHOLD:.0%})")
     
     print(f"{'='*60}\n")
 
@@ -562,7 +640,9 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         "total_detected": len(all_detections),
         "annotated_image_base64": encoded,
         "user_email": email,
-        "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= 50% confidence)",
+        "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= {UPLOAD_RECORD_CONFIDENCE_THRESHOLD:.0%} confidence)",
+        "display_confidence_threshold": UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
+        "record_confidence_threshold": UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
         # ✅ Return GPS data so frontend pins disease at correct location
         "gps_lat": lat,
         "gps_lng": lng,
@@ -725,7 +805,9 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
             for key, record in uploads_data.items():
                 record['id'] = key
                 record['type'] = 'upload'
-                record['source'] = 'rtdb'
+                if 'source' not in record:
+                    record['source'] = 'upload'
+                record['storage_backend'] = 'rtdb_uploads'
                 all_records.append(record)
         else:
             print(f"   [INFO] No upload records in RTDB")
@@ -743,7 +825,9 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
             for key, record in drone_data.items():
                 record['id'] = key
                 record['type'] = 'drone'
-                record['source'] = 'rtdb_drone'
+                if 'source' not in record:
+                    record['source'] = 'drone'
+                record['storage_backend'] = 'rtdb_drone_log'
                 all_records.append(record)
         else:
             print(f"   [INFO] No drone records in RTDB")
@@ -759,16 +843,21 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
                 record = doc.to_dict()
                 record['id'] = doc.id
                 record['type'] = 'upload'
-                record['source'] = 'firestore'
+                if 'source' not in record:
+                    record['source'] = 'upload'
+                record['storage_backend'] = 'firestore'
                 all_records.append(record)
             
             if all_records:
                 print(f"   [OK] Found {len(all_records)} records in Firestore")
         except Exception as firestore_error:
             print(f"   [WARN] Firestore Error: {type(firestore_error).__name__}")
+
+    for record in all_records:
+        if not record.get('filename') and record.get('image_path'):
+            record['filename'] = record['image_path']
     
     # Sort by timestamp (newest first)
-    all_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
     # ✅ Normalize records for frontend: extract lat/lng from gps_data
     for record in all_records:
@@ -810,6 +899,13 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
         if not isinstance(record.get('detections'), list):
             record['detections'] = []
     
+    before_dedupe = len(all_records)
+    all_records = deduplicate_records(all_records)
+    if len(all_records) != before_dedupe:
+        print(f"   [OK] Removed {before_dedupe - len(all_records)} duplicate record(s)")
+
+    all_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+
     print(f"\n{'='*60}")
     print(f"\n{'='*60}")
     print(f"[OK] TOTAL RECORDS RETRIEVED: {len(all_records)}")
@@ -863,8 +959,11 @@ async def get_records(user_id: str = None):
                 print(f"   [OK] Found {len(uploads_data)} upload records in RTDB")
                 for key, record in uploads_data.items():
                     record['id'] = key
-                    record['type'] = 'upload'
-                    record['source'] = 'rtdb'
+                    # ✅ FIXED: Preserve original 'source' field for deduplication
+                    # Use 'storage_backend' for tracking which backend it came from
+                    if 'source' not in record:
+                        record['source'] = 'upload'  # Default source for uploads
+                    record['storage_backend'] = 'rtdb_uploads'
                     all_records.append(record)
         except Exception as rtdb_error:
             print(f"   [WARN] RTDB Upload Error: {type(rtdb_error).__name__}")
@@ -879,8 +978,10 @@ async def get_records(user_id: str = None):
                 print(f"   [OK] Found {len(drone_data)} drone records in RTDB")
                 for key, record in drone_data.items():
                     record['id'] = key
-                    record['type'] = 'drone'
-                    record['source'] = 'rtdb_drone'
+                    # ✅ FIXED: Preserve original 'source' field for deduplication
+                    if 'source' not in record:
+                        record['source'] = 'drone'  # Default source for drone records
+                    record['storage_backend'] = 'rtdb_drone_log'
                     all_records.append(record)
         except Exception as drone_error:
             print(f"   [WARN] RTDB Drone Error: {type(drone_error).__name__}")
@@ -893,8 +994,10 @@ async def get_records(user_id: str = None):
                 for doc in docs:
                     record = doc.to_dict()
                     record['id'] = doc.id
-                    record['type'] = 'upload'
-                    record['source'] = 'firestore'
+                    # ✅ FIXED: Preserve original 'source' field for deduplication
+                    if 'source' not in record:
+                        record['source'] = 'upload'  # Default source for firestore records
+                    record['storage_backend'] = 'firestore'
                     all_records.append(record)
                 
                 if all_records:
@@ -902,11 +1005,33 @@ async def get_records(user_id: str = None):
             except Exception as firestore_error:
                 print(f"   [WARN] Firestore Error: {type(firestore_error).__name__}")
         
+        # ✅ NORMALIZE all records to have consistent 'detections' field BEFORE deduplication
+        for record in all_records:
+            # Convert inference_results to detections if needed
+            if not record.get('detections') and record.get('inference_results'):
+                inf_results = record['inference_results']
+                if isinstance(inf_results, str):
+                    try:
+                        record['detections'] = json.loads(inf_results)
+                    except:
+                        record['detections'] = []
+                else:
+                    record['detections'] = inf_results
+            
+            if not isinstance(record.get('detections'), list):
+                record['detections'] = []
+        
+        all_records = deduplicate_records(all_records)
+
         # Sort by timestamp (newest first)
         all_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         
         # ✅ Normalize records for frontend: extract lat/lng from gps_data
         for record in all_records:
+            # Normalize filename from image_path if needed
+            if not record.get('filename') and record.get('image_path'):
+                record['filename'] = record['image_path']
+            
             if isinstance(record.get('gps_data'), dict):
                 record['lat'] = record['gps_data'].get('latitude')
                 record['lng'] = record['gps_data'].get('longitude')

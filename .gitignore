@@ -25,6 +25,8 @@ ENV/
 weights.pt
 *.bin
 *.onnx
+.ultralytics/
+Ultralytics/
 
 # IDE and OS
 .vscode/

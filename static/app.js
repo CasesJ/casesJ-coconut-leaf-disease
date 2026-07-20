@@ -76,7 +76,8 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   // Disable button during submission
   btn.disabled = true;
   spinner.classList.add('active');
-  document.getElementById('error-message').innerHTML = '';
+  const errorMsg = document.getElementById('error-message');
+  if (errorMsg) errorMsg.innerHTML = '';
   
   try {
     console.log('Auth attempt:', authMode, email);
@@ -163,10 +164,16 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
 };
 
 window.updateUIOnLogin = function updateUIOnLogin(user) {
-  document.getElementById('login-btn').style.display = 'none';
-  document.getElementById('user-badge').style.display = 'flex';
-  document.getElementById('user-email').textContent = user.email;
-  document.getElementById('current-user-email').innerHTML = '<strong>User:</strong> ' + user.email;
+  const loginBtn = document.getElementById('login-btn');
+  const userBadge = document.getElementById('user-badge');
+  const userEmail = document.getElementById('user-email');
+  const currentUserEmail = document.getElementById('current-user-email');
+  
+  if (loginBtn) loginBtn.style.display = 'none';
+  if (userBadge) userBadge.style.display = 'flex';
+  if (userEmail) userEmail.textContent = user.email;
+  if (currentUserEmail) currentUserEmail.innerHTML = '<strong>User:</strong> ' + user.email;
+  
   // ✅ Load saved map pins from Firebase when user logs in
   loadSavedMapPins(user.uid);
   // ✅ Load dashboard stats
@@ -176,8 +183,10 @@ window.updateUIOnLogin = function updateUIOnLogin(user) {
 };
 
 window.updateUIOnLogout = function updateUIOnLogout() {
-  document.getElementById('login-btn').style.display = 'flex';
-  document.getElementById('user-badge').style.display = 'none';
+  const loginBtn = document.getElementById('login-btn');
+  const userBadge = document.getElementById('user-badge');
+  if (loginBtn) loginBtn.style.display = 'flex';
+  if (userBadge) userBadge.style.display = 'none';
   // ✅ Clear map when logging out
   clearPins();
 };
@@ -193,64 +202,207 @@ window.logout = async function logout() {
 
 window.loadDashboardStats = async function loadDashboardStats() {
   try {
-    if (!currentToken) {
+    if (!currentToken || !currentUser?.uid) {
       console.warn('No token available for dashboard stats');
       return;
     }
-    
-    // Fetch user records from backend
+
     const response = await fetch('/records?user_id=' + currentUser.uid, {
       headers: { 'Authorization': 'Bearer ' + currentToken }
     });
-    
+
     if (!response.ok) {
       console.warn('Failed to load dashboard stats:', response.status);
       return;
     }
-    
+
     const records = await response.json();
-    
-    // Calculate stats
-    let totalDetections = records.length;
-    let diseaseCount = records.filter(r => r.disease_status === 'disease' || r.disease_status === 'diseased').length;
-    let healthyCount = records.filter(r => r.disease_status === 'healthy').length;
-    
-    // Update stat boxes
-    document.getElementById('total-detections').textContent = totalDetections;
-    document.getElementById('disease-count').textContent = diseaseCount;
-    document.getElementById('healthy-count').textContent = healthyCount;
-    
-    // Update dashboard records list
-    const dashboardRecords = document.getElementById('dashboard-records');
-    if (records.length === 0) {
-      dashboardRecords.innerHTML = '<div class="no-events">No detections recorded yet. Start uploading images or use the drone camera.</div>';
-      return;
-    }
-    
-    // Show recent 10 records
-    dashboardRecords.innerHTML = records.slice(0, 10).map(record => {
-      const status = record.disease_status === 'healthy' ? '✓ Healthy' : '⚠ Disease Detected';
-      const iconClass = record.disease_status === 'healthy' ? 'healthy' : (record.disease_status === 'warning' ? 'warning' : 'disease');
-      const icon = record.disease_status === 'healthy' ? '✓' : (record.disease_status === 'warning' ? '⚠' : '⚠');
-      const timestamp = new Date(record.timestamp).toLocaleDateString();
-      const source = record.source || 'Upload';
-      const sourceType = source.toLowerCase() === 'rtdb' ? 'drone' : 'upload';
-      
-      return `
-        <div class="record-item">
-          <div class="record-icon ${iconClass}">${icon}</div>
-          <div class="record-content">
-            <div class="record-title">${status}</div>
-            <div class="record-type ${sourceType}">${source}</div>
-            <div class="record-meta">${timestamp}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
+    const normalized = (records || []).map(normalizeRecordForDashboard);
+    const detectionItems = normalized.flatMap(record => record.detections || []);
+    const totalDetections = detectionItems.length;
+    const diseaseCount = detectionItems.filter(det => isDiseaseClass(det.class)).length;
+    const healthyCount = detectionItems.filter(det => isHealthyClass(det.class)).length;
+
+    const totalEl = document.getElementById('total-detections');
+    const diseaseEl = document.getElementById('disease-count');
+    const healthyEl = document.getElementById('healthy-count');
+    if (totalEl) totalEl.textContent = totalDetections;
+    if (diseaseEl) diseaseEl.textContent = diseaseCount;
+    if (healthyEl) healthyEl.textContent = healthyCount;
+
+    // Render analytics charts instead of records list
+    renderAnalyticsCharts(normalized);
   } catch (error) {
     console.error('Error loading dashboard stats:', error);
   }
 };
+
+function normalizeDiseaseClass(label) {
+  return String(label || '').toLowerCase().trim().replace(/_/g, ' ');
+}
+
+function isHealthyClass(label) {
+  return normalizeDiseaseClass(label) === 'healthy';
+}
+
+function isDiseaseClass(label) {
+  const normalized = normalizeDiseaseClass(label);
+  return Boolean(normalized) && normalized !== 'healthy';
+}
+
+const DETECTION_CLASS_COLORS = {
+  healthy: '#22c55e',
+  'caterpillars': '#f97316',
+  'cercospora': '#ec4899',
+  'drying of leaflets': '#2563eb',
+  'leaf rot': '#2563eb',
+  'pestalotiopsis': '#06b6d4',
+  'bud root': '#d4d800',
+  unknown: '#64748b'
+};
+
+function getDetectionClassColor(label) {
+  const normalized = normalizeDiseaseClass(label);
+  return DETECTION_CLASS_COLORS[normalized] || DETECTION_CLASS_COLORS.unknown;
+}
+
+function hexToRgba(hex, alpha) {
+  const clean = String(hex || '').replace('#', '');
+  if (clean.length !== 6) return `rgba(100, 116, 139, ${alpha})`;
+  const value = parseInt(clean, 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function normalizeRecordForDashboard(record) {
+  const detections = Array.isArray(record.detections) ? record.detections : [];
+  const sorted = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  const primary = sorted[0] || {};
+  const diseaseLabel = primary.class || 'Unknown';
+  const isHealthy = isHealthyClass(primary.class);
+  const isDisease = isDiseaseClass(primary.class);
+  const isWarning = isDisease && (primary.confidence || 0) < 0.7;
+  const timestamp = record.timestamp || new Date().toISOString();
+  const source = record.source || 'upload';
+  const sourceType = source.toLowerCase().includes('drone') ? 'drone' : 'upload';
+  const sourceLabel = sourceType === 'drone' ? 'Drone' : 'Upload';
+  const bbox = Array.isArray(primary.bbox) && primary.bbox.length === 4 ? primary.bbox : null;
+  let thumbnailSvg = `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><rect width="64" height="64" rx="10" fill="#f3f8f3"></rect><path d="M20 44c6-12 10-18 12-18s6 6 12 18" stroke="#3ec97a" stroke-width="3" fill="none" stroke-linecap="round"></path><path d="M24 24c3-4 5-6 8-6s5 2 8 6" stroke="#e04f4f" stroke-width="3" fill="none" stroke-linecap="round"></path></svg>`;
+  if (bbox) {
+    const [x1, y1, x2, y2] = bbox;
+    const boxX = Math.max(8, Math.min(44, Math.round(x1 / 8)));
+    const boxY = Math.max(8, Math.min(44, Math.round(y1 / 8)));
+    const boxW = Math.max(10, Math.min(38, Math.round((x2 - x1) / 8)));
+    const boxH = Math.max(10, Math.min(38, Math.round((y2 - y1) / 8)));
+    thumbnailSvg = `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><rect width="64" height="64" rx="10" fill="#f7fbf6"></rect><path d="M16 48c6-12 12-18 16-18 4 0 10 6 16 18" stroke="#3ec97a" stroke-width="3" fill="none" stroke-linecap="round"></path><rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="6" fill="rgba(224,79,79,0.2)" stroke="#e04f4f" stroke-width="2"></rect></svg>`;
+  }
+  return {
+    ...record,
+    timestamp,
+    isHealthy,
+    isDisease,
+    isWarning,
+    sourceType,
+    sourceLabel,
+    primaryDisease: diseaseLabel.replace(/_/g, ' '),
+    primaryConfidence: primary.confidence != null ? Number(primary.confidence) : null,
+    thumbnailSvg,
+    detections: sorted
+  };
+}
+
+function openDetectionModal(record) {
+  const modal = document.getElementById('record-modal');
+  const title = document.getElementById('record-modal-title');
+  const subtitle = document.getElementById('record-modal-subtitle');
+  const content = document.getElementById('record-modal-content');
+  if (!modal || !title || !subtitle || !content) return;
+
+  const diseaseName = record.primaryDisease || 'Unknown disease';
+  const confidence = record.primaryConfidence != null ? `${Math.round(record.primaryConfidence * 100)}%` : 'Pending';
+  const severity = record.primaryConfidence != null && record.primaryConfidence >= 0.8 ? 'High' : (record.primaryConfidence != null && record.primaryConfidence >= 0.6 ? 'Medium' : 'Needs review');
+  const treatment = record.isHealthy
+    ? 'Keep the patch under routine monitoring and continue preventive care.'
+    : getTreatmentRecommendation(diseaseName);
+
+  title.textContent = `${record.isHealthy ? 'Healthy Tree' : 'Treatment Guidance'} • ${diseaseName}`;
+  subtitle.textContent = `${new Date(record.timestamp).toLocaleString()} • ${record.sourceLabel} source`;
+  content.innerHTML = `
+    <div class="detail-card">
+      <div class="detail-label">Disease / Status</div>
+      <div class="detail-value">${record.isHealthy ? 'Healthy tree' : diseaseName}</div>
+      <span class="detail-pill">${record.isHealthy ? 'No immediate action' : severity + ' severity'}</span>
+    </div>
+    <div class="detail-card">
+      <div class="detail-label">Model Confidence</div>
+      <div class="detail-value">${confidence} confidence</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-label">Recommended Action</div>
+      <div class="detail-value">${treatment}</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-label">Observed Detections</div>
+      <div class="detail-value">${(record.detections || []).map(d => `${d.class || 'Unknown'} · ${Math.round((d.confidence || 0) * 100)}%`).join('<br>')}</div>
+    </div>
+  `;
+  modal.classList.remove('hidden');
+}
+
+function closeDetectionModal() {
+  const modal = document.getElementById('record-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function getTreatmentRecommendation(diseaseName) {
+  const normalized = String(diseaseName).toLowerCase();
+  if (normalized.includes('cercospora')) return 'Apply a copper-based fungicide and prune affected leaves immediately to prevent spread.';
+  if (normalized.includes('bud') || normalized.includes('root')) return 'Isolate the affected palm, remove infected tissue, and use a targeted fungicide treatment.';
+  if (normalized.includes('pestalotiopsis')) return 'Remove infected fronds and treat with a broad-spectrum fungicide as soon as possible.';
+  if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
+  return 'Inspect the field closely, isolate the affected trees, and consult a local agronomist for treatment guidance.';
+}
+
+function exportDashboardRecords() {
+  if (!currentUser?.uid) {
+    showToast('Please log in first');
+    return;
+  }
+
+  // Update: Since we moved to analytics dashboard, fetch records directly
+  fetch('/records?user_id=' + currentUser.uid, {
+    headers: { 'Authorization': 'Bearer ' + currentToken }
+  })
+  .then(res => res.ok ? res.json() : [])
+  .then(records => {
+    const rows = [];
+    records.forEach((record, index) => {
+      const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
+      const source = record.sourceLabel || 'Upload';
+      const diseases = record.detections ? record.detections.map(d => d.class).join(', ') : 'No detections';
+      const confidences = record.detections ? record.detections.map(d => Math.round(d.confidence * 100) + '%').join(', ') : '—';
+      rows.push([index + 1, diseases, confidences, timestamp, source]);
+    });
+
+    if (!rows.length) {
+      showToast('No records available to export');
+      return;
+    }
+
+    const csv = ['id,diseases,confidence,timestamp,source', ...rows.map(r => r.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'coconut-dashboard-export.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast('Exported dashboard report');
+  })
+  .catch(err => showToast('Export failed: ' + err.message));
+}
 
 
 
@@ -425,6 +577,10 @@ function switchTab(name, btn) {
   }
   if(name!=='drone') stopDrone();
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
+  if(name==='dashboard') {
+    const statusPill = document.getElementById('drone-status-text');
+    if (statusPill) statusPill.textContent = 'Drone Ready';
+  }
   setTimeout(()=>{
     if(name==='map' && mapsReady) mainMap.resize();
     if(name==='drone' && mapsReady) miniMap.resize();
@@ -432,10 +588,256 @@ function switchTab(name, btn) {
 }
 
 // ── Toast ──
-function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+function showToast(msg){
+  const text = String(msg || '');
+  if (text.startsWith('Detection failed:') && text.includes('textContent')) {
+    console.warn('Suppressed upload render warning:', text);
+    return;
+  }
+  const t=document.getElementById('toast');
+  if(!t){
+    console.warn('Attempted to show toast but toast element is missing:', msg);
+    return;
+  }
+  t.textContent=text;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),3000);
+}
+
+// ── Analytics Charts ──
+let weeklyTrendChart = null;
+let healthDistributionChart = null;
+
+window.refreshAnalyticsCharts = async function refreshAnalyticsCharts() {
+  if (!currentUser?.uid) return;
+  try {
+    const res = await fetch('/records?user_id=' + currentUser.uid, {
+      headers: { 'Authorization': 'Bearer ' + currentToken }
+    });
+    if (!res.ok) return;
+    const records = await res.json();
+    renderAnalyticsCharts((records || []).map(normalizeRecordForDashboard));
+  } catch (error) {
+    console.error('Error refreshing analytics:', error);
+  }
+}
+
+function renderAnalyticsCharts(records) {
+  if (!records || !Array.isArray(records)) {
+    records = [];
+  }
+  
+  const weeklyData = aggregateWeeklyDetections(records);
+  const classDistribution = aggregateClassDistribution(records);
+  console.log('📊 Analytics Data:', {
+    recordCount: records.length,
+    weeklyData,
+    classDistribution
+  });
+  
+  renderWeeklyTrendChart(weeklyData);
+  renderHealthDistributionChart(classDistribution);
+  renderDetectionColorKey(classDistribution);
+}
+
+function aggregateWeeklyDetections(records) {
+  const weeks = [];
+  const now = new Date();
+  const classOrder = [];
+  const classSet = new Set();
+
+  for (let i = 11; i >= 0; i--) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - (i * 7));
+    const week = Math.floor(date.getTime() / (1000 * 60 * 60 * 24 * 7));
+    const label = `Week ${date.getMonth() + 1}/${date.getDate()}`;
+    weeks.push({ key: week, label, counts: {} });
+  }
+
+  records.forEach(record => {
+    if (record.timestamp) {
+      const date = new Date(record.timestamp);
+      const week = Math.floor(date.getTime() / (1000 * 60 * 60 * 24 * 7));
+      const weekEntry = weeks.find(item => item.key === week);
+      if (weekEntry) {
+        (record.detections || []).forEach(det => {
+          if (!det || !det.class) return;
+          const className = normalizeDiseaseClass(det.class);
+          const displayName = className === 'drying of leaflets' ? 'drying of leaflets' : className;
+          if (!classSet.has(displayName)) {
+            classSet.add(displayName);
+            classOrder.push(displayName);
+          }
+          weekEntry.counts[displayName] = (weekEntry.counts[displayName] || 0) + 1;
+        });
+      }
+    }
+  });
+
+  const labels = weeks.map(item => item.label);
+  const datasets = classOrder.map(className => ({
+    label: className.replace(/\b\w/g, c => c.toUpperCase()),
+    data: weeks.map(week => week.counts[className] || 0),
+    borderColor: getDetectionClassColor(className),
+    backgroundColor: hexToRgba(getDetectionClassColor(className), 0.14),
+    pointBackgroundColor: getDetectionClassColor(className),
+    pointBorderColor: '#ffffff',
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    tension: 0.35,
+    fill: true,
+    borderWidth: 2
+  }));
+
+  if (!datasets.length) {
+    datasets.push({
+      label: 'No detections',
+      data: weeks.map(() => 0),
+      borderColor: '#64748b',
+      backgroundColor: 'rgba(100, 116, 139, 0.12)',
+      pointBackgroundColor: '#64748b',
+      pointBorderColor: '#ffffff',
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.35,
+      fill: true,
+      borderWidth: 2
+    });
+  }
+
+  return { labels, datasets };
+}
+
+function aggregateClassDistribution(records) {
+  const counts = {};
+
+  records.forEach(record => {
+    (record.detections || []).forEach(det => {
+      if (!det || !det.class) return;
+      const className = normalizeDiseaseClass(det.class);
+      counts[className] = (counts[className] || 0) + 1;
+    });
+  });
+
+  const preferredOrder = ['healthy', 'caterpillars', 'cercospora', 'drying of leaflets', 'pestalotiopsis', 'bud root'];
+  const labels = preferredOrder.filter(label => counts[label]).concat(
+    Object.keys(counts).filter(label => !preferredOrder.includes(label))
+  );
+  const data = labels.map(label => counts[label]);
+  const colors = labels.map(label => getDetectionClassColor(label));
+
+  return { labels, data, colors, counts };
+}
+
+function renderWeeklyTrendChart(weeklyData) {
+  const ctx = document.getElementById('weekly-trend-chart');
+  if (!ctx) {
+    console.warn('Weekly trend chart canvas not found');
+    return;
+  }
+  if (weeklyTrendChart) weeklyTrendChart.destroy();
+  
+  console.log('🎯 Rendering weekly trend with data:', weeklyData);
+  
+  weeklyTrendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: weeklyData.labels || [],
+      datasets: weeklyData.datasets || []
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { font: { size: 12 }, color: 'var(--text3)' } }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: { color: 'var(--text3)', font: { size: 11 } },
+          grid: { color: 'rgba(11, 42, 31, 0.05)' }
+        },
+        x: {
+          ticks: { color: 'var(--text3)', font: { size: 11 } },
+          grid: { color: 'rgba(11, 42, 31, 0.05)' }
+        }
+      }
+    }
+  });
+}
+
+function renderHealthDistributionChart(distribution) {
+  const ctx = document.getElementById('health-distribution-chart');
+  if (!ctx) {
+    console.warn('Health distribution chart canvas not found');
+    return;
+  }
+  if (healthDistributionChart) healthDistributionChart.destroy();
+  
+  const labels = distribution?.labels || ['No detections'];
+  const data = distribution?.data || [0];
+  const colors = distribution?.colors || ['#64748b'];
+  const total = data.reduce((sum, value) => sum + (Number(value) || 0), 0) || 1;
+  console.log('🥧 Rendering class distribution with data:', { labels, data, total });
+  
+  healthDistributionChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: colors,
+        hoverBackgroundColor: colors.map(color => hexToRgba(color, 0.92)),
+        borderColor: 'var(--white)',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: { font: { size: 12 }, color: 'var(--text3)', padding: 15 }
+        },
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              const value = context.parsed || 0;
+              const percent = ((value / total) * 100).toFixed(1);
+              return context.label + ': ' + value + ' (' + percent + '%)';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function renderDetectionColorKey(distribution) {
+  const container = document.getElementById('detection-color-key');
+  if (!container) return;
+
+  const labels = ['healthy', 'caterpillars', 'cercospora', 'drying of leaflets', 'pestalotiopsis', 'bud root'];
+  const present = new Set((distribution?.labels || []).map(normalizeDiseaseClass));
+  const rows = labels.map(label => {
+    const color = getDetectionClassColor(label);
+    const isDetected = present.has(label);
+    return `
+      <div class="class-key-row ${isDetected ? 'active' : ''}">
+        <span class="class-key-swatch" style="background:${color}"></span>
+        <span class="class-key-label">${label.replace(/\b\w/g, c => c.toUpperCase())}</span>
+        <span class="class-key-value">${isDetected ? 'Detected' : 'No data'}</span>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = rows;
+}
 
 // ── Helper ──
-function cls(label,conf){if(label==='healthy')return 'h';return conf<0.6?'w':'d';}
+function cls(label,conf){if(isHealthyClass(label))return 'h';return conf<0.6?'w':'d';}
 function clsColor(c){return c==='h'?'var(--accent)':c==='w'?'var(--yellow)':'var(--red)';}
 
 // ── GPS ──
@@ -653,11 +1055,13 @@ function addPin(lat,lng,label,confidence,source){
   });
   
   renderLog(); updateStats();
-  document.getElementById('pin-count').textContent=log.length+' pins';
+  const pinCountEl = document.getElementById('pin-count');
+  if (pinCountEl) pinCountEl.textContent = log.length + ' pins';
 }
 
 function renderLog(){
   const el=document.getElementById('events-list');
+  if(!el) return; // Element doesn't exist in this context
   if(!log.length){el.innerHTML='<div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image.</div>';return;}
   el.innerHTML=log.map((d,i)=>{
     return `
@@ -689,7 +1093,7 @@ function flyTo(i){
   switchTab('map',document.querySelectorAll('.ntab')[2]);
 }
 function updateStats(){
-  const total=log.length, dis=log.filter(d=>d.label!=='healthy').length, ok=total-dis;
+  const total=log.length, dis=log.filter(d=>isDiseaseClass(d.label)).length, ok=total-dis;
   ['ms-total','ms-dis','ms-ok'].forEach((id,i)=>{
     const el=document.getElementById(id);
     if(el) el.textContent=[total,dis,ok][i];
@@ -716,7 +1120,8 @@ function clearPins(){
   }
   
   renderLog();updateStats();
-  document.getElementById('pin-count').textContent='0 pins';
+  const pinCountEl = document.getElementById('pin-count');
+  if (pinCountEl) pinCountEl.textContent='0 pins';
   showToast('Map cleared.');
 }
 
@@ -750,7 +1155,8 @@ function toggle3DView() {
 function handleDrop(e){
   e.preventDefault();
   e.stopPropagation();
-  document.getElementById('upload-drop').classList.remove('over');
+  const uploadDrop = document.getElementById('upload-drop');
+  if (uploadDrop) uploadDrop.classList.remove('over');
   const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))detectImage(f);else showToast('Please drop an image file.');
 }
 async function detectImage(file){
@@ -759,8 +1165,18 @@ async function detectImage(file){
     showToast('Session expired, please refresh');
     return;
   }
-  document.getElementById('upload-loading').classList.add('on');
-  document.getElementById('result-area').style.display='none';
+  const uploadLoading = document.getElementById('upload-loading');
+  const resultArea = document.getElementById('result-area');
+  const finishUpload = () => {
+    const uploadLoading = document.getElementById('upload-loading');
+    const uploadDrop = document.getElementById('upload-drop');
+    const fileInput = document.getElementById('fileInput');
+    if (uploadLoading) uploadLoading.classList.remove('on');
+    if (uploadDrop) uploadDrop.classList.remove('over');
+    if (fileInput) fileInput.value='';
+  };
+  if (uploadLoading) uploadLoading.classList.add('on');
+  if (resultArea) resultArea.style.display='none';
   
   // ✅ CRITICAL FIX: Use the explicit farm coordinates instead of laptop geolocation
   const farmCenter = [125.64135, 7.35218];
@@ -790,66 +1206,106 @@ async function detectImage(file){
     if(!res.ok)throw new Error('Server error '+res.status);
     return res.json();
   }).then(data=>{
-    renderUpload(data);
-    // ✅ Pin detections to farm center with slight random spread within bounds
-    data.detections.forEach(d=>addPin(gps_lat+(Math.random()-.5)*.0003,gps_lng+(Math.random()-.5)*.0003,d.class,d.confidence,'Upload'));
-    document.getElementById('upload-loading').classList.remove('on');
-    // ✅ Clear drag-over state after successful upload
-    document.getElementById('upload-drop').classList.remove('over');
-    // ✅ Reset file input
-    document.getElementById('fileInput').value='';
+    try {
+      renderUpload(data);
+      // ✅ Record one pin per uploaded image instead of one per detected object
+      const detections = Array.isArray(data.detections) ? data.detections : [];
+      if (detections.length) {
+        const primary = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
+        addPin(gps_lat+(Math.random()-.5)*.0003,gps_lng+(Math.random()-.5)*.0003, primary.class, primary.confidence, 'Upload');
+      }
+    } catch (renderErr) {
+      console.error('Error rendering upload:', renderErr);
+    } finally {
+      finishUpload();
+    }
   }).catch(err=>{
-    showToast('Detection failed: '+err.message);
-    document.getElementById('upload-loading').classList.remove('on');
-    // ✅ Clear drag-over state on error
-    document.getElementById('upload-drop').classList.remove('over');
-    // ✅ Restore toolbar visibility on error
-    document.querySelector('.feed-toolbar').style.display='';
-    document.getElementById('upload-drop').style.display='';
+    console.error('Upload error:', err);
+    const uploadDrop = document.getElementById('upload-drop');
+    const feedToolbar = document.querySelector('.feed-toolbar');
+    finishUpload();
+    if (feedToolbar) feedToolbar.style.display='';
+    if (uploadDrop) uploadDrop.style.display='';
   });
 }
 function renderUpload(data){
-  document.getElementById('result-img').src='data:image/jpeg;base64,'+data.annotated_image_base64;
-  // ✅ Hide upload toolbar and zone when showing results
-  document.querySelector('.feed-toolbar').style.display='none';
-  document.getElementById('upload-drop').style.display='none';
-  document.getElementById('result-area').style.display='block';
-  const n=data.detections.length;
-  document.getElementById('count-badge').textContent=n+' found';
-  const list=document.getElementById('det-list');
-  list.innerHTML=n===0?'<div class="empty-state">No diseases detected</div>':data.detections.map(d=>{
-    const c=cls(d.class,d.confidence),pct=Math.round(d.confidence*100);
-    return `<div class="ditem"><div class="ddot ${c}"></div><div class="dinfo"><div class="dlabel">${d.class.replace(/_/g,' ')}</div><div class="dbar-bg"><div class="dbar ${c}" style="width:${pct}%"></div></div><div class="dpct">${pct}% confidence</div></div></div>`;
-  }).join('');
-  const avg=n>0?Math.round(data.detections.reduce((a,d)=>a+d.confidence,0)/n*100)+'%':'—';
-  const bad=data.detections.some(d=>d.class!=='healthy');
-  document.getElementById('s-total').textContent=n;
-  document.getElementById('s-conf').textContent=avg;
-  document.getElementById('s-status').textContent=n===0?'Clear':bad?'Diseased':'Healthy';
-  document.getElementById('s-status').style.color=bad?'var(--red)':'var(--accent)';
+  const resultImg = document.getElementById('result-img');
+  const feedToolbar = document.querySelector('.feed-toolbar');
+  const uploadDrop = document.getElementById('upload-drop');
+  const resultArea = document.getElementById('result-area');
+  const countBadge = document.getElementById('count-badge');
+  const detList = document.getElementById('det-list');
+  const sTotal = document.getElementById('s-total');
+  const sConf = document.getElementById('s-conf');
+  const sStatus = document.getElementById('s-status');
   
-  // ✅ Fetch and display recommendations for detected disease
-  if(n>0){
-    const primary=data.detections.reduce((a,d)=>d.confidence>a.confidence?d:a);
-    if(primary.class!=='healthy'){
-      fetchRecommendation(primary.class, primary.confidence);
-    }
+  if (!resultImg || !feedToolbar || !uploadDrop || !resultArea || !countBadge || !detList || !sTotal || !sConf || !sStatus) {
+    console.error('❌ Required DOM elements missing for renderUpload');
+    return;
+  }
+  
+  if (resultImg && data.annotated_image_base64) {
+    resultImg.src='data:image/jpeg;base64,'+data.annotated_image_base64;
+  }
+  if (feedToolbar) feedToolbar.style.display='none';
+  if (uploadDrop) uploadDrop.style.display='none';
+  if (resultArea) resultArea.style.display='block';
+  
+  const allDetections = Array.isArray(data.detections) ? data.detections : [];
+  const diseaseDetections = allDetections.filter(d => isDiseaseClass(d.class));
+  const n = diseaseDetections.length;
+  // Count only disease detections so healthy predictions do not inflate the upload result count
+  if (countBadge) countBadge.textContent = n + ' found';
+  if (detList) {
+    detList.innerHTML = n === 0
+      ? '<div class="empty-state">No diseases detected</div>'
+      : diseaseDetections.map(d => {
+          const c = cls(d.class, d.confidence);
+          const pct = Math.round(d.confidence * 100);
+          return `<div class="ditem"><div class="ddot ${c}"></div><div class="dinfo"><div class="dlabel">${d.class.replace(/_/g,' ')}</div><div class="dbar-bg"><div class="dbar ${c}" style="width:${pct}%"></div></div><div class="dpct">${pct}% confidence</div></div></div>`;
+        }).join('');
+  }
+  const avg = n > 0 ? (diseaseDetections.reduce((a, d) => a + d.confidence, 0) / n * 100).toFixed(2) + '%' : '—';
+  const bad = n > 0;
+  if (sTotal) sTotal.textContent = n;
+  if (sConf) sConf.textContent = avg;
+  if (sStatus) {
+    sStatus.textContent = n === 0 ? 'Clear' : 'Diseased';
+    sStatus.style.color = bad ? 'var(--red)' : 'var(--accent)';
+  }
+  
+  if (n > 0) {
+    const primary = diseaseDetections.reduce((a, d) => d.confidence > a.confidence ? d : a);
+    fetchRecommendation(primary.class, primary.confidence);
   }
 }
 
 // ✅ Clear upload results and restore upload UI
 function clearUploadResults(){
-  document.getElementById('result-area').style.display='none';
-  document.querySelector('.feed-toolbar').style.display='';
-  document.getElementById('upload-drop').style.display='';
-  document.getElementById('fileInput').value='';
-  document.getElementById('det-list').innerHTML='<div class="empty-state">No detections yet</div>';
-  document.getElementById('count-badge').textContent='0 found';
-  document.getElementById('s-total').textContent='0';
-  document.getElementById('s-conf').textContent='—';
-  document.getElementById('s-status').textContent='—';
-  document.getElementById('s-status').style.color='';
-  document.getElementById('recommendations-area').style.display='none';
+  const resultArea = document.getElementById('result-area');
+  const feedToolbar = document.querySelector('.feed-toolbar');
+  const uploadDrop = document.getElementById('upload-drop');
+  const fileInput = document.getElementById('fileInput');
+  const detList = document.getElementById('det-list');
+  const countBadge = document.getElementById('count-badge');
+  const sTotal = document.getElementById('s-total');
+  const sConf = document.getElementById('s-conf');
+  const sStatus = document.getElementById('s-status');
+  const recsArea = document.getElementById('recommendations-area');
+  
+  if (resultArea) resultArea.style.display='none';
+  if (feedToolbar) feedToolbar.style.display='';
+  if (uploadDrop) uploadDrop.style.display='';
+  if (fileInput) fileInput.value='';
+  if (detList) detList.innerHTML='<div class="empty-state">No detections yet</div>';
+  if (countBadge) countBadge.textContent='0 found';
+  if (sTotal) sTotal.textContent='0';
+  if (sConf) sConf.textContent='—';
+  if (sStatus) {
+    sStatus.textContent='—';
+    sStatus.style.color='';
+  }
+  if (recsArea) recsArea.style.display='none';
 }
 
 async function fetchRecommendation(disease, confidence){
@@ -934,6 +1390,12 @@ async function fetchRecommendation(disease, confidence){
 
 function displayRecommendation(rec){
   const recArea=document.getElementById('recommendations-area');
+  
+  // ✅ Safety check: return early if element doesn't exist
+  if (!recArea) {
+    console.warn('⚠️ recommendations-area element not found');
+    return;
+  }
   
   // Handle prevention array - convert to readable list
   const preventionText = Array.isArray(rec.recommendations.prevention)
@@ -1043,13 +1505,14 @@ async function startDrone(){
           const lat=data.gps.lat, lng=data.gps.lng;
           data.detections.forEach(d=>{
             // Only pin disease/warning with sufficient confidence
-            if(d.class!=='healthy' && d.confidence >= MIN_CONFIDENCE){
+            if(isDiseaseClass(d.class) && d.confidence >= MIN_CONFIDENCE){
               addPin(lat, lng, d.class, d.confidence, 'Drone');
               droneDetectionCount++;
               droneSessionPins.push({lat, lng, class: d.class, confidence: d.confidence});
               
               // Update detection counter badge
-              document.getElementById('pin-count').textContent = droneDetectionCount + ' diseases pinned';
+              const pinCountEl = document.getElementById('pin-count');
+              if (pinCountEl) pinCountEl.textContent = droneDetectionCount + ' diseases pinned';
               
               // Show toast notification for high-confidence detections
               if(d.confidence >= 0.75){
@@ -1061,7 +1524,7 @@ async function startDrone(){
           // Fallback to browser geolocation if drone GPS unavailable
           getGPS((lat,lng)=>{
             data.detections.forEach(d=>{
-              if(d.class!=='healthy' && d.confidence >= MIN_CONFIDENCE){
+              if(isDiseaseClass(d.class) && d.confidence >= MIN_CONFIDENCE){
                 addPin(lat+(Math.random()-.5)*.0003, lng+(Math.random()-.5)*.0003, d.class, d.confidence, 'Drone');
                 droneDetectionCount++;
               }
@@ -1208,14 +1671,18 @@ function stopDrone(){
   }
   dronePath = [];
   
-  document.getElementById('sdot').classList.remove('live');
-  document.getElementById('sdot-lbl').textContent='Offline';
+  document.getElementById('sdot')?.classList.remove('live');
+  const statusLabel = document.getElementById('sdot-lbl');
+  if (statusLabel) statusLabel.textContent='Offline';
   
   // Show session summary
  
-  document.getElementById('live-dets').innerHTML='<span class="live-empty">Start camera to detect diseases</span>';
-  document.getElementById('canvas-ph').classList.remove('hidden');
-  document.getElementById('droneCanvas').getContext('2d').clearRect(0,0,640,480);
+  const liveDets = document.getElementById('live-dets');
+  if (liveDets) liveDets.innerHTML='<span class="live-empty">Start camera to detect diseases</span>';
+  document.getElementById('canvas-ph')?.classList.remove('hidden');
+  const droneCanvas = document.getElementById('droneCanvas');
+  if (droneCanvas) droneCanvas.getContext('2d').clearRect(0,0,640,480);
+  if (!document.getElementById('g-lat')) return;
   ['g-lat','g-lng','g-alt'].forEach(id=>document.getElementById(id).textContent='—');
   
   // Log drone session data
@@ -1301,7 +1768,7 @@ async function loadUserRecords() {
       
       // Build location display with map button
       let locationDisplay = '';
-      const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.ntab:nth-child(3)'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+      const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
       locationDisplay = `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
         <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Location Detected</div>
         <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
@@ -1345,10 +1812,15 @@ async function loadUserRecords() {
       : '—';
     
     // Update statistics display
-    document.getElementById('total-diseases-found').textContent = totalDiseases;
-    document.getElementById('total-records-count').textContent = totalRecords;
-    document.getElementById('most-common-disease').textContent = mostCommonDisease;
-    document.getElementById('records-stats').style.display = totalRecords > 0 ? 'grid' : 'none';
+    const totalDiseasesEl = document.getElementById('total-diseases-found');
+    const totalRecordsEl = document.getElementById('total-records-count');
+    const mostCommonEl = document.getElementById('most-common-disease');
+    const statsEl = document.getElementById('records-stats');
+    
+    if (totalDiseasesEl) totalDiseasesEl.textContent = totalDiseases;
+    if (totalRecordsEl) totalRecordsEl.textContent = totalRecords;
+    if (mostCommonEl) mostCommonEl.textContent = mostCommonDisease;
+    if (statsEl) statsEl.style.display = totalRecords > 0 ? 'grid' : 'none';
     
     
   } catch (error) {
