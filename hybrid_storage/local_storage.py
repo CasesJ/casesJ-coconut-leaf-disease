@@ -30,6 +30,10 @@ class DetectionRecord:
     is_synced: bool = False
     sync_attempts: int = 0
     error_message: str = ""
+    verification_status: str = "pending_verification"
+    verified_by: str = ""
+    verified_by_uid: str = ""
+    verified_at: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -90,11 +94,25 @@ class LocalStorageManager:
                     is_synced BOOLEAN DEFAULT 0,
                     sync_attempts INTEGER DEFAULT 0,
                     error_message TEXT,
+                    verification_status TEXT DEFAULT 'pending_verification',
+                    verified_by TEXT,
+                    verified_by_uid TEXT,
+                    verified_at TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            for column_def in (
+                ("verification_status", "TEXT DEFAULT 'pending_verification'"),
+                ("verified_by", "TEXT"),
+                ("verified_by_uid", "TEXT"),
+                ("verified_at", "TEXT"),
+            ):
+                try:
+                    cursor.execute(f"ALTER TABLE detections ADD COLUMN {column_def[0]} {column_def[1]}")
+                except sqlite3.OperationalError:
+                    pass
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_user_id 
@@ -149,8 +167,9 @@ class LocalStorageManager:
                         """
                         INSERT OR REPLACE INTO detections 
                         (id, user_id, email, timestamp, inference_results, gps_data, 
-                         image_path, is_synced, sync_attempts, error_message)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         image_path, is_synced, sync_attempts, error_message,
+                         verification_status, verified_by, verified_by_uid, verified_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             detection_record.id,
@@ -163,6 +182,10 @@ class LocalStorageManager:
                             detection_record.is_synced,
                             detection_record.sync_attempts,
                             detection_record.error_message,
+                            detection_record.verification_status,
+                            detection_record.verified_by,
+                            detection_record.verified_by_uid,
+                            detection_record.verified_at,
                         ),
                     )
                     conn.commit()
@@ -196,6 +219,11 @@ class LocalStorageManager:
                 "image_path": record.image_path,
                 "is_synced": record.is_synced,
                 "sync_attempts": record.sync_attempts,
+                "error_message": record.error_message,
+                "verification_status": record.verification_status,
+                "verified_by": record.verified_by,
+                "verified_by_uid": record.verified_by_uid,
+                "verified_at": record.verified_at,
             }
             
             with open(filename, "w") as f:
@@ -316,6 +344,69 @@ class LocalStorageManager:
                     )
                 rows = cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
+
+    def get_all_detections(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        """Get detections for all users, newest first."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT * FROM detections
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    def update_detection_fields(self, detection_id: str, **fields) -> bool:
+        """Update one or more fields on a detection record."""
+        if not fields:
+            return False
+
+        allowed_fields = {
+            "email",
+            "timestamp",
+            "inference_results",
+            "gps_data",
+            "image_path",
+            "is_synced",
+            "sync_attempts",
+            "error_message",
+            "verification_status",
+            "verified_by",
+            "verified_by_uid",
+            "verified_at",
+        }
+        updates = {key: value for key, value in fields.items() if key in allowed_fields}
+        if not updates:
+            return False
+
+        set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
+        params = []
+        for value in updates.values():
+            if isinstance(value, (dict, list)):
+                params.append(json.dumps(value))
+            else:
+                params.append(value)
+        params.extend([detection_id])
+
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE detections
+                    SET {set_clause},
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    params,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
 
     def get_storage_stats(self) -> Dict[str, Any]:
         """Get statistics about local storage"""

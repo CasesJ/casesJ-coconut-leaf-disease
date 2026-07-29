@@ -108,6 +108,7 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       console.log('Backend verification:', verifyRes.status);
       
       if (verifyRes.ok) {
+        const verifyData = await verifyRes.json();
         form.reset();
         console.log('Auth complete');
         // ✅ Set flag and show app immediately
@@ -115,7 +116,7 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
         currentUser = userCred.user;
         document.getElementById('auth-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.add('active');
-        updateUIOnLogin(userCred.user);
+        updateUIOnLogin(userCred.user, verifyData);
         console.log('✅ Logged in and showing app');
       } else {
         const errData = await verifyRes.json();
@@ -163,16 +164,98 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   }
 };
 
-window.updateUIOnLogin = function updateUIOnLogin(user) {
+const EXPERT_DISEASE_OPTIONS = [
+  'Caterpillars',
+  'Cercospora',
+  'Drying of Leaflets',
+  'Healthy',
+  'Pestalotiopsis',
+  'Bud Root'
+];
+
+function setFarmerNavigationVisible(visible) {
+  const uploadNav = document.getElementById('nav-upload-link');
+  const mapNav = document.getElementById('nav-map-link');
+  if (uploadNav) uploadNav.style.display = visible ? '' : 'none';
+  if (mapNav) mapNav.style.display = visible ? '' : 'none';
+}
+
+function populateExpertDiseaseSelect(selectedValue = '') {
+  const select = document.getElementById('expert-disease-name');
+  if (!select) return;
+
+  const existing = select.value;
+  const targetValue = String(selectedValue || existing || '').trim();
+  const options = EXPERT_DISEASE_OPTIONS.slice();
+
+  select.innerHTML = '';
+  options.forEach(disease => {
+    const option = document.createElement('option');
+    option.value = disease;
+    option.textContent = disease;
+    select.appendChild(option);
+  });
+
+  if (targetValue && options.includes(targetValue)) {
+    select.value = targetValue;
+  } else if (options.length > 0) {
+    select.value = options[0];
+  }
+}
+
+async function loadExpertDiseaseOptions() {
+  try {
+    const res = await fetch('/expert/diseases', {
+      headers: { 'Authorization': `Bearer ${currentToken}` }
+    });
+    if (!res.ok) {
+      populateExpertDiseaseSelect();
+      return;
+    }
+    const data = await res.json();
+    const diseases = Array.isArray(data.diseases) && data.diseases.length ? data.diseases : EXPERT_DISEASE_OPTIONS;
+    const select = document.getElementById('expert-disease-name');
+    if (!select) return;
+
+    const currentValue = select.value;
+    select.innerHTML = '';
+    diseases.forEach(disease => {
+      const option = document.createElement('option');
+      option.value = disease;
+      option.textContent = disease;
+      select.appendChild(option);
+    });
+    if (currentValue && diseases.includes(currentValue)) {
+      select.value = currentValue;
+    } else if (diseases.length > 0) {
+      select.value = diseases[0];
+    }
+  } catch (error) {
+    console.warn('Could not load expert disease options:', error);
+    populateExpertDiseaseSelect();
+  }
+}
+
+window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
   const userEmail = document.getElementById('user-email');
   const currentUserEmail = document.getElementById('current-user-email');
+  const roleEl = document.getElementById('current-user-role');
+  const expertNavLink = document.getElementById('expert-nav-link');
+
+  currentUserRole = accountInfo.role || (accountInfo.is_expert ? 'expert' : 'farmer') || 'farmer';
+  currentUserIsExpert = Boolean(accountInfo.is_expert || currentUserRole === 'expert');
   
   if (loginBtn) loginBtn.style.display = 'none';
   if (userBadge) userBadge.style.display = 'flex';
   if (userEmail) userEmail.textContent = user.email;
   if (currentUserEmail) currentUserEmail.innerHTML = '<strong>User:</strong> ' + user.email;
+  if (roleEl) roleEl.innerHTML = '<strong>Role:</strong> ' + (currentUserIsExpert ? 'Expert' : 'Farmer');
+  if (expertNavLink) expertNavLink.style.display = currentUserIsExpert ? 'flex' : 'none';
+  setFarmerNavigationVisible(!currentUserIsExpert);
+  const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
+  if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = currentUserIsExpert ? 'block' : 'none';
   
   // ✅ Load saved map pins from Firebase when user logs in
   loadSavedMapPins(user.uid);
@@ -180,13 +263,24 @@ window.updateUIOnLogin = function updateUIOnLogin(user) {
   if (typeof loadDashboardStats === 'function') {
     setTimeout(loadDashboardStats, 300);
   }
+  if (currentUserIsExpert && typeof loadExpertReview === 'function') {
+    setTimeout(loadExpertReview, 350);
+  }
+  if (currentUserIsExpert && typeof loadExpertAuditLog === 'function') {
+    setTimeout(loadExpertAuditLog, 450);
+  }
 };
 
 window.updateUIOnLogout = function updateUIOnLogout() {
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
+  const expertNavLink = document.getElementById('expert-nav-link');
   if (loginBtn) loginBtn.style.display = 'flex';
   if (userBadge) userBadge.style.display = 'none';
+  if (expertNavLink) expertNavLink.style.display = 'none';
+  setFarmerNavigationVisible(true);
+  currentUserRole = 'farmer';
+  currentUserIsExpert = false;
   // ✅ Clear map when logging out
   clearPins();
 };
@@ -207,7 +301,8 @@ window.loadDashboardStats = async function loadDashboardStats() {
       return;
     }
 
-    const response = await fetch('/records?user_id=' + currentUser.uid, {
+    const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+    const response = await fetch(endpoint, {
       headers: { 'Authorization': 'Bearer ' + currentToken }
     });
 
@@ -216,7 +311,8 @@ window.loadDashboardStats = async function loadDashboardStats() {
       return;
     }
 
-    const records = await response.json();
+    const payload = await response.json();
+    const records = Array.isArray(payload) ? payload : (payload.records || []);
     const normalized = (records || []).map(normalizeRecordForDashboard);
     const detectionItems = normalized.flatMap(record => record.detections || []);
     const totalDetections = detectionItems.length;
@@ -372,11 +468,13 @@ function exportDashboardRecords() {
   }
 
   // Update: Since we moved to analytics dashboard, fetch records directly
-  fetch('/records?user_id=' + currentUser.uid, {
+  const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+  fetch(endpoint, {
     headers: { 'Authorization': 'Bearer ' + currentToken }
   })
   .then(res => res.ok ? res.json() : [])
-  .then(records => {
+  .then(payload => {
+    const records = Array.isArray(payload) ? payload : (payload.records || []);
     const rows = [];
     records.forEach((record, index) => {
       const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
@@ -563,10 +661,17 @@ window.addEventListener('load', () => {
 
 // ── Tabs ──
 function switchTab(name, btn) {
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>{
+    p.classList.remove('active');
+    p.style.display = 'none';
+  });
   document.querySelectorAll('.ntab').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(l=>l.classList.remove('active'));
-  document.getElementById('panel-'+name).classList.add('active');
+  const activePanel = document.getElementById('panel-'+name);
+  if (activePanel) {
+    activePanel.classList.add('active');
+    activePanel.style.display = 'block';
+  }
   if(btn) btn.classList.add('active');
   // Also mark the sidebar nav-link as active
   const navLink = document.querySelector(`.nav-link[onclick*="'${name}'"]`);
@@ -577,6 +682,8 @@ function switchTab(name, btn) {
   }
   if(name!=='drone') stopDrone();
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
+  if(name==='expert' && typeof loadExpertReview === 'function') loadExpertReview();
+  if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
   if(name==='dashboard') {
     const statusPill = document.getElementById('drone-status-text');
     if (statusPill) statusPill.textContent = 'Drone Ready';
@@ -611,11 +718,13 @@ let healthDistributionChart = null;
 window.refreshAnalyticsCharts = async function refreshAnalyticsCharts() {
   if (!currentUser?.uid) return;
   try {
-    const res = await fetch('/records?user_id=' + currentUser.uid, {
+    const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+    const res = await fetch(endpoint, {
       headers: { 'Authorization': 'Bearer ' + currentToken }
     });
     if (!res.ok) return;
-    const records = await res.json();
+    const payload = await res.json();
+    const records = Array.isArray(payload) ? payload : (payload.records || []);
     renderAnalyticsCharts((records || []).map(normalizeRecordForDashboard));
   } catch (error) {
     console.error('Error refreshing analytics:', error);
@@ -1697,6 +1806,135 @@ function stopDrone(){
 }
 
 // ── Load User Detection Records ──
+function formatVerificationStatus(status) {
+  const normalized = String(status || 'pending_verification').toLowerCase();
+  if (normalized === 'verified') return { label: 'Verified', cls: 'verified' };
+  if (normalized === 'pending_verification' || normalized === 'pending') return { label: 'Pending', cls: 'pending' };
+  return { label: normalized.replace(/_/g, ' '), cls: 'pending' };
+}
+
+function buildRecordStatusBadge(record) {
+  const status = formatVerificationStatus(record.verification_status);
+  return `<span class="record-status ${status.cls}">${status.label}</span>`;
+}
+
+function renderRecordCard(record, idx, options = {}) {
+  const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
+  const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
+  const detections = record.detections || [];
+  const isExpertView = Boolean(options.expert);
+  const ownerLabel = record.email || record.user_id || 'Unknown farmer';
+  const statusBadge = buildRecordStatusBadge(record);
+  const previewImage = record.image_url || record.annotated_image_url || '';
+
+  let lat = null;
+  let lng = null;
+  let gpsSource = 'unknown';
+
+  if (record.lat && record.lng) {
+    lat = record.lat;
+    lng = record.lng;
+    gpsSource = record.gps_source || 'database';
+  } else if (record.gps_data && typeof record.gps_data === 'object') {
+    lat = record.gps_data.latitude || record.gps_data.lat;
+    lng = record.gps_data.longitude || record.gps_data.lng;
+    gpsSource = record.gps_data.source || gpsSource;
+  } else if (record.gps && typeof record.gps === 'object') {
+    lat = record.gps.lat || record.gps.latitude;
+    lng = record.gps.lng || record.gps.longitude;
+    gpsSource = record.gps.source || gpsSource;
+  }
+
+  if (lat !== null && lng !== null) {
+    lat = parseFloat(lat);
+    lng = parseFloat(lng);
+  }
+
+  if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+    lat = 7.3427;
+    lng = 125.6290;
+    gpsSource = 'farm_default';
+  }
+
+  const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+  const imageLabel = record.filename || record.image_path || 'Unknown image';
+  const imagePreviewHtml = previewImage
+    ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
+         <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Image Preview</div>
+         <a href="${previewImage}" target="_blank" rel="noreferrer" style="display:block;">
+           <img src="${previewImage}" alt="${imageLabel}" style="width:100%;max-height:280px;object-fit:cover;display:block;background:#eef6f1;" />
+         </a>
+       </div>`
+    : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
+         No saved image file was found for this record yet.
+       </div>`;
+  const locationDisplay = `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
+    <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Location Detected</div>
+    <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
+    <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
+    ${isExpertView ? `<div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Image:</strong> ${imageLabel}</div>` : ''}
+    ${isExpertView ? '' : mapButtonHtml}
+  </div>`;
+
+  const expertActions = isExpertView && record.verification_status !== 'verified'
+    ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+         <button class="btn btn-p" onclick="verifyExpertRecord('${record.user_id || ''}','${record.id || ''}')" style="padding:6px 12px;font-size:11px;">Mark Verified</button>
+         <button class="btn btn-o" onclick="loadExpertRecommendation('${(record.primaryDisease || (detections[0]?.class || '')).replace(/'/g, '&#39;')}')" style="padding:6px 12px;font-size:11px;">Edit Recommendation</button>
+       </div>`
+    : '';
+
+  return `
+    <div class="record-item">
+      <span class="record-type ${record.type || 'upload'}">${typeLabel}</span>
+      ${statusBadge}
+      <div class="record-meta">
+        <strong>${timestamp}</strong><br>
+        ${isExpertView ? `Farmer: ${ownerLabel}<br>` : ''}
+        ${detections.length} detection${detections.length !== 1 ? 's' : ''} (≥50% confidence)
+      </div>
+      <div class="record-detections">
+        ${detections.map(d => `<span class="record-det high">${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`).join('')}
+      </div>
+      ${isExpertView ? imagePreviewHtml : ''}
+      ${locationDisplay}
+      ${expertActions}
+    </div>
+  `;
+}
+
+function getExpertFilterLabel(filterName) {
+  const value = String(filterName || 'all').toLowerCase();
+  if (value === 'all') return 'all records';
+  if (value === 'verified') return 'verified records';
+  return 'pending uploads';
+}
+
+function renderAuditEntry(entry) {
+  const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
+  const actor = entry.actor_email || entry.actor_uid || 'Unknown expert';
+  const target = entry.target || {};
+  const details = entry.details || {};
+  const actionLabel = String(entry.action || 'action').replace(/_/g, ' ');
+  const targetLabel = target.disease || target.record_id || target.user_id || '—';
+  const detailLabel = Object.keys(details).length
+    ? Object.entries(details).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join(' • ')
+    : 'No details';
+
+  return `
+    <div class="record-item">
+      <span class="record-status verified">Audit</span>
+      <div class="record-meta">
+        <strong>${timestamp}</strong><br>
+        ${actionLabel} by ${actor}<br>
+        Target: ${targetLabel}
+      </div>
+      <div class="record-detections">
+        <span class="record-det high">${detailLabel}</span>
+      </div>
+    </div>
+  `;
+}
+
 async function loadUserRecords() {
   if (!currentToken) {
     showToast('Please log in first');
@@ -1779,6 +2017,7 @@ async function loadUserRecords() {
       return `
         <div class="record-item">
           <span class="record-type ${record.type}">${typeLabel}</span>
+          ${buildRecordStatusBadge(record)}
           <div class="record-meta">
             <strong>${timestamp}</strong><br>
             ${detections.length} detection${detections.length !== 1 ? 's' : ''} (≥50% confidence)
@@ -1828,6 +2067,199 @@ async function loadUserRecords() {
     listEl.innerHTML = `<div class="no-records">❌ Error loading records<br>${error.message}</div>`;
   }
 }
+
+window.loadExpertReview = async function loadExpertReview(filterName = currentExpertFilter || 'all') {
+  if (!currentToken || !currentUserIsExpert) return;
+
+  currentExpertFilter = String(filterName || 'all').toLowerCase();
+  const pendingListEl = document.getElementById('expert-pending-list');
+  const filterStateEl = document.getElementById('expert-filter-state');
+  if (pendingListEl) pendingListEl.innerHTML = '<div class="no-records">Loading expert queue...</div>';
+  if (filterStateEl) filterStateEl.textContent = `Showing ${getExpertFilterLabel(currentExpertFilter)}`;
+
+  try {
+    const [recordsRes, overridesRes] = await Promise.all([
+      fetch(`/expert/records?status=${encodeURIComponent(currentExpertFilter)}`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+      fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } })
+    ]);
+
+    if (!recordsRes.ok) throw new Error('Failed to load expert records');
+
+    const recordsData = await recordsRes.json();
+    const records = recordsData.records || [];
+    const overridesData = overridesRes.ok ? await overridesRes.json() : { overrides: {} };
+    const overrides = overridesData.overrides || {};
+    if (typeof loadExpertDiseaseOptions === 'function') {
+      loadExpertDiseaseOptions();
+    } else {
+      populateExpertDiseaseSelect();
+    }
+
+    const pending = records.filter(record => formatVerificationStatus(record.verification_status).cls === 'pending');
+    const pendingCountEl = document.getElementById('expert-pending-records');
+    const totalCountEl = document.getElementById('expert-total-records');
+    const overrideCountEl = document.getElementById('expert-override-count');
+    if (pendingCountEl) pendingCountEl.textContent = pending.length;
+    if (totalCountEl) totalCountEl.textContent = records.length;
+    if (overrideCountEl) overrideCountEl.textContent = Object.keys(overrides).length;
+
+    if (pendingListEl) {
+      pendingListEl.innerHTML = pending.length
+        ? pending.map((record, idx) => renderRecordCard(record, idx, { expert: true })).join('')
+        : '<div class="no-records">No pending uploads waiting for expert verification.</div>';
+    }
+
+    const statusEl = document.getElementById('expert-recommendation-status');
+    if (statusEl) {
+      statusEl.textContent = `Loaded ${records.length} ${getExpertFilterLabel(currentExpertFilter)} and ${Object.keys(overrides).length} expert overrides.`;
+    }
+    if (typeof loadExpertAuditLog === 'function') loadExpertAuditLog();
+  } catch (error) {
+    console.error('Error loading expert review:', error);
+    if (pendingListEl) pendingListEl.innerHTML = `<div class="no-records">❌ Error loading expert queue<br>${error.message}</div>`;
+  }
+};
+
+window.loadExpertAuditLog = async function loadExpertAuditLog() {
+  if (!currentToken || !currentUserIsExpert) return;
+
+  const auditListEl = document.getElementById('expert-audit-list');
+  if (auditListEl) auditListEl.innerHTML = '<div class="no-records">Loading audit log...</div>';
+
+  try {
+    const res = await fetch('/expert/audit-log?limit=50', {
+      headers: { 'Authorization': `Bearer ${currentToken}` }
+    });
+    if (!res.ok) throw new Error('Failed to load audit log');
+    const data = await res.json();
+    const events = data.events || [];
+    if (auditListEl) {
+      auditListEl.innerHTML = events.length
+        ? events.map(renderAuditEntry).join('')
+        : '<div class="no-records">No expert actions recorded yet.</div>';
+    }
+  } catch (error) {
+    console.error('Error loading audit log:', error);
+    if (auditListEl) auditListEl.innerHTML = `<div class="no-records">❌ Error loading audit log<br>${error.message}</div>`;
+  }
+};
+
+window.loadExpertRecommendation = async function loadExpertRecommendation(diseaseName) {
+  if (!currentToken || !currentUserIsExpert) return;
+
+  const diseaseInput = document.getElementById('expert-disease-name');
+  const fertilizerInput = document.getElementById('expert-fertilizer');
+  const treatmentInput = document.getElementById('expert-treatment');
+  const preventionInput = document.getElementById('expert-prevention');
+  const noteInput = document.getElementById('expert-note');
+  const statusEl = document.getElementById('expert-recommendation-status');
+  const disease = (diseaseName || diseaseInput?.value || '').trim();
+
+  if (!disease) {
+    showToast('Enter a disease name first');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/expert/recommendations/${encodeURIComponent(disease)}`, {
+      headers: { 'Authorization': `Bearer ${currentToken}` }
+    });
+    if (!res.ok) throw new Error('Failed to load recommendation');
+
+    const data = await res.json();
+    const override = data.override || {};
+    if (diseaseInput) diseaseInput.value = override.disease || disease;
+    if (fertilizerInput) fertilizerInput.value = override.fertilizer || '';
+    if (treatmentInput) treatmentInput.value = override.treatment || '';
+    if (preventionInput) preventionInput.value = Array.isArray(override.prevention) ? override.prevention.join('\n') : '';
+    if (noteInput) noteInput.value = override.note || '';
+    if (statusEl) statusEl.textContent = override.active === false ? 'Loaded a disabled override.' : 'Loaded recommendation override data.';
+  } catch (error) {
+    console.error('Error loading expert recommendation:', error);
+    showToast('Could not load recommendation');
+  }
+};
+
+window.saveExpertRecommendation = async function saveExpertRecommendation() {
+  if (!currentToken || !currentUserIsExpert) return;
+
+  const diseaseInput = document.getElementById('expert-disease-name');
+  const fertilizerInput = document.getElementById('expert-fertilizer');
+  const treatmentInput = document.getElementById('expert-treatment');
+  const preventionInput = document.getElementById('expert-prevention');
+  const noteInput = document.getElementById('expert-note');
+  const statusEl = document.getElementById('expert-recommendation-status');
+
+  const disease = (diseaseInput?.value || '').trim();
+  if (!disease) {
+    showToast('Please enter a disease name');
+    return;
+  }
+
+  const payload = {
+    disease,
+    fertilizer: fertilizerInput?.value || '',
+    treatment: treatmentInput?.value || '',
+    prevention: (preventionInput?.value || '').split('\n').map(line => line.trim()).filter(Boolean),
+    note: noteInput?.value || '',
+    active: true
+  };
+
+  try {
+    const res = await fetch(`/expert/recommendations/${encodeURIComponent(disease)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${currentToken}`
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to save recommendation');
+    }
+
+    if (statusEl) statusEl.textContent = `Saved expert override for ${disease}.`;
+    showToast(`Saved recommendation for ${disease}`);
+    if (typeof loadExpertReview === 'function') {
+      loadExpertReview();
+    }
+  } catch (error) {
+    console.error('Error saving expert recommendation:', error);
+    showToast(`Save failed: ${error.message}`);
+  }
+};
+
+window.verifyExpertRecord = async function verifyExpertRecord(userId, recordId, status = 'verified') {
+  if (!currentToken || !currentUserIsExpert) return;
+  if (!userId || !recordId) {
+    showToast('Missing record identifiers');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/expert/records/${encodeURIComponent(userId)}/${encodeURIComponent(recordId)}/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${currentToken}`
+      },
+      body: JSON.stringify({ status })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to verify record');
+    }
+
+    showToast('Record verified');
+    if (typeof loadExpertReview === 'function') loadExpertReview();
+    if (typeof loadUserRecords === 'function') loadUserRecords();
+    if (typeof loadDashboardStats === 'function') loadDashboardStats();
+  } catch (error) {
+    console.error('Error verifying record:', error);
+    showToast(`Verification failed: ${error.message}`);
+  }
+};
 
 // Initialize auth UI when page loads
 document.addEventListener('DOMContentLoaded', () => {

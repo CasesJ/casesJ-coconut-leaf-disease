@@ -326,6 +326,20 @@ Tokens last 1 hour. After that:
 - Firebase SDK auto-refreshes
 - If stuck, logout/login
 
+### Promote a Firebase user to expert
+
+Use the repo script when you want to give an existing Firebase user the expert role:
+```bash
+python tools/promote_to_expert.py --email expert2@gmail.com --password adminexpert12345
+```
+
+If the user already exists and you only want to change the role, omit `--password`:
+```bash
+python tools/promote_to_expert.py --email someone@example.com
+```
+
+This sets the Firebase custom claim `role=expert`, which the app uses to unlock the expert dashboard and verification tools.
+
 ### Problem: WebSocket "Token not provided" error
 
 **Symptoms:**
