@@ -444,6 +444,17 @@
       .map-two-col { grid-template-columns:1fr; gap:var(--spacing-md); }
     }
     .map-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap:clamp(0.6rem, 2vw, 0.75rem); margin-top:var(--spacing-md); }
+    .area-monitoring-card { margin-bottom:var(--spacing-md); }
+    .area-monitoring-intro { padding:var(--spacing-sm) var(--spacing-md) 0; color:var(--text3); font-size:var(--text-sm); line-height:1.55; }
+    .area-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.7rem; padding:var(--spacing-md); }
+    .area-card { border:1px solid rgba(11,42,31,0.09); border-left:4px solid #94a3b8; border-radius:10px; padding:0.85rem; background:linear-gradient(145deg,#fff,#f7faf6); cursor:pointer; transition:transform .18s, box-shadow .18s; }
+    .area-card:hover { transform:translateY(-2px); box-shadow:0 5px 14px rgba(11,42,31,0.08); }
+    .area-card h5 { margin:0 0 0.35rem; color:var(--deep); font-size:var(--text-sm); }
+    .area-prevalence { font-size:1.45rem; font-weight:700; color:var(--deep); }
+    .area-meta { color:var(--text3); font-size:var(--text-xs); margin-top:0.25rem; }
+    .area-bar { height:5px; border-radius:5px; background:#e8eee8; overflow:hidden; margin-top:0.65rem; }
+    .area-bar span { display:block; height:100%; border-radius:inherit; }
+    @media(max-width:640px) { .area-grid { grid-template-columns:1fr; } }
 
     /* RECORDS PANEL */
     .records-container { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); width:100%; max-width:none; }
@@ -1303,6 +1314,15 @@
   <div id="panel-map" class="panel">
     <div class="panels">
       <p class="section-label">Disease Location Map</p>
+      <div class="map-card area-monitoring-card">
+        <div class="map-head">
+          <h4>Area-Based Disease Monitoring</h4>
+          <button class="btn btn-o" onclick="loadAreaMonitoring()" style="padding:6px 12px;font-size:12px">Refresh areas</button>
+        </div>
+        <div class="area-monitoring-intro">Uploaded-image GPS coordinates are grouped into four easy-to-locate farm areas. Prevalence is the share of GPS-tagged image samples in an area with at least one disease detection.</div>
+        <div id="area-monitoring-summary" class="map-stats" style="padding:0 var(--spacing-md);"><div class="no-events" style="grid-column:1/-1;padding:1rem">Loading area monitoring…</div></div>
+        <div id="area-monitoring-grid" class="area-grid"><div class="no-events" style="grid-column:1/-1;padding:1rem">No GPS-tagged samples yet.</div></div>
+      </div>
       <div class="map-two-col">
       <div>
         <div class="map-card">

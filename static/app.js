@@ -683,6 +683,32 @@ window.addEventListener('load', () => {
     });
     
     mapsReady = true;
+
+    mainMap.addSource('area-monitoring-src', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mainMap.addLayer({
+      id: 'area-monitoring-fill', type: 'fill', source: 'area-monitoring-src',
+      paint: { 'fill-color': ['coalesce', ['get', 'color'], '#94a3b8'], 'fill-opacity': 0.26 }
+    });
+    mainMap.addLayer({
+      id: 'area-monitoring-outline', type: 'line', source: 'area-monitoring-src',
+      paint: { 'line-color': '#ffffff', 'line-width': 2 }
+    });
+    mainMap.addLayer({
+      id: 'area-monitoring-labels', type: 'symbol', source: 'area-monitoring-src',
+      layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['get', 'prevalence'], '% diseased'], 'text-size': 12, 'text-allow-overlap': true },
+      paint: { 'text-color': '#123b2b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
+    });
+    mainMap.on('click', 'area-monitoring-fill', (event) => {
+      const feature = event.features && event.features[0];
+      if (!feature) return;
+      const p = feature.properties || {};
+      new maplibregl.Popup({ offset: 12 }).setLngLat(event.lngLat).setHTML(`<strong>${p.name}</strong><br>${p.prevalence}% disease prevalence<br>${p.diseased} diseased / ${p.samples} GPS samples`).addTo(mainMap);
+    });
+    mainMap.on('mouseenter', 'area-monitoring-fill', () => { mainMap.getCanvas().style.cursor = 'pointer'; });
+    mainMap.on('mouseleave', 'area-monitoring-fill', () => { mainMap.getCanvas().style.cursor = ''; });
     
     // Add navigation controls for 3D (pitch, bearing, zoom)
     const nav = new maplibregl.NavigationControl({ visualizePitch: true });
@@ -738,6 +764,7 @@ function switchTab(name, btn) {
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
   if(name==='expert' && typeof loadExpertReview === 'function') loadExpertReview();
   if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
+  if(name==='map' && typeof loadAreaMonitoring === 'function') loadAreaMonitoring();
   if(name==='dashboard') {
     const statusPill = document.getElementById('drone-status-text');
     if (statusPill) statusPill.textContent = 'Drone Ready';
@@ -1245,6 +1272,75 @@ function setMapCenter(lat, lng){
     mainMap.flyTo({center: [lng, lat], zoom: 17});
   }
 }
+
+// ── Area-based GIS monitoring ──
+const AREA_MONITORING_BOUNDS = { minLat: 7.35140, maxLat: 7.35295, minLng: 125.64055, maxLng: 125.64215 };
+let areaMonitoringLoaded = false;
+
+function getRecordCoordinates(record) {
+  const gps = typeof record?.gps_data === 'string' ? (() => { try { return JSON.parse(record.gps_data); } catch (_) { return {}; } })() : (record?.gps_data || record?.gps || {});
+  const lat = Number(record?.lat ?? gps.latitude ?? gps.lat);
+  const lng = Number(record?.lng ?? gps.longitude ?? gps.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 ? { lat, lng } : null;
+}
+
+function areaColor(prevalence) {
+  if (prevalence >= 60) return '#dc2626';
+  if (prevalence >= 30) return '#f59e0b';
+  if (prevalence > 0) return '#84cc16';
+  return '#94a3b8';
+}
+
+function buildAreaFeatures(areas) {
+  return areas.map(area => ({
+    type: 'Feature',
+    properties: { name: area.name, prevalence: area.prevalence, diseased: area.diseased, samples: area.samples, color: area.color },
+    geometry: { type: 'Polygon', coordinates: [[
+      [area.minLng, area.minLat], [area.maxLng, area.minLat], [area.maxLng, area.maxLat], [area.minLng, area.maxLat], [area.minLng, area.minLat]
+    ]] }
+  }));
+}
+
+window.loadAreaMonitoring = async function loadAreaMonitoring() {
+  const gridEl = document.getElementById('area-monitoring-grid');
+  const summaryEl = document.getElementById('area-monitoring-summary');
+  if (!gridEl || !currentToken) return;
+  gridEl.innerHTML = '<div class="no-events" style="grid-column:1/-1;padding:1rem">Loading GPS-tagged samples…</div>';
+  try {
+    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
+    const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${currentToken}` } });
+    if (!response.ok) throw new Error('Unable to load disease records');
+    const payload = await response.json();
+    const records = Array.isArray(payload) ? payload : (payload.records || []);
+    const latStep = (AREA_MONITORING_BOUNDS.maxLat - AREA_MONITORING_BOUNDS.minLat) / 2;
+    const lngStep = (AREA_MONITORING_BOUNDS.maxLng - AREA_MONITORING_BOUNDS.minLng) / 2;
+    const areas = [];
+    for (let row = 0; row < 2; row++) for (let col = 0; col < 2; col++) {
+      areas.push({ name: `Area ${row * 2 + col + 1}`, row, col, minLat: AREA_MONITORING_BOUNDS.minLat + row * latStep, maxLat: AREA_MONITORING_BOUNDS.minLat + (row + 1) * latStep, minLng: AREA_MONITORING_BOUNDS.minLng + col * lngStep, maxLng: AREA_MONITORING_BOUNDS.minLng + (col + 1) * lngStep, samples: 0, diseased: 0 });
+    }
+    records.forEach(record => {
+      if (record.type && record.type !== 'upload' && record.source !== 'upload') return;
+      const point = getRecordCoordinates(record);
+      if (!point || point.lat < AREA_MONITORING_BOUNDS.minLat || point.lat > AREA_MONITORING_BOUNDS.maxLat || point.lng < AREA_MONITORING_BOUNDS.minLng || point.lng > AREA_MONITORING_BOUNDS.maxLng) return;
+      const col = Math.min(1, Math.floor((point.lng - AREA_MONITORING_BOUNDS.minLng) / lngStep));
+      const row = Math.min(1, Math.floor((point.lat - AREA_MONITORING_BOUNDS.minLat) / latStep));
+      const area = areas[row * 2 + col];
+      area.samples += 1;
+      if ((record.detections || []).some(det => !isHealthyClass(det.class))) area.diseased += 1;
+    });
+    areas.forEach(area => { area.prevalence = area.samples ? Math.round(area.diseased / area.samples * 100) : 0; area.color = areaColor(area.prevalence); });
+    const gpsSamples = areas.reduce((sum, area) => sum + area.samples, 0);
+    const diseasedSamples = areas.reduce((sum, area) => sum + area.diseased, 0);
+    const highest = [...areas].sort((a, b) => b.prevalence - a.prevalence)[0];
+    if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Disease Prevalence</h4><div class="stat-value">${gpsSamples ? Math.round(diseasedSamples / gpsSamples * 100) : 0}%</div><div class="stat-subtext">Across mapped areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${gpsSamples && highest.prevalence ? highest.name : '—'}</div><div class="stat-subtext">Highest disease prevalence</div></div>`;
+    gridEl.innerHTML = areas.map(area => `<div class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">${area.diseased} diseased / ${area.samples} GPS samples</div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></div>`).join('');
+    if (mapsReady && mainMap.getSource('area-monitoring-src')) mainMap.getSource('area-monitoring-src').setData({ type: 'FeatureCollection', features: buildAreaFeatures(areas) });
+    areaMonitoringLoaded = true;
+  } catch (error) {
+    console.error('Area monitoring error:', error);
+    gridEl.innerHTML = `<div class="no-events" style="grid-column:1/-1;padding:1rem">${error.message}</div>`;
+  }
+};
 
 function flyTo(i){
   const d=log[i];
