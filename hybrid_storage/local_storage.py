@@ -34,6 +34,8 @@ class DetectionRecord:
     verified_by: str = ""
     verified_by_uid: str = ""
     verified_at: str = ""
+    recommendation_snapshot: dict = None
+    recommendation_source: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -41,6 +43,8 @@ class DetectionRecord:
             data["inference_results"] = json.dumps(self.inference_results)
         if self.gps_data:
             data["gps_data"] = json.dumps(self.gps_data)
+        if self.recommendation_snapshot:
+            data["recommendation_snapshot"] = json.dumps(self.recommendation_snapshot)
         return data
 
 
@@ -98,6 +102,8 @@ class LocalStorageManager:
                     verified_by TEXT,
                     verified_by_uid TEXT,
                     verified_at TEXT,
+                    recommendation_snapshot TEXT,
+                    recommendation_source TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -108,6 +114,8 @@ class LocalStorageManager:
                 ("verified_by", "TEXT"),
                 ("verified_by_uid", "TEXT"),
                 ("verified_at", "TEXT"),
+                ("recommendation_snapshot", "TEXT"),
+                ("recommendation_source", "TEXT"),
             ):
                 try:
                     cursor.execute(f"ALTER TABLE detections ADD COLUMN {column_def[0]} {column_def[1]}")
@@ -168,8 +176,9 @@ class LocalStorageManager:
                         INSERT OR REPLACE INTO detections 
                         (id, user_id, email, timestamp, inference_results, gps_data, 
                          image_path, is_synced, sync_attempts, error_message,
-                         verification_status, verified_by, verified_by_uid, verified_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         verification_status, verified_by, verified_by_uid, verified_at,
+                         recommendation_snapshot, recommendation_source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             detection_record.id,
@@ -186,6 +195,8 @@ class LocalStorageManager:
                             detection_record.verified_by,
                             detection_record.verified_by_uid,
                             detection_record.verified_at,
+                            json.dumps(detection_record.recommendation_snapshot) if detection_record.recommendation_snapshot else None,
+                            detection_record.recommendation_source,
                         ),
                     )
                     conn.commit()
@@ -224,6 +235,8 @@ class LocalStorageManager:
                 "verified_by": record.verified_by,
                 "verified_by_uid": record.verified_by_uid,
                 "verified_at": record.verified_at,
+                "recommendation_snapshot": record.recommendation_snapshot,
+                "recommendation_source": record.recommendation_source,
             }
             
             with open(filename, "w") as f:
@@ -379,6 +392,8 @@ class LocalStorageManager:
             "verified_by",
             "verified_by_uid",
             "verified_at",
+            "recommendation_snapshot",
+            "recommendation_source",
         }
         updates = {key: value for key, value in fields.items() if key in allowed_fields}
         if not updates:
@@ -457,6 +472,11 @@ class LocalStorageManager:
         if data.get("gps_data"):
             try:
                 data["gps_data"] = json.loads(data["gps_data"])
+            except:
+                pass
+        if data.get("recommendation_snapshot"):
+            try:
+                data["recommendation_snapshot"] = json.loads(data["recommendation_snapshot"])
             except:
                 pass
         return data

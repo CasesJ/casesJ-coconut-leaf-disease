@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Any, Optional
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
@@ -266,6 +266,163 @@ def apply_expert_recommendation_override(base_recommendation: dict, disease_name
     merged["expert_override"] = override
     merged["source"] = "expert_override"
     return merged
+
+
+def build_recommendation_response(disease_name: str, confidence: float, lat: float = None, lng: float = None, accuracy: float = None) -> dict:
+    """Build the effective recommendation payload, including any expert override."""
+    import math
+
+    if not disease_name or not isinstance(disease_name, str):
+        raise ValueError("Invalid disease name provided")
+    if not isinstance(confidence, (int, float)) or confidence is None or math.isnan(confidence) or math.isinf(confidence):
+        raise ValueError("Invalid confidence value provided")
+
+    user_location = None
+    if lat is not None and lng is not None:
+        user_location = {
+            "lat": lat,
+            "lng": lng,
+            "accuracy": accuracy if accuracy else 10.0,
+        }
+
+    recommendations = detector.get_fertilizer_recommendation(
+        disease_name=disease_name,
+        confidence=confidence,
+        gps_data=None,
+        user_location=user_location,
+    )
+
+    prevention = recommendations.get("prevention", [])
+    if isinstance(prevention, str):
+        prevention = [prevention]
+
+    response = {
+        "disease": recommendations["disease"],
+        "confidence_percent": recommendations["confidence"],
+        "model_used": recommendations.get("model", "Unknown"),
+        "recommendations": {
+            "fertilizer": recommendations["fertilizer"],
+            "treatment": recommendations["treatment"],
+            "prevention": prevention,
+        },
+        "location": recommendations.get("location", {}),
+        "note": recommendations["note"],
+        "source": "default",
+    }
+    return apply_expert_recommendation_override(response, disease_name)
+
+
+def _find_record_for_user(user_id: str, record_id: str) -> dict | None:
+    """Look up a record across local storage and Firebase backends."""
+    try:
+        storage = get_local_storage()
+        record = storage.get_detection(record_id)
+        if record and (not user_id or str(record.get("user_id") or "") == str(user_id)):
+            return record
+    except Exception as error:
+        logger.warning(f"Local record lookup failed for {record_id}: {error}")
+
+    try:
+        ref = db.reference(f"users/{user_id}/uploads/{record_id}")
+        record = ref.get()
+        if isinstance(record, dict):
+            record.setdefault("id", record_id)
+            record.setdefault("user_id", user_id)
+            return record
+    except Exception as error:
+        logger.warning(f"RTDB record lookup failed for {record_id}: {error}")
+
+    if FIRESTORE_AVAILABLE:
+        try:
+            doc_ref = fs.collection("users").document(user_id).collection("detections").document(record_id)
+            snapshot = doc_ref.get()
+            if snapshot.exists:
+                record = snapshot.to_dict() or {}
+                record.setdefault("id", record_id)
+                record.setdefault("user_id", user_id)
+                return record
+        except Exception as error:
+            logger.warning(f"Firestore record lookup failed for {record_id}: {error}")
+
+    return None
+
+
+def _extract_primary_disease(record: dict) -> tuple[str, float]:
+    """Infer the primary disease and confidence from a record payload."""
+    detections = record.get("detections") or record.get("inference_results") or []
+    if isinstance(detections, str):
+        try:
+            detections = json.loads(detections)
+        except Exception:
+            detections = []
+    if not isinstance(detections, list):
+        detections = []
+
+    primary = None
+    if record.get("primaryDisease"):
+        primary = {
+            "class": str(record.get("primaryDisease") or ""),
+            "confidence": float(record.get("primaryConfidence") or record.get("primary_confidence") or 0),
+        }
+    elif detections:
+        primary = max(
+            (
+                {
+                    "class": str(det.get("class") or ""),
+                    "confidence": float(det.get("confidence") or 0),
+                }
+                for det in detections
+                if isinstance(det, dict)
+            ),
+            key=lambda item: item.get("confidence", 0),
+            default={"class": "", "confidence": 0},
+        )
+    else:
+        primary = {"class": "", "confidence": 0}
+
+    return primary.get("class", ""), float(primary.get("confidence", 0) or 0)
+
+
+def _sync_recommendation_snapshot_for_disease(disease_name: str) -> int:
+    """Update saved recommendation snapshots for all verified records of a disease."""
+    disease_key = normalize_disease_key(disease_name)
+    if not disease_key:
+        return 0
+
+    synced = 0
+    try:
+        recommendation = build_recommendation_response(disease_name=disease_name, confidence=0.85)
+    except Exception as error:
+        logger.warning(f"Could not build synced recommendation for {disease_name}: {error}")
+        return 0
+
+    try:
+        records = _get_all_user_records(limit=5000)
+    except Exception as error:
+        logger.warning(f"Could not collect records for recommendation sync: {error}")
+        return 0
+
+    for record in records:
+        if normalize_verification_status(record) != VERIFIED_STATUS:
+            continue
+
+        primary_disease, _confidence = _extract_primary_disease(record)
+        if normalize_disease_key(primary_disease) != disease_key:
+            continue
+
+        user_id = str(record.get("user_id") or "").strip()
+        record_id = str(record.get("id") or record.get("record_id") or "").strip()
+        if not user_id or not record_id:
+            continue
+
+        updates = {
+            "recommendation_snapshot": recommendation,
+            "recommendation_source": recommendation.get("source", "default"),
+        }
+        if _update_record_status_everywhere(user_id, record_id, updates):
+            synced += 1
+
+    return synced
 
 
 def apply_record_defaults(record: dict) -> dict:
@@ -784,45 +941,13 @@ async def get_recommendations(request: RecommendationRequest, lat: float = None,
                 "note": "Error: Invalid confidence value"
             }
         
-        # Prepare GPS data for recommendation
-        gps_data = None
-        user_location = None
-        
-        if lat is not None and lng is not None:
-            user_location = {
-                "lat": lat,
-                "lng": lng,
-                "accuracy": accuracy if accuracy else 10.0
-            }
-        
-        # Get recommendations from the detector model
-        recommendations = detector.get_fertilizer_recommendation(
+        return build_recommendation_response(
             disease_name=request.disease,
             confidence=request.confidence,
-            gps_data=None,  # Would come from image EXIF if available
-            user_location=user_location
+            lat=lat,
+            lng=lng,
+            accuracy=accuracy,
         )
-        
-        # Extract prevention list
-        prevention = recommendations.get('prevention', [])
-        if isinstance(prevention, str):
-            prevention = [prevention]
-        
-        # Format response for frontend
-        response = {
-            "disease": recommendations['disease'],
-            "confidence_percent": recommendations['confidence'],
-            "model_used": recommendations.get('model', 'Unknown'),
-            "recommendations": {
-                "fertilizer": recommendations['fertilizer'],
-                "treatment": recommendations['treatment'],
-                "prevention": prevention
-            },
-            "location": recommendations.get('location', {}),
-            "note": recommendations['note']
-        }
-        response = apply_expert_recommendation_override(response, request.disease)
-        return response
     except Exception as e:
         logger.error(f"Recommendation error: {str(e)}", exc_info=True)
         return {
@@ -1481,16 +1606,77 @@ async def verify_expert_record(
     if desired_status not in {PENDING_VERIFICATION_STATUS, VERIFIED_STATUS}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
 
+    record = _find_record_for_user(user_id, record_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+
+    detections = record.get("detections") or record.get("inference_results") or []
+    if isinstance(detections, str):
+        try:
+            detections = json.loads(detections)
+        except Exception:
+            detections = []
+    if not isinstance(detections, list):
+        detections = []
+
+    primary = None
+    if record.get("primaryDisease"):
+        primary = {
+            "class": str(record.get("primaryDisease") or ""),
+            "confidence": float(record.get("primaryConfidence") or record.get("primary_confidence") or (detections[0].get("confidence") if detections and isinstance(detections[0], dict) else 0) or 0),
+        }
+    elif detections:
+        primary = max(
+            (
+                {
+                    "class": str(det.get("class") or ""),
+                    "confidence": float(det.get("confidence") or 0),
+                }
+                for det in detections
+                if isinstance(det, dict)
+            ),
+            key=lambda item: item.get("confidence", 0),
+            default=None,
+        )
+
+    if not primary or not primary.get("class"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to determine record disease")
+
+    try:
+        recommendation_snapshot = build_recommendation_response(
+            disease_name=primary["class"],
+            confidence=primary["confidence"],
+        )
+    except Exception as error:
+        logger.warning(f"Could not build recommendation snapshot for {record_id}: {error}")
+        recommendation_snapshot = {
+            "disease": primary["class"],
+            "confidence_percent": round(float(primary["confidence"]) * 100, 2),
+            "model_used": "Unknown",
+            "recommendations": {
+                "fertilizer": "",
+                "treatment": "",
+                "prevention": [],
+            },
+            "location": {},
+            "note": "",
+            "source": "default",
+        }
+
     updates = {
         "verification_status": desired_status,
         "verified_by": decoded.get("email"),
         "verified_by_uid": decoded.get("uid"),
         "verified_at": datetime.now(timezone.utc).isoformat(),
+        "recommendation_snapshot": recommendation_snapshot,
+        "recommendation_source": recommendation_snapshot.get("source", "default"),
     }
     if desired_status == PENDING_VERIFICATION_STATUS:
         updates["verified_by"] = None
         updates["verified_by_uid"] = None
         updates["verified_at"] = None
+        updates["recommendation_snapshot"] = None
+        updates["recommendation_source"] = None
 
     updated = _update_record_status_everywhere(user_id, record_id, updates)
     if not updated:
@@ -1578,6 +1764,7 @@ async def update_expert_recommendation(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     save_expert_recommendations(overrides)
+    synced_count = _sync_recommendation_snapshot_for_disease(payload.disease or disease)
     append_expert_audit_event(
         action="update_recommendation",
         actor=decoded,
@@ -1588,12 +1775,14 @@ async def update_expert_recommendation(
         details={
             "active": payload.active,
             "prevention_count": len(payload.prevention or []),
+            "synced_records": synced_count,
         },
     )
     return {
         "message": "Recommendation override saved",
         "disease": disease,
         "override": overrides[disease_key],
+        "synced_records": synced_count,
     }
 
 
@@ -1803,9 +1992,11 @@ def login():
 
 @app.get("/favicon.ico")
 async def favicon():
-    """Serve favicon endpoint"""
-    # Return a 204 No Content response - browser will use the SVG data URI from HTML
-    return Response(status_code=204)
+    """Serve a real favicon so browsers do not keep an old cached icon."""
+    favicon_svg = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+  <text y='75' font-size='75'>🥥</text>
+</svg>"""
+    return Response(content=favicon_svg, media_type="image/svg+xml")
 
 
 def _is_port_available(host: str, port: int) -> bool:

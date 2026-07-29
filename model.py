@@ -20,52 +20,6 @@ except Exception:
 
 from openvino import Core
 
-# --- NEW DATA MINING INTEGRATION CLASS ---
-class CoconutDiseaseRegressorEngine:
-    """
-    Implements Random Forest Regressor to predict 12-month cumulative yield loss
-    based on leaf damage severity.
-    """
-    
-    def __init__(self):
-        """
-        Initializes the Random Forest Regressor for yield loss prediction.
-        Uses mathematical ensemble simulation without external dependencies.
-        """
-        pass
-
-    def calculate_yield_impact(self, class_id: int, infection_percentage: float) -> dict:
-        """
-        Evaluates Random Forest Regressor to predict 12-month harvest yield loss
-        based on disease severity.
-        
-        Args:
-            class_id: Disease class ID from YOLO detection
-            infection_percentage: Percentage of leaf area infected (0-100)
-        
-        Returns:
-            dict with Random Forest prediction and analysis
-        """
-        # Random Forest Ensemble Simulation
-        # Model: Ensemble averaging with non-linear weighting based on disease severity
-        # Mathematical basis: Weighted combination of decision paths
-        # Reduces variance through multi-path aggregation and class-specific coefficients
-        
-        # Base coefficients for different disease classes
-        high_severity_coefficient = 1.3 if class_id == 5 else 0.85
-        
-        # Random Forest formula: ensemble-based non-linear prediction
-        pred_rf = min(100.0, max(0.0, 
-            ((infection_percentage ** 1.08) * high_severity_coefficient) + 
-            (infection_percentage * 0.15)
-        ))
-
-        return {
-            "Random_Forest_Regressor_Loss": round(float(pred_rf), 2),
-            "Best_Performing_Technique": "Random Forest Regressor"
-        }
-
-
 class CoconutDiseaseDetector:
     def __init__(self):
         """Initialize detector using weights.pt when available, with OpenVINO fallback."""
@@ -124,10 +78,6 @@ class CoconutDiseaseDetector:
             self.active_model_path = model_xml
 
             print(f"[OK] Model loaded successfully. Input shape: {self.input_shape}")
-        
-        # ──── Instantiate Data Mining Regressor Engine ────
-        self.regressor_engine = CoconutDiseaseRegressorEngine()
-        print("[OK] Data mining regressor engine initialized (Random Forest Regressor)")
         
         # ──── Load ML Recommendation Models ────
         print("[OK] Loading ML recommendation classifiers...")
@@ -285,12 +235,7 @@ class CoconutDiseaseDetector:
             traceback.print_exc()
             return {
                 "detections": [],
-                "image": image,
-                "data_mining_analysis": {
-                    "leaf_severity_pct": 0.0,
-                    "yield_loss_prediction_pct": 0.0,
-                    "model_used": "Error - Analysis unavailable"
-                }
+                "image": image
             }
 
     def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50) -> dict:
@@ -376,20 +321,11 @@ class CoconutDiseaseDetector:
             "bbox": d['bbox']
         } for d in detections]
 
-        infection_percentage = (total_disease_bbox_area / image_total_area) * 100
-        data_mining_forecasts = self.regressor_engine.calculate_yield_impact(primary_class_id, infection_percentage)
-
         print(f"[OK] Successfully processed with {len(output_detections)} final detections")
-        print(f"[DATA MINING] Leaf severity: {infection_percentage:.2f}% | Best Model: {data_mining_forecasts['Best_Performing_Technique']}")
 
         return {
             "detections": output_detections,
-            "image": annotated_image,
-            "data_mining_analysis": {
-                "leaf_severity_pct": round(infection_percentage, 2),
-                "yield_loss_prediction_pct": data_mining_forecasts["Random_Forest_Regressor_Loss"],
-                "model_used": "Random Forest Regressor"
-            }
+            "image": annotated_image
         }
 
     def _predict_with_openvino(self, image: np.ndarray, conf: float = 50) -> dict:
@@ -427,8 +363,6 @@ class CoconutDiseaseDetector:
         # Output is already in pixel coordinates (0-640) and post-processed
 
         raw_detections = []  # Collect all detections first
-        total_disease_bbox_area = 0  # For data mining analysis
-        primary_class_id = 3  # Default fallback to healthy
 
         # Extract predictions from output shape [1, 300, 6]
         if len(output.shape) == 3:
@@ -465,12 +399,6 @@ class CoconutDiseaseDetector:
                     # Skip invalid boxes or very small detections
                     if x2 <= x1 or y2 <= y1:
                         continue
-
-                    # Data Mining Prep: Accumulate defect areas if leaf isn't completely healthy
-                    if class_id != 3:
-                        bbox_area = (x2 - x1) * (y2 - y1)
-                        total_disease_bbox_area += bbox_area
-                        primary_class_id = class_id  # Track the dominant issue
 
                     # Get class name
                     class_name = self.class_names.get(class_id, 'unknown')
@@ -523,22 +451,11 @@ class CoconutDiseaseDetector:
             "bbox": d['bbox']
         } for d in detections]
 
-        # --- EXECUTE THE 3 NEW REGRESSION ALGORITHMS ---
-        # Calculate what percentage of the image layout is structurally impaired
-        infection_percentage = (total_disease_bbox_area / image_total_area) * 100
-        data_mining_forecasts = self.regressor_engine.calculate_yield_impact(primary_class_id, infection_percentage)
-
         print(f"[OK] Successfully processed with {len(output_detections)} final detections")
-        print(f"[DATA MINING] Leaf severity: {infection_percentage:.2f}% | Best Model: {data_mining_forecasts['Best_Performing_Technique']}")
 
         return {
             "detections": output_detections,
-            "image": image,
-            "data_mining_analysis": {
-                "leaf_severity_pct": round(infection_percentage, 2),
-                "yield_loss_prediction_pct": data_mining_forecasts["Random_Forest_Regressor_Loss"],
-                "model_used": "Random Forest Regressor"
-            }
+            "image": image
         }
 
     def get_fertilizer_recommendation(self, disease_name: str, confidence: float, gps_data: dict = None, user_location: dict = None) -> dict:
@@ -662,7 +579,10 @@ class CoconutDiseaseDetector:
                 print(f"[WARNING] ML prediction failed: {e}, falling back to hardcoded recommendations")
                 import traceback
                 traceback.print_exc()
-        
+            return {
+                "detections": [],
+                "image": image
+            }
         # Fallback to hardcoded recommendations
         print(f"[FALLBACK] Using hardcoded recommendations")
         

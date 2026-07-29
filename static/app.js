@@ -2,6 +2,11 @@
 // Variables and Firebase initialization are in index.html <head>
 // This file defines all application functions that override the stubs
 
+// Compatibility shim for older cached bundles that referenced this identifier
+// before the record-level recommendation snapshot was wired through.
+var recommendationSnapshot = null;
+var currentExpertRecommendationTarget = null;
+
 // ── Auth UI Functions ──
 
 window.showError = function showError(message) {
@@ -203,6 +208,36 @@ function populateExpertDiseaseSelect(selectedValue = '') {
   }
 }
 
+function setExpertRecommendationDisease(diseaseName) {
+  const select = document.getElementById('expert-disease-name');
+  if (!select) return;
+
+  const normalized = String(diseaseName || '').trim();
+  if (!normalized) return;
+
+  const normalizedLower = normalized.toLowerCase();
+  const options = Array.from(select.options || []);
+  const match = options.find(option => String(option.value || option.textContent || '').trim().toLowerCase() === normalizedLower);
+  if (match) {
+    select.value = match.value;
+    return;
+  }
+
+  const customOption = document.createElement('option');
+  customOption.value = normalized;
+  customOption.textContent = normalized;
+  select.appendChild(customOption);
+  select.value = normalized;
+}
+
+function scrollToExpertRecommendationEditor() {
+  const statusEl = document.getElementById('expert-recommendation-status');
+  const editor = statusEl ? statusEl.closest('.records-container') : null;
+  if (editor && typeof editor.scrollIntoView === 'function') {
+    editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
 async function loadExpertDiseaseOptions() {
   try {
     const res = await fetch('/expert/diseases', {
@@ -314,7 +349,10 @@ window.loadDashboardStats = async function loadDashboardStats() {
     const payload = await response.json();
     const records = Array.isArray(payload) ? payload : (payload.records || []);
     const normalized = (records || []).map(normalizeRecordForDashboard);
-    const detectionItems = normalized.flatMap(record => record.detections || []);
+    const dashboardRecords = currentUserIsExpert
+      ? normalized
+      : normalized.filter(record => formatVerificationStatus(record.verification_status).cls === 'verified');
+    const detectionItems = dashboardRecords.flatMap(record => record.detections || []);
     const totalDetections = detectionItems.length;
     const diseaseCount = detectionItems.filter(det => isDiseaseClass(det.class)).length;
     const healthyCount = detectionItems.filter(det => isHealthyClass(det.class)).length;
@@ -327,7 +365,7 @@ window.loadDashboardStats = async function loadDashboardStats() {
     if (healthyEl) healthyEl.textContent = healthyCount;
 
     // Render analytics charts instead of records list
-    renderAnalyticsCharts(normalized);
+    renderAnalyticsCharts(dashboardRecords);
   } catch (error) {
     console.error('Error loading dashboard stats:', error);
   }
@@ -1276,6 +1314,7 @@ async function detectImage(file){
   }
   const uploadLoading = document.getElementById('upload-loading');
   const resultArea = document.getElementById('result-area');
+  const recsArea = document.getElementById('recommendations-area');
   const finishUpload = () => {
     const uploadLoading = document.getElementById('upload-loading');
     const uploadDrop = document.getElementById('upload-drop');
@@ -1286,6 +1325,10 @@ async function detectImage(file){
   };
   if (uploadLoading) uploadLoading.classList.add('on');
   if (resultArea) resultArea.style.display='none';
+  if (recsArea) {
+    recsArea.style.display = 'none';
+    recsArea.innerHTML = '';
+  }
   
   // ✅ CRITICAL FIX: Use the explicit farm coordinates instead of laptop geolocation
   const farmCenter = [125.64135, 7.35218];
@@ -1342,13 +1385,11 @@ function renderUpload(data){
   const feedToolbar = document.querySelector('.feed-toolbar');
   const uploadDrop = document.getElementById('upload-drop');
   const resultArea = document.getElementById('result-area');
-  const countBadge = document.getElementById('count-badge');
-  const detList = document.getElementById('det-list');
   const sTotal = document.getElementById('s-total');
   const sConf = document.getElementById('s-conf');
   const sStatus = document.getElementById('s-status');
   
-  if (!resultImg || !feedToolbar || !uploadDrop || !resultArea || !countBadge || !detList || !sTotal || !sConf || !sStatus) {
+  if (!resultImg || !feedToolbar || !uploadDrop || !resultArea || !sTotal || !sConf || !sStatus) {
     console.error('❌ Required DOM elements missing for renderUpload');
     return;
   }
@@ -1363,29 +1404,21 @@ function renderUpload(data){
   const allDetections = Array.isArray(data.detections) ? data.detections : [];
   const diseaseDetections = allDetections.filter(d => isDiseaseClass(d.class));
   const n = diseaseDetections.length;
-  // Count only disease detections so healthy predictions do not inflate the upload result count
-  if (countBadge) countBadge.textContent = n + ' found';
-  if (detList) {
-    detList.innerHTML = n === 0
-      ? '<div class="empty-state">No diseases detected</div>'
-      : diseaseDetections.map(d => {
-          const c = cls(d.class, d.confidence);
-          const pct = Math.round(d.confidence * 100);
-          return `<div class="ditem"><div class="ddot ${c}"></div><div class="dinfo"><div class="dlabel">${d.class.replace(/_/g,' ')}</div><div class="dbar-bg"><div class="dbar ${c}" style="width:${pct}%"></div></div><div class="dpct">${pct}% confidence</div></div></div>`;
-        }).join('');
-  }
-  const avg = n > 0 ? (diseaseDetections.reduce((a, d) => a + d.confidence, 0) / n * 100).toFixed(2) + '%' : '—';
+  const primary = n > 0
+    ? [...diseaseDetections].sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))[0]
+    : null;
+  const confText = primary ? `${(Number(primary.confidence || 0) * 100).toFixed(2)}%` : '—';
   const bad = n > 0;
   if (sTotal) sTotal.textContent = n;
-  if (sConf) sConf.textContent = avg;
+  if (sConf) sConf.textContent = confText;
   if (sStatus) {
     sStatus.textContent = n === 0 ? 'Clear' : 'Diseased';
     sStatus.style.color = bad ? 'var(--red)' : 'var(--accent)';
   }
   
   if (n > 0) {
-    const primary = diseaseDetections.reduce((a, d) => d.confidence > a.confidence ? d : a);
-    fetchRecommendation(primary.class, primary.confidence);
+    // Recommendations are now shown only after verification from the record cards.
+    // Keep the upload result focused on detection output.
   }
 }
 
@@ -1395,8 +1428,6 @@ function clearUploadResults(){
   const feedToolbar = document.querySelector('.feed-toolbar');
   const uploadDrop = document.getElementById('upload-drop');
   const fileInput = document.getElementById('fileInput');
-  const detList = document.getElementById('det-list');
-  const countBadge = document.getElementById('count-badge');
   const sTotal = document.getElementById('s-total');
   const sConf = document.getElementById('s-conf');
   const sStatus = document.getElementById('s-status');
@@ -1406,8 +1437,6 @@ function clearUploadResults(){
   if (feedToolbar) feedToolbar.style.display='';
   if (uploadDrop) uploadDrop.style.display='';
   if (fileInput) fileInput.value='';
-  if (detList) detList.innerHTML='<div class="empty-state">No detections yet</div>';
-  if (countBadge) countBadge.textContent='0 found';
   if (sTotal) sTotal.textContent='0';
   if (sConf) sConf.textContent='—';
   if (sStatus) {
@@ -1506,33 +1535,133 @@ function displayRecommendation(rec){
     return;
   }
   
-  // Handle prevention array - convert to readable list
-  const preventionText = Array.isArray(rec.recommendations.prevention)
-    ? rec.recommendations.prevention.join(' • ')
-    : rec.recommendations.prevention;
-  
-  recArea.innerHTML=`
-    <div class="rec-card">
-      <div class="rec-title">🌾 Farmer Recommendation — ${rec.disease} (${rec.confidence_percent}%)</div>
+  recArea.innerHTML = renderRecommendationCardHtml(rec);
+  recArea.style.display='block';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
+
+function getRecordKey(record, idx) {
+  return String(record?.id || record?.record_id || `${record?.user_id || 'record'}-${idx}`)
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function getPrimaryDetection(record) {
+  const detections = Array.isArray(record?.detections) ? record.detections : [];
+  if (record?.primaryDisease) {
+    return {
+      class: String(record.primaryDisease),
+      confidence: Number(record.primaryConfidence || record.primary_confidence || detections[0]?.confidence || 0)
+    };
+  }
+
+  if (!detections.length) {
+    return { class: 'Unknown', confidence: 0 };
+  }
+
+  const primary = detections.reduce((best, candidate) => (
+    Number(candidate?.confidence || 0) > Number(best?.confidence || 0) ? candidate : best
+  ), detections[0]);
+
+  return {
+    class: String(primary?.class || 'Unknown'),
+    confidence: Number(primary?.confidence || 0)
+  };
+}
+
+function renderRecommendationCardHtml(rec) {
+  const recommendation = rec?.recommendations || {};
+  const preventionText = Array.isArray(recommendation.prevention)
+    ? recommendation.prevention.join(' • ')
+    : recommendation.prevention;
+  const sourceLabel = rec?.source === 'expert_override' ? 'Expert edited recommendation' : 'Default recommendation';
+
+  return `
+    <div class="rec-card" style="margin-top:10px;">
+      <div class="rec-title">Recommendation - ${escapeHtml(rec?.disease || 'Unknown')} (${escapeHtml(rec?.confidence_percent ?? '0')}%)</div>
+      <div style="margin-top:4px;font-size:11px;color:var(--text3);">${escapeHtml(sourceLabel)}</div>
       <div class="rec-item">
-        <div class="rec-label">🧪 Fertilizer</div>
-        <div class="rec-text">${rec.recommendations.fertilizer}</div>
+        <div class="rec-label">Fertilizer</div>
+        <div class="rec-text">${escapeHtml(recommendation.fertilizer || '')}</div>
       </div>
       <div class="rec-item">
-        <div class="rec-label">💊 Treatment</div>
-        <div class="rec-text">${rec.recommendations.treatment}</div>
+        <div class="rec-label">Treatment</div>
+        <div class="rec-text">${escapeHtml(recommendation.treatment || '')}</div>
       </div>
       <div class="rec-item">
-        <div class="rec-label">🛡️ Prevention</div>
-        <div class="rec-text">${preventionText}</div>
+        <div class="rec-label">Prevention</div>
+        <div class="rec-text">${escapeHtml(preventionText || '')}</div>
       </div>
       <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(11,42,31,.1); font-size:11px; color:var(--text3);">
-        ${rec.note}
+        ${escapeHtml(rec?.note || '')}
       </div>
     </div>
   `;
-  recArea.style.display='block';
 }
+
+window.toggleRecordRecommendation = async function toggleRecordRecommendation(recordKey, disease, confidence, buttonEl) {
+  if (!recordKey || !disease) {
+    showToast('Recommendation data is missing');
+    return;
+  }
+
+  const panel = document.getElementById(`record-recommendation-${recordKey}`);
+  if (!panel) return;
+
+  if (panel.style.display !== 'none' && panel.innerHTML.trim()) {
+    panel.style.display = 'none';
+    if (buttonEl) buttonEl.textContent = 'Recommendation';
+    return;
+  }
+
+  if (!currentToken) {
+    showToast('Please log in first');
+    return;
+  }
+
+  panel.innerHTML = '<div class="no-records">Loading recommendation...</div>';
+  panel.style.display = 'block';
+
+  try {
+    const response = await fetch('/recommendations/fertilizer', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${currentToken}`
+      },
+      body: JSON.stringify({
+        disease: String(disease).trim(),
+        confidence: Number(confidence || 0)
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `Failed to load recommendation (${response.status})`);
+    }
+
+    const data = await response.json();
+    panel.innerHTML = renderRecommendationCardHtml(data);
+    panel.dataset.loaded = '1';
+    panel.dataset.open = '1';
+    if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
+    return;
+  } catch (error) {
+    console.error('Error loading record recommendation:', error);
+    panel.innerHTML = `<div class="no-records">Could not load recommendation<br>${escapeHtml(error.message)}</div>`;
+    panel.dataset.loaded = '0';
+    showToast(`Could not load recommendation: ${error.message}`);
+    return;
+  }
+};
 
 // ── Drone ──
 let frameQueue=[], sendingFrame=false, droneFrameSkip=0;
@@ -1826,6 +1955,7 @@ function renderRecordCard(record, idx, options = {}) {
   const ownerLabel = record.email || record.user_id || 'Unknown farmer';
   const statusBadge = buildRecordStatusBadge(record);
   const previewImage = record.image_url || record.annotated_image_url || '';
+  const primary = getPrimaryDetection(record);
 
   let lat = null;
   let lng = null;
@@ -1879,7 +2009,7 @@ function renderRecordCard(record, idx, options = {}) {
   const expertActions = isExpertView && record.verification_status !== 'verified'
     ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
          <button class="btn btn-p" onclick="verifyExpertRecord('${record.user_id || ''}','${record.id || ''}')" style="padding:6px 12px;font-size:11px;">Mark Verified</button>
-         <button class="btn btn-o" onclick="loadExpertRecommendation('${(record.primaryDisease || (detections[0]?.class || '')).replace(/'/g, '&#39;')}')" style="padding:6px 12px;font-size:11px;">Edit Recommendation</button>
+         <button class="btn btn-o" onclick="editExpertRecommendation('${(primary.class || record.primaryDisease || (detections[0]?.class || '')).replace(/'/g, '&#39;')}', ${primary.confidence || 0}, '${(record.user_id || '').replace(/'/g, '&#39;')}', '${(record.id || '').replace(/'/g, '&#39;')}')" style="padding:6px 12px;font-size:11px;">Edit Recommendation</button>
        </div>`
     : '';
 
@@ -1965,6 +2095,9 @@ async function loadUserRecords() {
       const timestamp = new Date(record.timestamp).toLocaleString();
       const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
       const detections = record.detections || [];
+      const status = formatVerificationStatus(record.verification_status);
+      const primary = getPrimaryDetection(record);
+      const recordKey = getRecordKey(record, idx);
       
       // ✅ Handle GPS from ALL possible sources with ALWAYS-AVAILABLE fallback
       let lat = null;
@@ -2007,12 +2140,21 @@ async function loadUserRecords() {
       // Build location display with map button
       let locationDisplay = '';
       const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+      const recommendationButtonHtml = status.cls === 'verified'
+        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)' style="padding:6px 12px;font-size:11px;margin-top:8px;background:#f0b429;color:#0e1c15;border:none;border-radius:4px;cursor:pointer;"><span>＋ Recommendation</span></button>`
+        : `<button class="btn btn-o" disabled style="padding:6px 12px;font-size:11px;margin-top:8px;background:#edf1ec;color:#7a9a8a;border:none;border-radius:4px;cursor:not-allowed;"><span>＋ Recommendation (Pending)</span></button>`;
       locationDisplay = `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
         <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Location Detected</div>
         <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
         <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
-        ${mapButtonHtml}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;align-items:center;">
+          ${mapButtonHtml}
+          ${recommendationButtonHtml}
+        </div>
       </div>`;
+      const recommendationPanel = status.cls === 'verified'
+        ? `<div id="record-recommendation-${recordKey}" data-loaded="0" style="display:none;margin-top:10px;"></div>`
+        : '';
       
       return `
         <div class="record-item">
@@ -2026,6 +2168,7 @@ async function loadUserRecords() {
             ${detections.map(d => `<span class="record-det high">${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`).join('')}
           </div>
           ${locationDisplay}
+          ${recommendationPanel}
         </div>
       `;
     }).join('');
@@ -2144,8 +2287,11 @@ window.loadExpertAuditLog = async function loadExpertAuditLog() {
   }
 };
 
-window.loadExpertRecommendation = async function loadExpertRecommendation(diseaseName) {
+window.loadExpertRecommendation = async function loadExpertRecommendation(diseaseName, confidence, target = null) {
   if (!currentToken || !currentUserIsExpert) return;
+  currentExpertRecommendationTarget = target && target.userId && target.recordId
+    ? { userId: target.userId, recordId: target.recordId }
+    : null;
 
   const diseaseInput = document.getElementById('expert-disease-name');
   const fertilizerInput = document.getElementById('expert-fertilizer');
@@ -2154,6 +2300,7 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   const noteInput = document.getElementById('expert-note');
   const statusEl = document.getElementById('expert-recommendation-status');
   const disease = (diseaseName || diseaseInput?.value || '').trim();
+  const confValue = Number(confidence ?? 0.85);
 
   if (!disease) {
     showToast('Enter a disease name first');
@@ -2161,23 +2308,39 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   }
 
   try {
-    const res = await fetch(`/expert/recommendations/${encodeURIComponent(disease)}`, {
-      headers: { 'Authorization': `Bearer ${currentToken}` }
+    const res = await fetch('/recommendations/fertilizer', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${currentToken}`
+      },
+      body: JSON.stringify({
+        disease,
+        confidence: Number.isFinite(confValue) ? confValue : 0.85
+      })
     });
     if (!res.ok) throw new Error('Failed to load recommendation');
 
     const data = await res.json();
-    const override = data.override || {};
-    if (diseaseInput) diseaseInput.value = override.disease || disease;
-    if (fertilizerInput) fertilizerInput.value = override.fertilizer || '';
-    if (treatmentInput) treatmentInput.value = override.treatment || '';
-    if (preventionInput) preventionInput.value = Array.isArray(override.prevention) ? override.prevention.join('\n') : '';
-    if (noteInput) noteInput.value = override.note || '';
-    if (statusEl) statusEl.textContent = override.active === false ? 'Loaded a disabled override.' : 'Loaded recommendation override data.';
+    const recommendation = data.recommendations || {};
+    if (diseaseInput) setExpertRecommendationDisease(data.disease || disease);
+    if (fertilizerInput) fertilizerInput.value = recommendation.fertilizer || '';
+    if (treatmentInput) treatmentInput.value = recommendation.treatment || '';
+    if (preventionInput) preventionInput.value = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : '';
+    if (noteInput) noteInput.value = data.note || '';
+    if (statusEl) statusEl.textContent = data.source === 'expert_override' ? 'Loaded expert-edited recommendation data.' : 'Loaded default recommendation data.';
+    scrollToExpertRecommendationEditor();
+    if (diseaseInput) diseaseInput.focus();
   } catch (error) {
     console.error('Error loading expert recommendation:', error);
     showToast('Could not load recommendation');
   }
+};
+
+window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId) {
+  if (!currentToken || !currentUserIsExpert) return;
+  await loadExpertRecommendation(diseaseName, confidence, { userId, recordId });
+  scrollToExpertRecommendationEditor();
 };
 
 window.saveExpertRecommendation = async function saveExpertRecommendation() {
@@ -2221,7 +2384,16 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
 
     if (statusEl) statusEl.textContent = `Saved expert override for ${disease}.`;
     showToast(`Saved recommendation for ${disease}`);
-    if (typeof loadExpertReview === 'function') {
+
+    const target = currentExpertRecommendationTarget;
+    if (target && target.userId && target.recordId) {
+      if (statusEl) statusEl.textContent = `Saved recommendation for ${disease} and verifying the record...`;
+      await verifyExpertRecord(target.userId, target.recordId, 'verified');
+      currentExpertRecommendationTarget = null;
+      if (typeof loadExpertReview === 'function') {
+        loadExpertReview();
+      }
+    } else if (typeof loadExpertReview === 'function') {
       loadExpertReview();
     }
   } catch (error) {
