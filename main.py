@@ -681,6 +681,8 @@ class ExpertRecommendationUpdate(BaseModel):
     prevention: list[str]
     note: str | None = None
     active: bool = True
+    target_user_id: str | None = None
+    target_record_id: str | None = None
 
 
 class VerificationUpdate(BaseModel):
@@ -1765,17 +1767,62 @@ async def update_expert_recommendation(
     }
     save_expert_recommendations(overrides)
     synced_count = _sync_recommendation_snapshot_for_disease(payload.disease or disease)
+
+    direct_record_synced = False
+    target_user_id = str(payload.target_user_id or "").strip()
+    target_record_id = str(payload.target_record_id or "").strip()
+    if target_user_id and target_record_id:
+        target_record = _find_record_for_user(target_user_id, target_record_id)
+        if target_record:
+            try:
+                target_primary_disease, target_primary_confidence = _extract_primary_disease(target_record)
+                expert_snapshot = {
+                    "disease": payload.disease or target_primary_disease or disease,
+                    "confidence_percent": round(float(target_primary_confidence or 0) * 100, 2),
+                    "model_used": "Expert Override",
+                    "recommendations": {
+                        "fertilizer": payload.fertilizer,
+                        "treatment": payload.treatment,
+                        "prevention": payload.prevention,
+                    },
+                    "location": {
+                        "lat": target_record.get("lat"),
+                        "lng": target_record.get("lng"),
+                        "source": target_record.get("gps_source") or target_record.get("location_source") or "",
+                    },
+                    "note": payload.note or "",
+                    "source": "expert_override",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                direct_record_synced = _update_record_status_everywhere(
+                    target_user_id,
+                    target_record_id,
+                    {
+                        "verification_status": VERIFIED_STATUS,
+                        "verified_by": decoded.get("email"),
+                        "verified_by_uid": decoded.get("uid"),
+                        "verified_at": datetime.now(timezone.utc).isoformat(),
+                        "recommendation_snapshot": expert_snapshot,
+                        "recommendation_source": "expert_override",
+                    },
+                )
+            except Exception as error:
+                logger.warning(f"Could not sync exact expert record {target_record_id}: {error}")
+
     append_expert_audit_event(
         action="update_recommendation",
         actor=decoded,
         target={
             "disease": disease,
             "disease_key": disease_key,
+            "user_id": payload.target_user_id,
+            "record_id": payload.target_record_id,
         },
         details={
             "active": payload.active,
             "prevention_count": len(payload.prevention or []),
             "synced_records": synced_count,
+            "direct_record_synced": direct_record_synced,
         },
     )
     return {
@@ -1783,6 +1830,7 @@ async def update_expert_recommendation(
         "disease": disease,
         "override": overrides[disease_key],
         "synced_records": synced_count,
+        "direct_record_synced": direct_record_synced,
     }
 
 

@@ -1344,7 +1344,7 @@
   <!-- Records Panel -->
   <div id="panel-records" class="panel">
     <div class="panels">
-      <p class="section-label">My Detection Records</p>
+      <p class="section-label" id="records-section-label">My Detection Records</p>
       <!-- Disease Stats -->
       <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
         <div class="stat-box">
@@ -1364,7 +1364,7 @@
         </div>
       </div>
 
-      <div class="records-container">
+      <div class="records-container" id="detection-history-container">
         <div class="records-head">
           <h4>Detection History (>= 50% Confidence)</h4>
           <div style="display:flex;gap:8px;">
@@ -1428,11 +1428,14 @@
         </div>
       </div>
 
-      <div class="records-container">
+      <div class="records-container hidden" id="expert-recommendation-editor">
         <div class="records-head">
           <h4>Recommendation Editor</h4>
         </div>
         <div style="display:grid;gap:12px;padding:16px;">
+          <div style="font-size:12px;color:var(--text3);line-height:1.5;">
+            Click <strong>Edit Recommendation</strong> on a pending record to open this editor and load that record's disease recommendation.
+          </div>
           <div class="form-group" style="margin-bottom:0;">
             <label for="expert-disease-name" style="display:block;">Disease</label>
             <select id="expert-disease-name" style="width:100%;padding:12px;border:1px solid rgba(11,42,31,0.12);border-radius:8px;font-family:inherit;background:white;">

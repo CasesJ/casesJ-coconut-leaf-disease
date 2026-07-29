@@ -231,11 +231,15 @@ function setExpertRecommendationDisease(diseaseName) {
 }
 
 function scrollToExpertRecommendationEditor() {
-  const statusEl = document.getElementById('expert-recommendation-status');
-  const editor = statusEl ? statusEl.closest('.records-container') : null;
+  const editor = document.getElementById('expert-recommendation-editor');
   if (editor && typeof editor.scrollIntoView === 'function') {
     editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+}
+
+function openExpertRecommendationEditor() {
+  const editor = document.getElementById('expert-recommendation-editor');
+  if (editor) editor.classList.remove('hidden');
 }
 
 async function loadExpertDiseaseOptions() {
@@ -291,6 +295,12 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   setFarmerNavigationVisible(!currentUserIsExpert);
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = currentUserIsExpert ? 'block' : 'none';
+  const detectionHistoryContainer = document.getElementById('detection-history-container');
+  if (detectionHistoryContainer) detectionHistoryContainer.style.display = currentUserIsExpert ? 'none' : '';
+  const recordsStats = document.getElementById('records-stats');
+  if (recordsStats && currentUserIsExpert) recordsStats.style.display = 'none';
+  const recordsSectionLabel = document.getElementById('records-section-label');
+  if (recordsSectionLabel) recordsSectionLabel.textContent = currentUserIsExpert ? 'Expert Audit Log' : 'My Detection Records';
   
   // ✅ Load saved map pins from Firebase when user logs in
   loadSavedMapPins(user.uid);
@@ -316,6 +326,12 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   setFarmerNavigationVisible(true);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
+  const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
+  if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = 'none';
+  const detectionHistoryContainer = document.getElementById('detection-history-container');
+  if (detectionHistoryContainer) detectionHistoryContainer.style.display = '';
+  const recordsSectionLabel = document.getElementById('records-section-label');
+  if (recordsSectionLabel) recordsSectionLabel.textContent = 'My Detection Records';
   // ✅ Clear map when logging out
   clearPins();
 };
@@ -1622,45 +1638,16 @@ window.toggleRecordRecommendation = async function toggleRecordRecommendation(re
     return;
   }
 
-  if (!currentToken) {
-    showToast('Please log in first');
-    return;
-  }
-
-  panel.innerHTML = '<div class="no-records">Loading recommendation...</div>';
-  panel.style.display = 'block';
-
-  try {
-    const response = await fetch('/recommendations/fertilizer', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${currentToken}`
-      },
-      body: JSON.stringify({
-        disease: String(disease).trim(),
-        confidence: Number(confidence || 0)
-      })
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.detail || `Failed to load recommendation (${response.status})`);
-    }
-
-    const data = await response.json();
-    panel.innerHTML = renderRecommendationCardHtml(data);
-    panel.dataset.loaded = '1';
-    panel.dataset.open = '1';
+  if (panel.dataset.loaded === '1' && panel.innerHTML.trim()) {
+    panel.style.display = 'block';
     if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
     return;
-  } catch (error) {
-    console.error('Error loading record recommendation:', error);
-    panel.innerHTML = `<div class="no-records">Could not load recommendation<br>${escapeHtml(error.message)}</div>`;
-    panel.dataset.loaded = '0';
-    showToast(`Could not load recommendation: ${error.message}`);
-    return;
   }
+
+  panel.innerHTML = '<div class="no-records">No saved expert recommendation for this verified record yet.</div>';
+  panel.dataset.loaded = '0';
+  panel.style.display = 'block';
+  if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
 };
 
 // ── Drone ──
@@ -1956,6 +1943,7 @@ function renderRecordCard(record, idx, options = {}) {
   const statusBadge = buildRecordStatusBadge(record);
   const previewImage = record.image_url || record.annotated_image_url || '';
   const primary = getPrimaryDetection(record);
+  const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot || null;
 
   let lat = null;
   let lng = null;
@@ -2098,6 +2086,7 @@ async function loadUserRecords() {
       const status = formatVerificationStatus(record.verification_status);
       const primary = getPrimaryDetection(record);
       const recordKey = getRecordKey(record, idx);
+      const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot || null;
       
       // ✅ Handle GPS from ALL possible sources with ALWAYS-AVAILABLE fallback
       let lat = null;
@@ -2153,7 +2142,7 @@ async function loadUserRecords() {
         </div>
       </div>`;
       const recommendationPanel = status.cls === 'verified'
-        ? `<div id="record-recommendation-${recordKey}" data-loaded="0" style="display:none;margin-top:10px;"></div>`
+        ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';
       
       return `
@@ -2292,6 +2281,7 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   currentExpertRecommendationTarget = target && target.userId && target.recordId
     ? { userId: target.userId, recordId: target.recordId }
     : null;
+  openExpertRecommendationEditor();
 
   const diseaseInput = document.getElementById('expert-disease-name');
   const fertilizerInput = document.getElementById('expert-fertilizer');
@@ -2339,6 +2329,7 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
 
 window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId) {
   if (!currentToken || !currentUserIsExpert) return;
+  openExpertRecommendationEditor();
   await loadExpertRecommendation(diseaseName, confidence, { userId, recordId });
   scrollToExpertRecommendationEditor();
 };
@@ -2368,6 +2359,11 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
     active: true
   };
 
+  if (currentExpertRecommendationTarget && currentExpertRecommendationTarget.userId && currentExpertRecommendationTarget.recordId) {
+    payload.target_user_id = currentExpertRecommendationTarget.userId;
+    payload.target_record_id = currentExpertRecommendationTarget.recordId;
+  }
+
   try {
     const res = await fetch(`/expert/recommendations/${encodeURIComponent(disease)}`, {
       method: 'PUT',
@@ -2384,14 +2380,17 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
 
     if (statusEl) statusEl.textContent = `Saved expert override for ${disease}.`;
     showToast(`Saved recommendation for ${disease}`);
+    openExpertRecommendationEditor();
 
     const target = currentExpertRecommendationTarget;
     if (target && target.userId && target.recordId) {
-      if (statusEl) statusEl.textContent = `Saved recommendation for ${disease} and verifying the record...`;
-      await verifyExpertRecord(target.userId, target.recordId, 'verified');
+      if (statusEl) statusEl.textContent = `Saved recommendation for ${disease} and marked the record verified.`;
       currentExpertRecommendationTarget = null;
       if (typeof loadExpertReview === 'function') {
         loadExpertReview();
+      }
+      if (typeof loadUserRecords === 'function') {
+        loadUserRecords();
       }
     } else if (typeof loadExpertReview === 'function') {
       loadExpertReview();
