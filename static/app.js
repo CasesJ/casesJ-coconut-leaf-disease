@@ -391,6 +391,12 @@ function normalizeDiseaseClass(label) {
   return String(label || '').toLowerCase().trim().replace(/_/g, ' ');
 }
 
+function formatDiseaseClass(label) {
+  const normalized = normalizeDiseaseClass(label);
+  if (normalized === 'bud root') return 'Bud Rot';
+  return normalized.replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function isHealthyClass(label) {
   return normalizeDiseaseClass(label) === 'healthy';
 }
@@ -505,6 +511,21 @@ function closeDetectionModal() {
   const modal = document.getElementById('record-modal');
   if (modal) modal.classList.add('hidden');
 }
+
+window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedLabel) {
+  const modal = document.getElementById('record-modal');
+  const title = document.getElementById('record-modal-title');
+  const subtitle = document.getElementById('record-modal-subtitle');
+  const content = document.getElementById('record-modal-content');
+  if (!modal || !title || !subtitle || !content) return;
+
+  const imageUrl = decodeURIComponent(encodedUrl || '');
+  const imageLabel = decodeURIComponent(encodedLabel || 'Detection image');
+  title.textContent = 'Detection Image';
+  subtitle.textContent = imageLabel;
+  content.innerHTML = `<img src="${imageUrl}" alt="${imageLabel}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
+  modal.classList.remove('hidden');
+};
 
 function getTreatmentRecommendation(diseaseName) {
   const normalized = String(diseaseName).toLowerCase();
@@ -866,7 +887,7 @@ function aggregateWeeklyDetections(records) {
 
   const labels = weeks.map(item => item.label);
   const datasets = classOrder.map(className => ({
-    label: className.replace(/\b\w/g, c => c.toUpperCase()),
+    label: formatDiseaseClass(className),
     data: weeks.map(week => week.counts[className] || 0),
     borderColor: getDetectionClassColor(className),
     backgroundColor: hexToRgba(getDetectionClassColor(className), 0.14),
@@ -964,7 +985,7 @@ function renderHealthDistributionChart(distribution) {
   }
   if (healthDistributionChart) healthDistributionChart.destroy();
   
-  const labels = distribution?.labels || ['No detections'];
+  const labels = (distribution?.labels || ['No detections']).map(formatDiseaseClass);
   const data = distribution?.data || [0];
   const colors = distribution?.colors || ['#64748b'];
   const total = data.reduce((sum, value) => sum + (Number(value) || 0), 0) || 1;
@@ -1009,7 +1030,7 @@ function renderDetectionColorKey(distribution) {
   const container = document.getElementById('detection-color-key');
   if (!container) return;
 
-  const labels = ['healthy', 'caterpillars', 'cercospora', 'drying of leaflets', 'pestalotiopsis', 'bud root'];
+  const labels = ['healthy', 'caterpillars', 'cercospora', 'pestalotiopsis', 'bud root'];
   const present = new Set((distribution?.labels || []).map(normalizeDiseaseClass));
   const rows = labels.map(label => {
     const color = getDetectionClassColor(label);
@@ -1017,7 +1038,7 @@ function renderDetectionColorKey(distribution) {
     return `
       <div class="class-key-row ${isDetected ? 'active' : ''}">
         <span class="class-key-swatch" style="background:${color}"></span>
-        <span class="class-key-label">${label.replace(/\b\w/g, c => c.toUpperCase())}</span>
+        <span class="class-key-label">${formatDiseaseClass(label)}</span>
         <span class="class-key-value">${isDetected ? 'Detected' : 'No data'}</span>
       </div>
     `;
@@ -1273,6 +1294,26 @@ function setMapCenter(lat, lng){
   }
 }
 
+let recordLocationMarker = null;
+
+function showRecordLocationOnMap(lat, lng) {
+  if (!mapsReady || !mainMap) {
+    showToast('Map is still loading. Please try again.');
+    return;
+  }
+
+  if (recordLocationMarker) recordLocationMarker.remove();
+  const markerElement = createMarkerElement('#26865a');
+  const popup = new maplibregl.Popup({ offset: 25 })
+    .setHTML(`<b>Detection record location</b><br>Latitude: ${Number(lat).toFixed(6)}<br>Longitude: ${Number(lng).toFixed(6)}`);
+  recordLocationMarker = new maplibregl.Marker({ element: markerElement })
+    .setLngLat([lng, lat])
+    .setPopup(popup)
+    .addTo(mainMap);
+  mainMap.flyTo({ center: [lng, lat], zoom: 17 });
+  popup.addTo(mainMap);
+}
+
 // ── Area-based GIS monitoring ──
 const AREA_MONITORING_BOUNDS = { minLat: 7.35140, maxLat: 7.35295, minLng: 125.64055, maxLng: 125.64215 };
 let areaMonitoringLoaded = false;
@@ -1411,12 +1452,45 @@ function toggle3DView() {
 }
 
 // ── Upload ──
+let stagedUploadFile = null;
+
+function stageUploadImage(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Please choose an image file.');
+    return;
+  }
+
+  stagedUploadFile = file;
+  const confirmation = document.getElementById('upload-confirmation');
+  const fileName = document.getElementById('upload-confirmation-name');
+  if (fileName) fileName.textContent = `Ready to upload: ${file.name}`;
+  if (confirmation) confirmation.style.display = 'block';
+}
+
+window.confirmStagedUpload = function confirmStagedUpload() {
+  if (!stagedUploadFile) return;
+  const file = stagedUploadFile;
+  stagedUploadFile = null;
+  const confirmation = document.getElementById('upload-confirmation');
+  if (confirmation) confirmation.style.display = 'none';
+  detectImage(file);
+};
+
+window.cancelStagedUpload = function cancelStagedUpload() {
+  stagedUploadFile = null;
+  const confirmation = document.getElementById('upload-confirmation');
+  const fileInput = document.getElementById('fileInput');
+  if (confirmation) confirmation.style.display = 'none';
+  if (fileInput) fileInput.value = '';
+};
+
 function handleDrop(e){
   e.preventDefault();
   e.stopPropagation();
   const uploadDrop = document.getElementById('upload-drop');
   if (uploadDrop) uploadDrop.classList.remove('over');
-  const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))detectImage(f);else showToast('Please drop an image file.');
+  const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))stageUploadImage(f);else showToast('Please drop an image file.');
 }
 async function detectImage(file){
   if(!file)return;
@@ -2018,6 +2092,22 @@ function stopDrone(){
 }
 
 // ── Load User Detection Records ──
+let currentUserRecordsFilter = 'all';
+
+window.setUserRecordsFilter = function setUserRecordsFilter(filterName) {
+  currentUserRecordsFilter = ['all', 'pending', 'verified'].includes(filterName) ? filterName : 'all';
+
+  ['all', 'pending', 'verified'].forEach((filter) => {
+    const button = document.getElementById(`records-filter-${filter}`);
+    if (!button) return;
+    const isActive = filter === currentUserRecordsFilter;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+  });
+
+  loadUserRecords();
+};
+
 function formatVerificationStatus(status) {
   const normalized = String(status || 'pending_verification').toLowerCase();
   if (normalized === 'verified') return { label: 'Verified', cls: 'verified' };
@@ -2070,14 +2160,14 @@ function renderRecordCard(record, idx, options = {}) {
     gpsSource = 'farm_default';
   }
 
-  const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+  const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
   const imageLabel = record.filename || record.image_path || 'Unknown image';
   const imagePreviewHtml = previewImage
     ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
          <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Image Preview</div>
-         <a href="${previewImage}" target="_blank" rel="noreferrer" style="display:block;">
+         <button type="button" onclick="openRecordImageModal('${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer;">
            <img src="${previewImage}" alt="${imageLabel}" style="width:100%;max-height:280px;object-fit:cover;display:block;background:#eef6f1;" />
-         </a>
+         </button>
        </div>`
     : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
          No saved image file was found for this record yet.
@@ -2104,10 +2194,10 @@ function renderRecordCard(record, idx, options = {}) {
       <div class="record-meta">
         <strong>${timestamp}</strong><br>
         ${isExpertView ? `Farmer: ${ownerLabel}<br>` : ''}
-        ${detections.length} detection${detections.length !== 1 ? 's' : ''} (≥50% confidence)
+        ${detections.length} detection${detections.length !== 1 ? 's' : ''}
       </div>
       <div class="record-detections">
-        ${detections.map(d => `<span class="record-det high">${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`).join('')}
+        ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
       </div>
       ${isExpertView ? imagePreviewHtml : ''}
       ${locationDisplay}
@@ -2170,12 +2260,21 @@ async function loadUserRecords() {
     const data = await res.json();
     console.log('📊 User records:', data);
     
-    if (!data.records || data.records.length === 0) {
+    const allRecords = data.records || [];
+    if (allRecords.length === 0) {
       listEl.innerHTML = '<div class="no-records">No detection records yet.<br>Upload an image or start the drone to record detections.</div>';
       return;
     }
-    
-    listEl.innerHTML = data.records.map((record, idx) => {
+
+    const records = currentUserRecordsFilter === 'all'
+      ? allRecords
+      : allRecords.filter((record) => formatVerificationStatus(record.verification_status).cls === currentUserRecordsFilter);
+
+    if (records.length === 0) {
+      const statusLabel = currentUserRecordsFilter === 'pending' ? 'pending' : 'verified';
+      listEl.innerHTML = `<div class="no-records">No ${statusLabel} detection records yet.</div>`;
+    } else {
+      listEl.innerHTML = records.map((record, idx) => {
       const timestamp = new Date(record.timestamp).toLocaleString();
       const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
       const detections = record.detections || [];
@@ -2224,7 +2323,7 @@ async function loadUserRecords() {
       
       // Build location display with map button
       let locationDisplay = '';
-      const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));setMapCenter(${lat}, ${lng});showToast('📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)} (${gpsSource})')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+      const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
       const recommendationButtonHtml = status.cls === 'verified'
         ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)' style="padding:6px 12px;font-size:11px;margin-top:8px;background:#f0b429;color:#0e1c15;border:none;border-radius:4px;cursor:pointer;"><span>＋ Recommendation</span></button>`
         : `<button class="btn btn-o" disabled style="padding:6px 12px;font-size:11px;margin-top:8px;background:#edf1ec;color:#7a9a8a;border:none;border-radius:4px;cursor:not-allowed;"><span>＋ Recommendation (Pending)</span></button>`;
@@ -2247,23 +2346,24 @@ async function loadUserRecords() {
           ${buildRecordStatusBadge(record)}
           <div class="record-meta">
             <strong>${timestamp}</strong><br>
-            ${detections.length} detection${detections.length !== 1 ? 's' : ''} (≥50% confidence)
+            ${detections.length} detection${detections.length !== 1 ? 's' : ''}
           </div>
           <div class="record-detections">
-            ${detections.map(d => `<span class="record-det high">${d.class.replace(/_/g,' ')} ${Math.round(d.confidence*100)}%</span>`).join('')}
+            ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
           </div>
           ${locationDisplay}
           ${recommendationPanel}
         </div>
       `;
-    }).join('');
+      }).join('');
+    }
     
     // ✅ Calculate and display disease statistics
-    const totalRecords = data.records.length;
+    const totalRecords = allRecords.length;
     const allDetections = [];
     const diseaseCounts = {};
     
-    data.records.forEach(record => {
+    allRecords.forEach(record => {
       if (record.detections && Array.isArray(record.detections)) {
         record.detections.forEach(detection => {
           allDetections.push(detection);
@@ -2275,7 +2375,7 @@ async function loadUserRecords() {
     
     const totalDiseases = allDetections.length;
     const mostCommonDisease = Object.keys(diseaseCounts).length > 0 
-      ? Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0].replace(/_/g, ' ')
+      ? formatDiseaseClass(Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0])
       : '—';
     
     // Update statistics display
