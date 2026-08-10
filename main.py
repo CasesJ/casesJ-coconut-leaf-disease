@@ -495,7 +495,7 @@ def apply_record_defaults(record: dict) -> dict:
     return record
 
 
-def _serialize_detection_payload(record_id: str, user_id: str, email: str, detections: list[dict], gps_data: dict, filename: str, source: str) -> dict:
+def _serialize_detection_payload(record_id: str, user_id: str, email: str, detections: list[dict], gps_data: dict, filename: str, source: str, image_metadata: Optional[dict] = None) -> dict:
     """Build the canonical upload record used across storage backends."""
     return {
         "id": record_id,
@@ -507,6 +507,7 @@ def _serialize_detection_payload(record_id: str, user_id: str, email: str, detec
         "source": source,
         "gps_data": gps_data,
         "filename": filename,
+        "image_metadata": image_metadata or {},
         "image_url": f"/static/uploads/{record_id}.jpg",
         "annotated_image_url": f"/static/annotated_uploads/{record_id}.jpg",
         "verification_status": PENDING_VERIFICATION_STATUS if source == "upload" else VERIFIED_STATUS,
@@ -1019,6 +1020,10 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     
     # Read image data
     contents = await file.read()
+    # Read DJI XMP as well as standard EXIF before OpenCV decodes the image.
+    # The original bytes are never rewritten, so embedded metadata is preserved.
+    metadata_reader = get_drone_gps() or init_drone_gps()
+    image_metadata = metadata_reader.extract_image_metadata(contents, file.filename)
     
     # ✅ FIXED: TRY TO EXTRACT GPS FROM EXIF FIRST, WITH BROWSER FALLBACK
     drone_gps = get_drone_gps()
@@ -1041,7 +1046,9 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
             lat = exif_gps.latitude
             lng = exif_gps.longitude
             gps_source = exif_gps.source
-            gps_accuracy = exif_gps.accuracy
+            # DJI images commonly omit GPSDOP; retain a usable documented estimate
+            # rather than failing while formatting/saving a valid EXIF location.
+            gps_accuracy = exif_gps.accuracy if exif_gps.accuracy is not None else 10.0
             print(f"[GPS] Source: {gps_source} | lat={lat:.6f}, lng={lng:.6f}, alt={exif_gps.altitude:.1f}m, accuracy={gps_accuracy:.1f}m")
         elif lat is not None and lng is not None:
             gps_source = "browser_geolocation"
@@ -1111,7 +1118,8 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                 detections=high_confidence_detections,
                 gps_data=gps_data,
                 filename=file.filename,
-                source="upload"
+                source="upload",
+                image_metadata=image_metadata,
             )
             detection_record.update(_save_upload_image_assets(record_id, image, result["image"]))
             
@@ -1213,7 +1221,8 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         "gps_lat": lat,
         "gps_lng": lng,
         "gps_accuracy": gps_accuracy,
-        "gps_source": gps_source
+        "gps_source": gps_source,
+        "image_metadata": image_metadata,
     }
 
 

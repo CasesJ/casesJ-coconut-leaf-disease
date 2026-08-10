@@ -7,6 +7,8 @@ from io import BytesIO
 
 from PIL import Image
 import piexif
+import re
+from PIL.ExifTags import TAGS
 
 
 @dataclass
@@ -144,10 +146,12 @@ class DroneGPS:
                     return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
                 return None
 
-            gps = EXIFGPS(latitude=lat, longitude=lng, altitude=alt, accuracy=accuracy, source="exif")
+            metadata = self.extract_image_metadata(contents, filename)
+            source = "dji_exif" if metadata.get("is_dji") else "exif"
+            gps = EXIFGPS(latitude=lat, longitude=lng, altitude=alt, accuracy=accuracy, source=source)
             # store in history
             try:
-                self.add_position(lat, lng, alt=alt, accuracy=accuracy if accuracy is not None else 0.0, source="exif")
+                self.add_position(lat, lng, alt=alt, accuracy=accuracy if accuracy is not None else 0.0, source=source)
             except Exception:
                 pass
 
@@ -156,6 +160,73 @@ class DroneGPS:
             if fallback_coords:
                 return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
             return None
+
+    @staticmethod
+    def extract_image_metadata(contents: bytes, filename: str = "") -> dict:
+        """Read standard EXIF plus DJI's XMP telemetry without altering the upload.
+
+        DJI embeds useful flight fields in the image XMP block, which Pillow's EXIF
+        interface does not expose.  Only scalar, JSON-safe fields are returned.
+        """
+        metadata = {
+            "filename": filename or "",
+            "metadata_available": False,
+            "is_dji": False,
+            "camera_make": None,
+            "camera_model": None,
+            "captured_at": None,
+            "image_width": None,
+            "image_height": None,
+            "gps": None,
+            "dji_telemetry": {},
+        }
+        try:
+            image = Image.open(BytesIO(contents))
+            metadata["image_width"], metadata["image_height"] = image.size
+            exif = image.getexif()
+            exif_values = {TAGS.get(tag, str(tag)): value for tag, value in exif.items()}
+            make = exif_values.get("Make")
+            model = exif_values.get("Model")
+            metadata["camera_make"] = make.decode(errors="replace").strip() if isinstance(make, bytes) else str(make).strip() if make else None
+            metadata["camera_model"] = model.decode(errors="replace").strip() if isinstance(model, bytes) else str(model).strip() if model else None
+            captured_at = exif_values.get("DateTimeOriginal") or exif_values.get("DateTime")
+            metadata["captured_at"] = captured_at.decode(errors="replace") if isinstance(captured_at, bytes) else captured_at
+            metadata["metadata_available"] = bool(exif_values)
+        except Exception:
+            # OpenCV will produce the validation/inference error for non-images.
+            pass
+
+        # DJI XMP is UTF-8 XML inside JPEG APP1; matching its known scalar fields
+        # also handles files whose XMP namespace prefixes are malformed.
+        text = contents.decode("latin-1", errors="ignore")
+        metadata["is_dji"] = bool(
+            (metadata["camera_make"] and "dji" in metadata["camera_make"].lower())
+            or re.search(r"dji:(?:AbsoluteAltitude|RelativeAltitude|FlightYawDegree)|DJI", text, re.IGNORECASE)
+        )
+        xmp_fields = {
+            "AbsoluteAltitude": "absolute_altitude_m",
+            "RelativeAltitude": "relative_altitude_m",
+            "GimbalRollDegree": "gimbal_roll_deg",
+            "GimbalYawDegree": "gimbal_yaw_deg",
+            "GimbalPitchDegree": "gimbal_pitch_deg",
+            "FlightRollDegree": "flight_roll_deg",
+            "FlightYawDegree": "flight_yaw_deg",
+            "FlightPitchDegree": "flight_pitch_deg",
+            "FlightSpeed": "flight_speed_m_s",
+        }
+        telemetry = {}
+        for source_name, output_name in xmp_fields.items():
+            match = re.search(r"(?:dji:)?" + source_name + r"\s*=\s*[\"']([^\"']+)[\"']", text, re.IGNORECASE)
+            if not match:
+                match = re.search(r"<(?:dji:)?" + source_name + r"[^>]*>\s*([^<]+)\s*</", text, re.IGNORECASE)
+            if match:
+                try:
+                    telemetry[output_name] = float(match.group(1))
+                except ValueError:
+                    telemetry[output_name] = match.group(1).strip()
+        metadata["dji_telemetry"] = telemetry
+        metadata["metadata_available"] = metadata["metadata_available"] or bool(telemetry)
+        return metadata
 
 
 # Module-level singleton

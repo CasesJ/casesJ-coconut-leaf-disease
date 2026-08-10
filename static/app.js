@@ -121,6 +121,9 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
         currentUser = userCred.user;
         document.getElementById('auth-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.add('active');
+        // A signed-in account must always begin at the dashboard. Without this,
+        // the tab selected by the previously signed-out account remains visible.
+        switchTab('dashboard', document.querySelector('.nav-link[onclick*="dashboard"]'));
         updateUIOnLogin(userCred.user, verifyData);
         console.log('✅ Logged in and showing app');
       } else {
@@ -1561,10 +1564,16 @@ async function detectImage(file){
   const res = await fetch('/detect/image', fetchOpts);
   if (!res.ok) throw new Error('Server error ' + res.status);
   const data = await res.json();
+  if (data.image_metadata?.is_dji) {
+    const camera = data.image_metadata.camera_model || 'DJI drone';
+    showToast(`DJI metadata read from ${camera}.`);
+  }
   const detections = Array.isArray(data.detections) ? data.detections : [];
   if (detections.length) {
     const primary = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
-    addPin(gps_lat+(Math.random()-.5)*.0003, gps_lng+(Math.random()-.5)*.0003, primary.class, primary.confidence, 'Upload');
+    const pinLat = Number.isFinite(data.gps_lat) ? data.gps_lat : gps_lat;
+    const pinLng = Number.isFinite(data.gps_lng) ? data.gps_lng : gps_lng;
+    addPin(pinLat, pinLng, primary.class, primary.confidence, data.image_metadata?.is_dji ? 'DJI Upload' : 'Upload');
   }
   return data;
 }
@@ -2146,7 +2155,6 @@ function buildRecordStatusBadge(record) {
 
 function renderRecordCard(record, idx, options = {}) {
   const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
-  const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
   const detections = record.detections || [];
   const isExpertView = Boolean(options.expert);
   const ownerLabel = record.email || record.user_id || 'Unknown farmer';
@@ -2213,7 +2221,6 @@ function renderRecordCard(record, idx, options = {}) {
 
   return `
     <div class="record-item">
-      <span class="record-type ${record.type || 'upload'}">${typeLabel}</span>
       ${statusBadge}
       <div class="record-meta">
         <strong>${timestamp}</strong><br>
@@ -2291,7 +2298,7 @@ function renderExpertRecordsTable(records) {
 
     return `<tr>
       <td>${imageCell}</td>
-      <td><strong>${escapeHtml(imageLabel)}</strong><br><span class="expert-table-muted">${escapeHtml(record.type === 'upload' ? 'Upload' : 'Drone')}</span></td>
+      <td><strong>${escapeHtml(imageLabel)}</strong></td>
       <td>${escapeHtml(owner)}</td>
       <td>${escapeHtml(formatDiseaseClass(disease))}<br><span class="expert-table-muted">${Math.round(confidence * 100)}% confidence</span></td>
       <td>${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round((d.confidence || 0) * 100)}%</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
@@ -2381,7 +2388,6 @@ async function loadUserRecords() {
     } else {
       listEl.innerHTML = records.map((record, idx) => {
       const timestamp = new Date(record.timestamp).toLocaleString();
-      const typeLabel = record.type === 'upload' ? 'Upload' : 'Drone';
       const detections = record.detections || [];
       const status = formatVerificationStatus(record.verification_status);
       const primary = getPrimaryDetection(record);
@@ -2447,7 +2453,6 @@ async function loadUserRecords() {
       
       return `
         <div class="record-item">
-          <span class="record-type ${record.type}">${typeLabel}</span>
           ${buildRecordStatusBadge(record)}
           <div class="record-meta">
             <strong>${timestamp}</strong><br>

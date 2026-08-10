@@ -1117,7 +1117,7 @@
     console.log('✅ Global scope setup complete');
   </script>
   <!-- Load app functions - will override stubs -->
-  <script src="static/app.js?v=automatic-disease-20260810"></script>
+  <script src="static/app.js?v=hide-record-source-20260810"></script>
 </head>
 <body>
 
@@ -1212,7 +1212,6 @@
   </div>
   <div class="header-right">
     <div id="auth-status" style="display:flex;gap:16px;align-items:center;">
-      <div class="hbadge g"><span class="pulse g"></span>YOLO11 Active</div>
       <button class="btn btn-p" style="display:none;padding:8px 16px;font-size:12px;white-space:nowrap;" id="login-btn">
         <svg style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         Login
@@ -1221,6 +1220,7 @@
         <div class="user-info">
           <div id="user-email" class="user-email"></div>
         </div>
+        <button class="logout-btn" type="button" onclick="logout()">Logout</button>
       </div>
     </div>
   </div>
