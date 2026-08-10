@@ -588,9 +588,9 @@ class CoconutDiseaseDetector:
         
         recommendations = {
             'bud root': {
-                'fertilizer': 'Use slow-release potassium-rich fertilizer (NPK 10:10:20) only AFTER disease control. Avoid high-nitrogen fertilizers.',
-                'treatment': 'PRIMARY: Metalaxyl-based fungicide - spray 0.2% solution into central bud every 7-10 days for 3-4 applications (most effective). ALTERNATIVE: Copper-based (Bordeaux 1% or copper hydroxide 0.5%) sprayed every 2 weeks. SURGICAL: Remove affected spear leaf if only buds infected; apply fungicide paste to cuts. COMBO: Start metalaxyl (weeks 1-3), then copper (weeks 4+).',
-                'prevention': 'CRITICAL: Ensure excellent soil drainage (Phytophthora thrives in wet soil). Remove infected fronds immediately. Maintain 8-9m spacing for air circulation. Avoid crown injuries. Inspect central bud weekly during rainy season. Monitor for yellowing/browning.'
+                'fertilizer': 'Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.',
+                'treatment': 'Treat as urgent Phytophthora bud rot: contact the Philippine Coconut Authority or local agricultural office. Remove and safely destroy badly rotted tissue as directed. A trained applicator may use a locally registered phosphonate, metalaxyl, or copper hydroxide product directed to leaf axils/cankers strictly at the product label rate.',
+                'prevention': 'Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown.'
             },
             'caterpillars': {
                 'fertilizer': 'Use NPK 10:10:10 balanced fertilizer monthly to boost tree vigor and recovery.',
@@ -598,14 +598,19 @@ class CoconutDiseaseDetector:
                 'prevention': 'Monitor leaves regularly for egg clusters and caterpillar droppings. Remove heavily infested fronds. Encourage natural predators like birds and parasitic wasps. Maintain tree vigor.'
             },
             'cercospora': {
-                'fertilizer': 'Apply potassium-rich fertilizer (NPK 8:8:16) to improve leaf resistance. Every 4 weeks during treatment.',
-                'treatment': 'PRIMARY: Spray Chlorothalonil (0.75%) weekly for 4-5 weeks. ALTERNATIVE: Copper-based fungicide (Bordeaux 1% or copper hydroxide 0.5%) every 10 days. COMBINATION: Alternate Chlorothalonil and Mancozeb (0.2%) weekly to prevent fungicide resistance. Prune ALL heavily infected leaves and burn them (do not compost).',
-                'prevention': 'Remove fallen leaves immediately. Space trees 8-9m apart for air circulation. Water at soil level, avoid wetting leaves. Ensure good drainage. Sanitize pruning tools with bleach between cuts.'
+                'fertilizer': 'Fertilize from a soil or leaf analysis. Maintain adequate potassium and chloride nutrition—PCA notes that KCl can increase coconut resistance to leaf-spot diseases. Do not apply fertilizer to replace sanitation or fungicide treatment.',
+                'treatment': 'Prune only heavily affected fronds and remove them from the farm. Have the diagnosis confirmed, then use only a fungicide registered locally for coconut leaf spot, following the label for product, rate, interval, protective equipment, and pre-harvest restrictions.',
+                'prevention': 'Maintain clean culture: remove diseased fallen leaves, improve spacing and airflow, avoid prolonged leaf wetness where possible, keep drainage working, and disinfect pruning tools between palms.'
             },
             'drying of leaflets': {
-                'fertilizer': 'CRITICAL: Apply Magnesium sulfate (Epsom salt) 1-2kg per tree monthly. NPK 12:8:20 with micronutrients (Zn, Fe, B) weekly via foliar spray for 6-8 weeks. Soil application every 3 months.',
-                'treatment': 'Foliar spray with potassium nitrate (2%) or potassium chloride (3%) twice weekly for 6 weeks. Include micronutrient complex (boron, zinc, iron). Systemic fungicide Carbendazim (0.1%) if fungal secondary infection suspected.',
-                'prevention': 'Water deeply 2-3 times weekly during dry season (morning and evening). Mulch 10cm around base to retain soil moisture. Use drip irrigation for consistent water delivery. Monitor soil pH (coconut prefers 5.5-8.0). Improve soil with compost/coconut husk.'
+                'fertilizer': 'Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.',
+                'treatment': 'Confirm whether the symptom is leaf rot, nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.',
+                'prevention': 'Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early.'
+            },
+            'leaf rot': {
+                'fertilizer': 'Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.',
+                'treatment': 'Confirm whether the symptom is leaf rot, nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.',
+                'prevention': 'Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early.'
             },
             'healthy': {
                 'fertilizer': 'Apply balanced NPK 12:12:12 every 3 months. Use phosphate rich during flowering season.',
@@ -613,9 +618,9 @@ class CoconutDiseaseDetector:
                 'prevention': 'Maintain regular fertilization. Water consistently. Remove dead leaves. Monitor for pests.'
             },
             'pestalotiopsis': {
-                'fertilizer': 'Use NPK 10:10:20 with Zinc supplement (5-10kg Zn per hectare annually). Apply monthly during treatment to strengthen tree immunity.',
-                'treatment': 'PRIMARY: Copper-based fungicide (Bordeaux mixture 1% or copper hydroxide 0.5%) sprayed every 10 days for 6-8 weeks. ALTERNATIVE: Azoxystrobin (0.1%) or Carbendazim (0.1%) every 7-10 days. CRITICAL: Remove ALL infected/dead fronds and burn them (not compost). Apply fungicide paste to all cut surfaces.',
-                'prevention': 'Prune dead/weak branches regularly to improve air circulation. Ensure excellent soil drainage. Remove fallen diseased fronds immediately. Maintain tree vigor with consistent fertilization. Space trees properly. Avoid wounding trees (main infection route).'
+                'fertilizer': 'Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.',
+                'treatment': 'Practice clean culture: prune and remove severely infected leaves and debris. After confirmation, apply only a fungicide registered locally for coconut fungal leaf spot, following its label exactly. Seek local extension advice before treating tall palms or widespread disease.',
+                'prevention': 'Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather.'
             }
         }
         

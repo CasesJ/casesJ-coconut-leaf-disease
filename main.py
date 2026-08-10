@@ -47,9 +47,19 @@ from hybrid_storage.local_storage import get_local_storage, DetectionRecord
 
 # CSV Export functionality
 import csv
-from io import StringIO
+from io import BytesIO, StringIO
 from fastapi.responses import StreamingResponse
 from collections import defaultdict
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Flowable, Image, KeepTogether
+from reportlab.pdfgen.canvas import Canvas
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.20
 UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.20
@@ -255,11 +265,13 @@ def apply_expert_recommendation_override(base_recommendation: dict, disease_name
         return base_recommendation
 
     merged = dict(base_recommendation)
-    merged["fertilizer"] = override.get("fertilizer", merged.get("fertilizer"))
-    merged["treatment"] = override.get("treatment", merged.get("treatment"))
+    recommendation_data = dict(base_recommendation.get("recommendations", {}))
+    recommendation_data["fertilizer"] = override.get("fertilizer", recommendation_data.get("fertilizer"))
+    recommendation_data["treatment"] = override.get("treatment", recommendation_data.get("treatment"))
     prevention = override.get("prevention")
     if isinstance(prevention, list) and prevention:
-        merged["prevention"] = prevention
+        recommendation_data["prevention"] = prevention
+    merged["recommendations"] = recommendation_data
     note = override.get("note")
     if note:
         merged["note"] = f"{merged.get('note', '')} | Expert note: {note}".strip(" |")
@@ -1327,6 +1339,311 @@ async def export_detections_csv(request: Request):
 
 
 # ─── Get User's Detection Records ──────────────────────────────────────────────
+def build_user_records_pdf(records: list[dict], email: str) -> bytes:
+    """Build a compact, multi-page analytics report for one user's records."""
+    buffer = BytesIO()
+    report = canvas.Canvas(buffer, pagesize=A4, pageCompression=1)
+    width, height = A4
+    disease_stats = defaultdict(lambda: {"count": 0, "confidence": []})
+    status_counts = defaultdict(int)
+    source_counts = defaultdict(int)
+    monthly_counts = defaultdict(int)
+    total_detections = 0
+    dates = []
+
+    for record in records:
+        source_counts[str(record.get("type") or record.get("source") or "Upload").title()] += 1
+        status_counts[normalize_verification_status(record).replace("_", " ").title()] += 1
+        if record.get("timestamp"):
+            dates.append(str(record["timestamp"])[:10])
+            monthly_counts[str(record["timestamp"])[:7]] += 1
+        for detection in record.get("detections") or []:
+            disease = str(detection.get("class") or "Unknown")
+            disease_stats[disease]["count"] += 1
+            disease_stats[disease]["confidence"].append(float(detection.get("confidence") or 0))
+            total_detections += 1
+
+    def header(page_number: int) -> float:
+        report.setFillColor(colors.HexColor("#164d37"))
+        report.rect(0, height - 58, width, 58, fill=1, stroke=0)
+        report.setFillColor(colors.white)
+        report.setFont("Helvetica-Bold", 17)
+        report.drawString(42, height - 35, "Coconut Leaf Disease Analytics Report")
+        report.setFont("Helvetica", 8)
+        report.drawRightString(width - 42, height - 35, f"Page {page_number}")
+        report.setFillColor(colors.HexColor("#587364"))
+        report.setFont("Helvetica", 8)
+        report.drawString(42, height - 75, f"Prepared for: {email or 'User'}")
+        report.drawRightString(width - 42, height - 75, f"Generated: {datetime.now(timezone.utc).astimezone().strftime('%d %b %Y, %I:%M %p')}")
+        return height - 105
+
+    def section(title: str, y: float) -> float:
+        report.setFillColor(colors.HexColor("#164d37"))
+        report.setFont("Helvetica-Bold", 12)
+        report.drawString(42, y, title)
+        return y - 18
+
+    def text_line(label: str, value: str, y: float) -> float:
+        report.setFillColor(colors.HexColor("#1d2d25"))
+        report.setFont("Helvetica-Bold", 9)
+        report.drawString(48, y, label)
+        report.setFont("Helvetica", 9)
+        report.drawString(190, y, value[:78])
+        return y - 16
+
+    page = 1
+    y = header(page)
+    most_common = max(disease_stats, key=lambda key: disease_stats[key]["count"], default="No disease detected")
+    y = section("Summary", y)
+    y = text_line("Detection records", str(len(records)), y)
+    y = text_line("Total detections", str(total_detections), y)
+    y = text_line("Most common disease", most_common, y)
+    y = text_line("Date range", f"{min(dates)} to {max(dates)}" if dates else "No dated records", y)
+    y -= 8
+    y = section("Disease distribution", y)
+    report.setFillColor(colors.HexColor("#e8f3ec"))
+    report.rect(42, y - 14, width - 84, 18, fill=1, stroke=0)
+    report.setFillColor(colors.HexColor("#164d37"))
+    report.setFont("Helvetica-Bold", 8)
+    report.drawString(48, y - 2, "Disease")
+    report.drawString(270, y - 2, "Detections")
+    report.drawString(380, y - 2, "Average confidence")
+    y -= 30
+    for disease, data in sorted(disease_stats.items(), key=lambda item: item[1]["count"], reverse=True):
+        average = (sum(data["confidence"]) / len(data["confidence"]) * 100) if data["confidence"] else 0
+        report.setFillColor(colors.HexColor("#1d2d25"))
+        report.setFont("Helvetica", 9)
+        report.drawString(48, y, disease[:34])
+        report.drawString(282, y, str(data["count"]))
+        report.drawString(398, y, f"{average:.1f}%")
+        y -= 16
+    if not disease_stats:
+        report.setFont("Helvetica", 9)
+        report.drawString(48, y, "No detections recorded")
+        y -= 16
+    y -= 8
+    y = section("Record analytics", y)
+    y = text_line("Record sources", ", ".join(f"{name}: {count}" for name, count in sorted(source_counts.items())) or "-", y)
+    y = text_line("Verification status", ", ".join(f"{name}: {count}" for name, count in sorted(status_counts.items())) or "-", y)
+    y = text_line("Monthly record trend", ", ".join(f"{month}: {count}" for month, count in sorted(monthly_counts.items())) or "No dated records", y)
+
+    page += 1
+    report.showPage()
+    y = header(page)
+    y = section("Detection record details", y)
+    report.setFillColor(colors.HexColor("#e8f3ec"))
+    report.rect(42, y - 14, width - 84, 18, fill=1, stroke=0)
+    report.setFillColor(colors.HexColor("#164d37"))
+    report.setFont("Helvetica-Bold", 8)
+    report.drawString(48, y - 2, "Date")
+    report.drawString(126, y - 2, "Source")
+    report.drawString(190, y - 2, "Detections")
+    report.drawString(470, y - 2, "Status")
+    y -= 30
+    for record in records:
+        if y < 70:
+            page += 1
+            report.showPage()
+            y = header(page)
+            y = section("Detection record details (continued)", y)
+        detections = "; ".join(f"{item.get('class', 'Unknown')} ({float(item.get('confidence') or 0) * 100:.1f}%)" for item in record.get("detections") or []) or "No detections"
+        report.setFillColor(colors.HexColor("#1d2d25"))
+        report.setFont("Helvetica", 7.5)
+        report.drawString(48, y, str(record.get("timestamp") or "-")[:16].replace("T", " "))
+        report.drawString(126, y, str(record.get("type") or record.get("source") or "Upload")[:10])
+        report.drawString(190, y, detections[:48])
+        report.drawString(470, y, normalize_verification_status(record).replace("_", " ").title()[:14])
+        y -= 15
+    report.save()
+    return buffer.getvalue()
+
+
+class _NumberedReportCanvas(Canvas):
+    """Two-pass canvas for Page X of Y footers."""
+    def __init__(self, *args, **kwargs):
+        Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.setStrokeColor(colors.HexColor("#E2E8F0"))
+            self.line(16 * mm, 14 * mm, A4[0] - 16 * mm, 14 * mm)
+            self.setFillColor(colors.HexColor("#64748B"))
+            self.setFont("Helvetica", 7.5)
+            self.drawString(16 * mm, 9 * mm, "Confidential - Coconut Leaf Disease Analytics")
+            self.drawRightString(A4[0] - 16 * mm, 9 * mm, f"Generated {datetime.now(timezone.utc).astimezone().strftime('%d %b %Y %H:%M')} | Page {self._pageNumber} of {total_pages}")
+            Canvas.showPage(self)
+        Canvas.save(self)
+
+
+class _MetricCard(Flowable):
+    def __init__(self, value: str, label: str, width: float, height: float = 44 * mm):
+        Flowable.__init__(self)
+        self.value, self.label, self.width, self.height = value, label, width, height
+
+    def wrap(self, available_width, available_height):
+        return self.width, self.height
+
+    def draw(self):
+        self.canv.setFillColor(colors.HexColor("#F8FAFC"))
+        self.canv.setStrokeColor(colors.HexColor("#E2E8F0"))
+        self.canv.roundRect(0, 0, self.width, self.height, 4 * mm, fill=1, stroke=1)
+        self.canv.setFillColor(colors.HexColor("#164D37"))
+        self.canv.setFont("Helvetica-Bold", 17)
+        self.canv.drawCentredString(self.width / 2, 25 * mm, self.value[:23])
+        self.canv.setFillColor(colors.HexColor("#64748B"))
+        self.canv.setFont("Helvetica-Bold", 7.5)
+        self.canv.drawCentredString(self.width / 2, 14 * mm, self.label.upper())
+
+
+class _StatusBadge(Flowable):
+    def __init__(self, status: str):
+        Flowable.__init__(self)
+        self.status = status
+        self.width, self.height = 30 * mm, 8 * mm
+
+    def wrap(self, available_width, available_height):
+        return self.width, self.height
+
+    def draw(self):
+        verified = self.status.lower() == "verified"
+        self.canv.setFillColor(colors.HexColor("#D1FAE5" if verified else "#FEF3C7"))
+        self.canv.roundRect(0, 0, self.width, self.height, 3 * mm, fill=1, stroke=0)
+        self.canv.setFillColor(colors.HexColor("#059669" if verified else "#D97706"))
+        self.canv.setFont("Helvetica-Bold", 6.7)
+        self.canv.drawCentredString(self.width / 2, 2.8 * mm, self.status)
+
+
+def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
+    """Render the authenticated user's records as an executive-grade PDF dashboard."""
+    def title_case(value: Any) -> str:
+        return str(value or "-").replace("_", " ").strip().title()
+
+    def safe(value: Any) -> str:
+        return str(value or "-").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    disease_stats = defaultdict(lambda: {"count": 0, "confidence": []})
+    monthly_counts = defaultdict(int)
+    verified_records = 0
+    top_confidences = []
+    for record in records:
+        timestamp = str(record.get("timestamp") or "")
+        if timestamp:
+            monthly_counts[timestamp[:7]] += 1
+        status = title_case(normalize_verification_status(record))
+        verified_records += int(status == "Verified")
+        detections = record.get("detections") or []
+        if detections:
+            top_confidences.append(max(float(item.get("confidence") or 0) for item in detections))
+        for detection in detections:
+            disease = title_case(detection.get("class") or detection.get("disease") or "Unknown")
+            disease_stats[disease]["count"] += 1
+            disease_stats[disease]["confidence"].append(float(detection.get("confidence") or 0))
+
+    primary_disease = max(disease_stats, key=lambda item: disease_stats[item]["count"], default="No Detection")
+    average_top_confidence = (sum(top_confidences) / len(top_confidences) * 100) if top_confidences else 0
+    buffer = BytesIO()
+    page_width, page_height = A4
+    styles = getSampleStyleSheet()
+    normal = ParagraphStyle("ExecNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=8.2, leading=10.5, textColor=colors.HexColor("#334155"))
+    small = ParagraphStyle("ExecSmall", parent=normal, fontSize=7.3, leading=9)
+    table_header = ParagraphStyle("ExecTableHeader", parent=small, fontName="Helvetica-Bold", textColor=colors.white)
+    heading = ParagraphStyle("ExecHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=16, textColor=colors.HexColor("#164D37"), spaceBefore=5, spaceAfter=7)
+
+    def chart_image(kind: str) -> BytesIO:
+        figure, axis = plt.subplots(figsize=(5.5, 2.2), dpi=160)
+        figure.patch.set_facecolor("#FFFFFF")
+        if kind == "trend":
+            labels, values = zip(*sorted(monthly_counts.items())) if monthly_counts else (["No data"], [0])
+            axis.plot(labels, values, marker="o", linewidth=2.2, color="#15803D")
+            axis.fill_between(range(len(values)), values, color="#DCFCE7", alpha=0.75)
+            axis.set_title("Monthly record trend", loc="left", fontsize=10, fontweight="bold", color="#1E293B")
+            axis.set_ylabel("Records", fontsize=8)
+        else:
+            labels = list(disease_stats.keys()) or ["No detections"]
+            values = [disease_stats[item]["count"] for item in labels] or [0]
+            axis.barh(labels[::-1], values[::-1], color="#0F766E")
+            axis.set_title("Disease distribution", loc="left", fontsize=10, fontweight="bold", color="#1E293B")
+            axis.set_xlabel("Detections", fontsize=8)
+        axis.spines[["top", "right", "left"]].set_visible(False)
+        axis.grid(axis="y" if kind == "trend" else "x", color="#E2E8F0", linewidth=0.7)
+        axis.tick_params(labelsize=7, colors="#64748B")
+        figure.tight_layout(pad=1.0)
+        image_buffer = BytesIO()
+        figure.savefig(image_buffer, format="png", transparent=False)
+        plt.close(figure)
+        image_buffer.seek(0)
+        return image_buffer
+
+    def first_page(canvas_obj, doc):
+        canvas_obj.saveState()
+        canvas_obj.setFillColor(colors.HexColor("#123D2D"))
+        canvas_obj.rect(0, page_height - 20 * mm, page_width, 20 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.white)
+        canvas_obj.setFont("Helvetica-Bold", 16)
+        canvas_obj.drawString(16 * mm, page_height - 11 * mm, "Coconut Leaf Disease Analytics")
+        canvas_obj.setFont("Helvetica", 8.5)
+        canvas_obj.drawString(16 * mm, page_height - 16 * mm, f"Executive dashboard report | Prepared for {email or 'User'}")
+        canvas_obj.restoreState()
+
+    def later_pages(canvas_obj, doc):
+        canvas_obj.saveState()
+        canvas_obj.setFillColor(colors.HexColor("#123D2D"))
+        canvas_obj.rect(0, page_height - 14 * mm, page_width, 14 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.white)
+        canvas_obj.setFont("Helvetica-Bold", 9.5)
+        canvas_obj.drawString(16 * mm, page_height - 9 * mm, "Coconut Leaf Disease Analytics Report")
+        canvas_obj.restoreState()
+
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=27 * mm, bottomMargin=22 * mm, title="Coconut Leaf Disease Analytics Report")
+    card_column_width = (page_width - 32 * mm) / 4
+    card_width = card_column_width - 3 * mm
+    cards = Table([[ _MetricCard(str(len(records)), "Total Records", card_width), _MetricCard(primary_disease, "Primary Disease", card_width), _MetricCard(f"{average_top_confidence:.1f}%", "Avg. Top Confidence", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", card_width) ]], colWidths=[card_column_width] * 4)
+    cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+
+    distribution_rows = [[Paragraph("Disease", table_header), Paragraph("Detections", table_header), Paragraph("Avg. confidence", table_header)]]
+    for disease, values in sorted(disease_stats.items(), key=lambda item: item[1]["count"], reverse=True):
+        average = sum(values["confidence"]) / len(values["confidence"]) * 100
+        distribution_rows.append([Paragraph(safe(disease), small), Paragraph(str(values["count"]), small), Paragraph(f"{average:.1f}%", small)])
+    if len(distribution_rows) == 1:
+        distribution_rows.append([Paragraph("No detections", small), Paragraph("0", small), Paragraph("-", small)])
+    distribution_table = Table(distribution_rows, colWidths=[45 * mm, 27 * mm, 35 * mm], repeatRows=1)
+    distribution_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+
+    story = [Spacer(1, 4 * mm), cards, Spacer(1, 7 * mm), Paragraph("Analytics overview", heading)]
+    story.append(Table([[Image(chart_image("trend"), width=86 * mm, height=40 * mm), Image(chart_image("distribution"), width=86 * mm, height=40 * mm)]], colWidths=[88 * mm, 88 * mm], style=[("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("LEFTPADDING", (0, 0), (-1, -1), 2 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm), ("TOPPADDING", (0, 0), (-1, -1), 2 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 2 * mm)]))
+    story += [Spacer(1, 6 * mm), Paragraph("Disease distribution", heading), distribution_table, PageBreak(), Paragraph("Detection record details", heading)]
+
+    detail_rows = [[Paragraph("Date", table_header), Paragraph("Source", table_header), Paragraph("Detections", table_header), Paragraph("Status", table_header)]]
+    for record in records:
+        details = "; ".join(f"{title_case(item.get('class'))} ({float(item.get('confidence') or 0) * 100:.1f}%)" for item in record.get("detections") or []) or "No detections"
+        status = title_case(normalize_verification_status(record))
+        detail_rows.append([Paragraph(safe(str(record.get("timestamp") or "-")[:16].replace("T", " ")), small), Paragraph(safe(title_case(record.get("type") or record.get("source") or "Upload")), small), Paragraph(safe(details), small), _StatusBadge(status)])
+    if len(detail_rows) == 1:
+        detail_rows.append([Paragraph("No records available", small), Paragraph("-", small), Paragraph("-", small), _StatusBadge("Pending Verification")])
+    detail_table = Table(detail_rows, colWidths=[31 * mm, 25 * mm, 82 * mm, 43 * mm], repeatRows=1)
+    detail_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
+    story.append(detail_table)
+    document.build(story, onFirstPage=first_page, onLaterPages=later_pages, canvasmaker=_NumberedReportCanvas)
+    return buffer.getvalue()
+
+
+@app.get("/reports/my-records.pdf")
+async def download_my_records_pdf(decoded: dict = Depends(verify_firebase_token)):
+    """Return an authenticated user's detection analytics as a downloadable PDF."""
+    payload = await get_user_detections_endpoint(decoded)
+    pdf_bytes = build_executive_user_records_pdf(payload.get("records", []), payload.get("email", "User"))
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers={
+        "Content-Disposition": "attachment; filename=coconut-leaf-disease-analytics-report.pdf"
+    })
+
+
 @app.get("/detections/my-records")
 async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_token)):
     """Get all detection records for the logged-in user"""
@@ -1840,8 +2157,28 @@ async def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_
     if not is_expert_identity(decoded):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Expert access required")
 
+    events = read_expert_audit_events(limit=limit)
+    for event in events:
+        target = event.get("target") or {}
+        user_id = str(target.get("user_id") or "").strip()
+        record_id = str(target.get("record_id") or "").strip()
+        if not user_id or not record_id:
+            continue
+
+        record = _find_record_for_user(user_id, record_id)
+        if not record:
+            continue
+
+        event["upload"] = {
+            "user_id": user_id,
+            "email": str(record.get("email") or ""),
+            "filename": str(record.get("filename") or record.get("image_path") or ""),
+            "image_url": str(record.get("image_url") or ""),
+            "annotated_image_url": str(record.get("annotated_image_url") or ""),
+        }
+
     return {
-        "events": read_expert_audit_events(limit=limit),
+        "events": events,
         "limit": limit,
     }
 

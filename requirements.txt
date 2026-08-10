@@ -29,6 +29,8 @@ joblib>=1.3.0  # Model persistence
 opencv-python-headless>=4.8.0
 pillow>=10.0.0
 piexif>=1.1.3  # EXIF GPS extraction from drone photos
+reportlab>=4.0.0
+matplotlib>=3.8.0
 
 # ─── Inference Engines ────────────────────────────────────────────────────
 openvino>=2024.0.0

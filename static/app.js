@@ -169,15 +169,6 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   }
 };
 
-const EXPERT_DISEASE_OPTIONS = [
-  'Caterpillars',
-  'Cercospora',
-  'Drying of Leaflets',
-  'Healthy',
-  'Pestalotiopsis',
-  'Bud Root'
-];
-
 function setFarmerNavigationVisible(visible) {
   const uploadNav = document.getElementById('nav-upload-link');
   const mapNav = document.getElementById('nav-map-link');
@@ -185,49 +176,13 @@ function setFarmerNavigationVisible(visible) {
   if (mapNav) mapNav.style.display = visible ? '' : 'none';
 }
 
-function populateExpertDiseaseSelect(selectedValue = '') {
-  const select = document.getElementById('expert-disease-name');
-  if (!select) return;
-
-  const existing = select.value;
-  const targetValue = String(selectedValue || existing || '').trim();
-  const options = EXPERT_DISEASE_OPTIONS.slice();
-
-  select.innerHTML = '';
-  options.forEach(disease => {
-    const option = document.createElement('option');
-    option.value = disease;
-    option.textContent = disease;
-    select.appendChild(option);
-  });
-
-  if (targetValue && options.includes(targetValue)) {
-    select.value = targetValue;
-  } else if (options.length > 0) {
-    select.value = options[0];
-  }
-}
-
 function setExpertRecommendationDisease(diseaseName) {
-  const select = document.getElementById('expert-disease-name');
-  if (!select) return;
+  const input = document.getElementById('expert-disease-name');
+  if (!input) return;
 
   const normalized = String(diseaseName || '').trim();
   if (!normalized) return;
-
-  const normalizedLower = normalized.toLowerCase();
-  const options = Array.from(select.options || []);
-  const match = options.find(option => String(option.value || option.textContent || '').trim().toLowerCase() === normalizedLower);
-  if (match) {
-    select.value = match.value;
-    return;
-  }
-
-  const customOption = document.createElement('option');
-  customOption.value = normalized;
-  customOption.textContent = normalized;
-  select.appendChild(customOption);
-  select.value = normalized;
+  input.value = normalized;
 }
 
 function scrollToExpertRecommendationEditor() {
@@ -240,39 +195,6 @@ function scrollToExpertRecommendationEditor() {
 function openExpertRecommendationEditor() {
   const editor = document.getElementById('expert-recommendation-editor');
   if (editor) editor.classList.remove('hidden');
-}
-
-async function loadExpertDiseaseOptions() {
-  try {
-    const res = await fetch('/expert/diseases', {
-      headers: { 'Authorization': `Bearer ${currentToken}` }
-    });
-    if (!res.ok) {
-      populateExpertDiseaseSelect();
-      return;
-    }
-    const data = await res.json();
-    const diseases = Array.isArray(data.diseases) && data.diseases.length ? data.diseases : EXPERT_DISEASE_OPTIONS;
-    const select = document.getElementById('expert-disease-name');
-    if (!select) return;
-
-    const currentValue = select.value;
-    select.innerHTML = '';
-    diseases.forEach(disease => {
-      const option = document.createElement('option');
-      option.value = disease;
-      option.textContent = disease;
-      select.appendChild(option);
-    });
-    if (currentValue && diseases.includes(currentValue)) {
-      select.value = currentValue;
-    } else if (diseases.length > 0) {
-      select.value = diseases[0];
-    }
-  } catch (error) {
-    console.warn('Could not load expert disease options:', error);
-    populateExpertDiseaseSelect();
-  }
 }
 
 window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
@@ -395,6 +317,12 @@ function formatDiseaseClass(label) {
   const normalized = normalizeDiseaseClass(label);
   if (normalized === 'bud root') return 'Bud Rot';
   return normalized.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+const HIDDEN_ANALYTICS_CLASSES = new Set(['caterpillars', 'drying of leaflets']);
+
+function isAnalyticsClassVisible(label) {
+  return !HIDDEN_ANALYTICS_CLASSES.has(normalizeDiseaseClass(label));
 }
 
 function isHealthyClass(label) {
@@ -874,6 +802,7 @@ function aggregateWeeklyDetections(records) {
         (record.detections || []).forEach(det => {
           if (!det || !det.class) return;
           const className = normalizeDiseaseClass(det.class);
+          if (!isAnalyticsClassVisible(className)) return;
           const displayName = className === 'drying of leaflets' ? 'drying of leaflets' : className;
           if (!classSet.has(displayName)) {
             classSet.add(displayName);
@@ -926,6 +855,7 @@ function aggregateClassDistribution(records) {
     (record.detections || []).forEach(det => {
       if (!det || !det.class) return;
       const className = normalizeDiseaseClass(det.class);
+      if (!isAnalyticsClassVisible(className)) return;
       counts[className] = (counts[className] || 0) + 1;
     });
   });
@@ -1030,7 +960,7 @@ function renderDetectionColorKey(distribution) {
   const container = document.getElementById('detection-color-key');
   if (!container) return;
 
-  const labels = ['healthy', 'caterpillars', 'cercospora', 'pestalotiopsis', 'bud root'];
+  const labels = ['healthy', 'cercospora', 'leaf rot', 'pestalotiopsis', 'bud root'];
   const present = new Set((distribution?.labels || []).map(normalizeDiseaseClass));
   const rows = labels.map(label => {
     const color = getDetectionClassColor(label);
@@ -1452,33 +1382,45 @@ function toggle3DView() {
 }
 
 // ── Upload ──
-let stagedUploadFile = null;
+let stagedUploadFiles = [];
+let batchUploadResults = [];
+let activeBatchResultIndex = 0;
 
-function stageUploadImage(file) {
-  if (!file) return;
-  if (!file.type.startsWith('image/')) {
-    showToast('Please choose an image file.');
+function stageUploadImage(files) {
+  const selectedFiles = Array.from(files || []);
+  const imageFiles = selectedFiles.filter(file => file.type.startsWith('image/'));
+  if (!imageFiles.length) {
+    showToast('Please choose one or more image files.');
     return;
   }
 
-  stagedUploadFile = file;
+  const selectedFileKeys = new Set(stagedUploadFiles.map(file => `${file.name}:${file.size}:${file.lastModified}`));
+  const newFiles = imageFiles.filter(file => !selectedFileKeys.has(`${file.name}:${file.size}:${file.lastModified}`));
+  stagedUploadFiles = [...stagedUploadFiles, ...newFiles];
+  const fileInput = document.getElementById('fileInput');
+  // Reset the browser chooser so users can add more images in a separate selection.
+  if (fileInput) fileInput.value = '';
   const confirmation = document.getElementById('upload-confirmation');
   const fileName = document.getElementById('upload-confirmation-name');
-  if (fileName) fileName.textContent = `Ready to upload: ${file.name}`;
+  if (fileName) {
+    const names = stagedUploadFiles.slice(0, 3).map(file => file.name).join(', ');
+    const more = stagedUploadFiles.length > 3 ? ` and ${stagedUploadFiles.length - 3} more` : '';
+    fileName.textContent = `Ready to upload ${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'}: ${names}${more}`;
+  }
   if (confirmation) confirmation.style.display = 'block';
 }
 
-window.confirmStagedUpload = function confirmStagedUpload() {
-  if (!stagedUploadFile) return;
-  const file = stagedUploadFile;
-  stagedUploadFile = null;
+window.confirmStagedUpload = async function confirmStagedUpload() {
+  if (!stagedUploadFiles.length) return;
+  const files = stagedUploadFiles;
+  stagedUploadFiles = [];
   const confirmation = document.getElementById('upload-confirmation');
   if (confirmation) confirmation.style.display = 'none';
-  detectImage(file);
+  await detectImages(files);
 };
 
 window.cancelStagedUpload = function cancelStagedUpload() {
-  stagedUploadFile = null;
+  stagedUploadFiles = [];
   const confirmation = document.getElementById('upload-confirmation');
   const fileInput = document.getElementById('fileInput');
   if (confirmation) confirmation.style.display = 'none';
@@ -1490,32 +1432,108 @@ function handleDrop(e){
   e.stopPropagation();
   const uploadDrop = document.getElementById('upload-drop');
   if (uploadDrop) uploadDrop.classList.remove('over');
-  const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))stageUploadImage(f);else showToast('Please drop an image file.');
+  stageUploadImage(e.dataTransfer.files);
 }
+async function detectImages(files) {
+  if (!files.length) return;
+  if (!currentUser) {
+    showToast('Session expired, please refresh');
+    return;
+  }
+  const uploadLoading = document.getElementById('upload-loading');
+  const loadingText = document.getElementById('upload-loading-text');
+  const resultArea = document.getElementById('result-area');
+  const recsArea = document.getElementById('recommendations-area');
+  const batchResults = document.getElementById('batch-results');
+  if (uploadLoading) uploadLoading.classList.add('on');
+  if (resultArea) resultArea.style.display = 'none';
+  if (recsArea) {
+    recsArea.style.display = 'none';
+    recsArea.innerHTML = '';
+  }
+  if (batchResults) {
+    batchResults.style.display = 'none';
+    batchResults.innerHTML = '';
+  }
+
+  let completed = 0;
+  const completedResults = [];
+  for (const [index, file] of files.entries()) {
+    if (loadingText) loadingText.textContent = `Analyzing image ${index + 1} of ${files.length}...`;
+    try {
+      const result = await detectImage(file);
+      completedResults.push({ file, result });
+      completed += 1;
+    } catch (err) {
+      console.error(`Upload error for ${file.name}:`, err);
+    }
+  }
+
+  if (uploadLoading) uploadLoading.classList.remove('on');
+  if (loadingText) loadingText.textContent = 'Analyzing leaf...';
+  const fileInput = document.getElementById('fileInput');
+  if (fileInput) fileInput.value = '';
+  if (completedResults.length) renderBatchUpload(completedResults);
+  showToast(completed === files.length
+    ? `${completed} image${completed === 1 ? '' : 's'} uploaded and analyzed.`
+    : `${completed} of ${files.length} images uploaded and analyzed.`);
+}
+
+function renderBatchUpload(items) {
+  batchUploadResults = items;
+  activeBatchResultIndex = items.length - 1;
+  showBatchResult(activeBatchResultIndex);
+
+  const batchResults = document.getElementById('batch-results');
+  if (!batchResults) return;
+  const cards = items.map(({ file, result }) => {
+    const diseases = (result.detections || [])
+      .filter(detection => isDiseaseClass(detection.class))
+      .map(detection => `${formatDiseaseClass(detection.class)} (${(Number(detection.confidence || 0) * 100).toFixed(1)}%)`);
+    const annotatedImage = result.annotated_image_base64
+      ? `<img src="data:image/jpeg;base64,${result.annotated_image_base64}" alt="Detection for ${escapeHtml(file.name)}" style="width:72px;height:72px;object-fit:cover;border-radius:7px;background:#eef6f1;">`
+      : '';
+    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid rgba(11,42,31,0.1);border-radius:8px;margin-top:8px;">${annotatedImage}<div><strong>${escapeHtml(file.name)}</strong><div style="font-size:12px;color:var(--text2);margin-top:4px;">${diseases.length ? escapeHtml(diseases.join(', ')) : 'No disease detected'}</div></div></div>`;
+  }).join('');
+  batchResults.innerHTML = `<div style="font-weight:600;color:var(--deep);">Results for ${items.length} uploaded image${items.length === 1 ? '' : 's'}</div>${cards}`;
+  batchResults.style.display = 'block';
+}
+
+function showBatchResult(index) {
+  if (!batchUploadResults.length) return;
+  activeBatchResultIndex = Math.max(0, Math.min(index, batchUploadResults.length - 1));
+  const item = batchUploadResults[activeBatchResultIndex];
+  renderUpload(item.result);
+
+  const previousButton = document.getElementById('result-prev');
+  const nextButton = document.getElementById('result-next');
+  const label = document.getElementById('result-image-label');
+  const hasMultipleResults = batchUploadResults.length > 1;
+  if (previousButton) {
+    previousButton.style.display = hasMultipleResults ? '' : 'none';
+    previousButton.disabled = activeBatchResultIndex === 0;
+  }
+  if (nextButton) {
+    nextButton.style.display = hasMultipleResults ? '' : 'none';
+    nextButton.disabled = activeBatchResultIndex === batchUploadResults.length - 1;
+  }
+  if (label) label.textContent = `Image ${activeBatchResultIndex + 1} of ${batchUploadResults.length} — ${item.file.name}`;
+}
+
+window.showPreviousBatchResult = function showPreviousBatchResult() {
+  showBatchResult(activeBatchResultIndex - 1);
+};
+
+window.showNextBatchResult = function showNextBatchResult() {
+  showBatchResult(activeBatchResultIndex + 1);
+};
+
 async function detectImage(file){
   if(!file)return;
   if (!currentUser) {
     showToast('Session expired, please refresh');
     return;
   }
-  const uploadLoading = document.getElementById('upload-loading');
-  const resultArea = document.getElementById('result-area');
-  const recsArea = document.getElementById('recommendations-area');
-  const finishUpload = () => {
-    const uploadLoading = document.getElementById('upload-loading');
-    const uploadDrop = document.getElementById('upload-drop');
-    const fileInput = document.getElementById('fileInput');
-    if (uploadLoading) uploadLoading.classList.remove('on');
-    if (uploadDrop) uploadDrop.classList.remove('over');
-    if (fileInput) fileInput.value='';
-  };
-  if (uploadLoading) uploadLoading.classList.add('on');
-  if (resultArea) resultArea.style.display='none';
-  if (recsArea) {
-    recsArea.style.display = 'none';
-    recsArea.innerHTML = '';
-  }
-  
   // ✅ CRITICAL FIX: Use the explicit farm coordinates instead of laptop geolocation
   const farmCenter = [125.64135, 7.35218];
   const gps_lng = farmCenter[0];
@@ -1540,31 +1558,15 @@ async function detectImage(file){
     fetchOpts.headers={'Authorization': `Bearer ${currentToken}`};
   }
   
-  fetch('/detect/image',fetchOpts).then(res=>{
-    if(!res.ok)throw new Error('Server error '+res.status);
-    return res.json();
-  }).then(data=>{
-    try {
-      renderUpload(data);
-      // ✅ Record one pin per uploaded image instead of one per detected object
-      const detections = Array.isArray(data.detections) ? data.detections : [];
-      if (detections.length) {
-        const primary = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
-        addPin(gps_lat+(Math.random()-.5)*.0003,gps_lng+(Math.random()-.5)*.0003, primary.class, primary.confidence, 'Upload');
-      }
-    } catch (renderErr) {
-      console.error('Error rendering upload:', renderErr);
-    } finally {
-      finishUpload();
-    }
-  }).catch(err=>{
-    console.error('Upload error:', err);
-    const uploadDrop = document.getElementById('upload-drop');
-    const feedToolbar = document.querySelector('.feed-toolbar');
-    finishUpload();
-    if (feedToolbar) feedToolbar.style.display='';
-    if (uploadDrop) uploadDrop.style.display='';
-  });
+  const res = await fetch('/detect/image', fetchOpts);
+  if (!res.ok) throw new Error('Server error ' + res.status);
+  const data = await res.json();
+  const detections = Array.isArray(data.detections) ? data.detections : [];
+  if (detections.length) {
+    const primary = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
+    addPin(gps_lat+(Math.random()-.5)*.0003, gps_lng+(Math.random()-.5)*.0003, primary.class, primary.confidence, 'Upload');
+  }
+  return data;
 }
 function renderUpload(data){
   const resultImg = document.getElementById('result-img');
@@ -1618,6 +1620,9 @@ function clearUploadResults(){
   const sConf = document.getElementById('s-conf');
   const sStatus = document.getElementById('s-status');
   const recsArea = document.getElementById('recommendations-area');
+  const batchResults = document.getElementById('batch-results');
+  const previousButton = document.getElementById('result-prev');
+  const nextButton = document.getElementById('result-next');
   
   if (resultArea) resultArea.style.display='none';
   if (feedToolbar) feedToolbar.style.display='';
@@ -1630,6 +1635,14 @@ function clearUploadResults(){
     sStatus.style.color='';
   }
   if (recsArea) recsArea.style.display='none';
+  if (batchResults) {
+    batchResults.style.display = 'none';
+    batchResults.innerHTML = '';
+  }
+  batchUploadResults = [];
+  activeBatchResultIndex = 0;
+  if (previousButton) previousButton.style.display = 'none';
+  if (nextButton) nextButton.style.display = 'none';
 }
 
 async function fetchRecommendation(disease, confidence){
@@ -1808,16 +1821,27 @@ window.toggleRecordRecommendation = async function toggleRecordRecommendation(re
     return;
   }
 
-  if (panel.dataset.loaded === '1' && panel.innerHTML.trim()) {
-    panel.style.display = 'block';
-    if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
-    return;
-  }
-
-  panel.innerHTML = '<div class="no-records">No saved expert recommendation for this verified record yet.</div>';
-  panel.dataset.loaded = '0';
+  panel.innerHTML = '<div class="no-records">Loading the current disease recommendation...</div>';
   panel.style.display = 'block';
   if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
+
+  try {
+    const response = await fetch('/recommendations/fertilizer', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {})
+      },
+      body: JSON.stringify({ disease, confidence: Number(confidence || 0) })
+    });
+    if (!response.ok) throw new Error(`Server error ${response.status}`);
+    panel.innerHTML = renderRecommendationCardHtml(await response.json());
+    panel.dataset.loaded = '1';
+  } catch (error) {
+    console.error('Could not load current recommendation:', error);
+    panel.innerHTML = '<div class="no-records">Could not load the current recommendation. Please try again.</div>';
+    panel.dataset.loaded = '0';
+  }
 };
 
 // ── Drone ──
@@ -2213,12 +2237,16 @@ function getExpertFilterLabel(filterName) {
   return 'pending uploads';
 }
 
+let expertAuditEvents = [];
+
 function renderAuditEntry(entry) {
   const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
   const actor = entry.actor_email || entry.actor_uid || 'Unknown expert';
   const target = entry.target || {};
+  const upload = entry.upload || {};
   const details = entry.details || {};
   const actionLabel = String(entry.action || 'action').replace(/_/g, ' ');
+  const uploadedBy = upload.email || '';
   const targetLabel = target.disease || target.record_id || target.user_id || '—';
   const detailLabel = Object.keys(details).length
     ? Object.entries(details).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join(' • ')
@@ -2230,7 +2258,7 @@ function renderAuditEntry(entry) {
       <div class="record-meta">
         <strong>${timestamp}</strong><br>
         ${actionLabel} by ${actor}<br>
-        Target: ${targetLabel}
+        Target: ${upload.filename || targetLabel}${uploadedBy ? `<br>Uploaded by: ${uploadedBy}` : ''}
       </div>
       <div class="record-detections">
         <span class="record-det high">${detailLabel}</span>
@@ -2238,6 +2266,83 @@ function renderAuditEntry(entry) {
     </div>
   `;
 }
+
+function renderExpertRecordsTable(records) {
+  const rows = records.map((record) => {
+    const primary = getPrimaryDetection(record);
+    const detections = record.detections || [];
+    const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
+    const owner = record.email || record.user_id || 'Unknown farmer';
+    const previewImage = record.image_url || record.annotated_image_url || '';
+    const imageLabel = record.filename || record.image_path || 'Image';
+    const disease = primary.class || record.primaryDisease || detections[0]?.class || 'No detection';
+    const confidence = Number(primary.confidence || detections[0]?.confidence || 0);
+    const lat = record.lat || record.gps_data?.latitude || record.gps_data?.lat || record.gps?.lat || record.gps?.latitude;
+    const lng = record.lng || record.gps_data?.longitude || record.gps_data?.lng || record.gps?.lng || record.gps?.longitude;
+    const recordId = String(record.id || '').replace(/'/g, '&#39;');
+    const userId = String(record.user_id || '').replace(/'/g, '&#39;');
+    const diseaseArg = String(disease).replace(/'/g, '&#39;');
+    const imageCell = previewImage
+      ? `<img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" title="View ${escapeHtml(imageLabel)}" onclick="openRecordImageModal('${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')">`
+      : '<span class="expert-table-muted">No image</span>';
+    const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
+      ? `<div class="table-actions"><button class="btn btn-p" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}')">Recommendation</button></div>`
+      : '<span class="expert-table-muted">Verified</span>';
+
+    return `<tr>
+      <td>${imageCell}</td>
+      <td><strong>${escapeHtml(imageLabel)}</strong><br><span class="expert-table-muted">${escapeHtml(record.type === 'upload' ? 'Upload' : 'Drone')}</span></td>
+      <td>${escapeHtml(owner)}</td>
+      <td>${escapeHtml(formatDiseaseClass(disease))}<br><span class="expert-table-muted">${Math.round(confidence * 100)}% confidence</span></td>
+      <td>${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round((d.confidence || 0) * 100)}%</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
+      <td>${buildRecordStatusBadge(record)}</td>
+      <td>${lat !== undefined && lat !== null && lng !== undefined && lng !== null ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}` : '<span class="expert-table-muted">Not available</span>'}</td>
+      <td>${escapeHtml(timestamp)}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="expert-table-wrap"><table class="expert-records-table"><thead><tr><th>Image</th><th>Record</th><th>Farmer</th><th>Primary detection</th><th>All detections</th><th>Status</th><th>Location</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderExpertAuditTable(events) {
+  const rows = events.map((entry) => {
+    const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
+    const target = entry.target || {};
+    const upload = entry.upload || {};
+    const details = entry.details || {};
+    const action = String(entry.action || 'action').replace(/_/g, ' ');
+    const detailLabel = Object.keys(details).length
+      ? Object.entries(details).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join(' • ')
+      : 'No details';
+    return `<tr><td>${escapeHtml(timestamp)}</td><td><strong>${escapeHtml(action)}</strong></td><td>${escapeHtml(entry.actor_email || entry.actor_uid || 'Unknown expert')}</td><td>${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</td><td>${escapeHtml(upload.email || '—')}</td><td>${escapeHtml(detailLabel)}</td></tr>`;
+  }).join('');
+  return `<div class="expert-table-wrap"><table class="expert-records-table"><thead><tr><th>Date and time</th><th>Action</th><th>Expert</th><th>Record</th><th>Uploaded by</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderExpertAuditLog() {
+  const auditListEl = document.getElementById('expert-audit-list');
+  const query = String(document.getElementById('expert-audit-search')?.value || '').trim().toLowerCase();
+  if (!auditListEl) return;
+
+  const matchingEvents = query
+    ? expertAuditEvents.filter((entry) => JSON.stringify({
+      target: entry.target || {},
+        upload: entry.upload || {},
+        details: entry.details || {},
+        actor_email: entry.actor_email || '',
+        actor_uid: entry.actor_uid || ''
+      }).toLowerCase().includes(query))
+    : expertAuditEvents;
+
+  auditListEl.innerHTML = matchingEvents.length
+    ? renderExpertAuditTable(matchingEvents)
+    : `<div class="no-records">${query ? 'No audited images or users match your search.' : 'No expert actions recorded yet.'}</div>`;
+}
+
+window.filterExpertAuditLog = function filterExpertAuditLog() {
+  renderExpertAuditLog();
+};
 
 async function loadUserRecords() {
   if (!currentToken) {
@@ -2396,6 +2501,33 @@ async function loadUserRecords() {
   }
 }
 
+window.downloadMyRecordsPdf = async function downloadMyRecordsPdf() {
+  if (!currentToken) {
+    showToast('Please log in first');
+    return;
+  }
+  try {
+    showToast('Preparing your PDF report...');
+    const response = await fetch('/reports/my-records.pdf', {
+      headers: { 'Authorization': `Bearer ${currentToken}` }
+    });
+    if (!response.ok) throw new Error(`Server error ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'coconut-leaf-disease-analytics-report.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast('PDF report downloaded.');
+  } catch (error) {
+    console.error('PDF report download failed:', error);
+    showToast('Could not create the PDF report. Please try again.');
+  }
+};
+
 window.loadExpertReview = async function loadExpertReview(filterName = currentExpertFilter || 'all') {
   if (!currentToken || !currentUserIsExpert) return;
 
@@ -2417,12 +2549,6 @@ window.loadExpertReview = async function loadExpertReview(filterName = currentEx
     const records = recordsData.records || [];
     const overridesData = overridesRes.ok ? await overridesRes.json() : { overrides: {} };
     const overrides = overridesData.overrides || {};
-    if (typeof loadExpertDiseaseOptions === 'function') {
-      loadExpertDiseaseOptions();
-    } else {
-      populateExpertDiseaseSelect();
-    }
-
     const pending = records.filter(record => formatVerificationStatus(record.verification_status).cls === 'pending');
     const pendingCountEl = document.getElementById('expert-pending-records');
     const totalCountEl = document.getElementById('expert-total-records');
@@ -2432,9 +2558,9 @@ window.loadExpertReview = async function loadExpertReview(filterName = currentEx
     if (overrideCountEl) overrideCountEl.textContent = Object.keys(overrides).length;
 
     if (pendingListEl) {
-      pendingListEl.innerHTML = pending.length
-        ? pending.map((record, idx) => renderRecordCard(record, idx, { expert: true })).join('')
-        : '<div class="no-records">No pending uploads waiting for expert verification.</div>';
+      pendingListEl.innerHTML = records.length
+        ? renderExpertRecordsTable(records)
+        : `<div class="no-records">No ${getExpertFilterLabel(currentExpertFilter)} found.</div>`;
     }
 
     const statusEl = document.getElementById('expert-recommendation-status');
@@ -2460,12 +2586,8 @@ window.loadExpertAuditLog = async function loadExpertAuditLog() {
     });
     if (!res.ok) throw new Error('Failed to load audit log');
     const data = await res.json();
-    const events = data.events || [];
-    if (auditListEl) {
-      auditListEl.innerHTML = events.length
-        ? events.map(renderAuditEntry).join('')
-        : '<div class="no-records">No expert actions recorded yet.</div>';
-    }
+    expertAuditEvents = data.events || [];
+    renderExpertAuditLog();
   } catch (error) {
     console.error('Error loading audit log:', error);
     if (auditListEl) auditListEl.innerHTML = `<div class="no-records">❌ Error loading audit log<br>${error.message}</div>`;
@@ -2489,9 +2611,11 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   const confValue = Number(confidence ?? 0.85);
 
   if (!disease) {
-    showToast('Enter a disease name first');
+    showToast('This upload has no detected disease to review.');
     return;
   }
+  // The field is display-only: it always reflects the model result from the selected upload.
+  setExpertRecommendationDisease(disease);
 
   try {
     const res = await fetch('/recommendations/fertilizer', {
@@ -2542,7 +2666,7 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
 
   const disease = (diseaseInput?.value || '').trim();
   if (!disease) {
-    showToast('Please enter a disease name');
+    showToast('Select an uploaded image with a detected disease first.');
     return;
   }
 
