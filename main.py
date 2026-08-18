@@ -281,7 +281,12 @@ def apply_expert_recommendation_override(base_recommendation: dict, disease_name
 
 
 def build_recommendation_response(disease_name: str, confidence: float, lat: float = None, lng: float = None, accuracy: float = None) -> dict:
-    """Build the effective recommendation payload, including any expert override."""
+    """Build the default recommendation payload for one detection.
+
+    Expert edits are deliberately kept on the individual detection record.  A
+    disease-level edit (for example, ``leaf_rot``) must not change the advice
+    shown for every other leaf-rot upload.
+    """
     import math
 
     if not disease_name or not isinstance(disease_name, str):
@@ -321,7 +326,7 @@ def build_recommendation_response(disease_name: str, confidence: float, lat: flo
         "note": recommendations["note"],
         "source": "default",
     }
-    return apply_expert_recommendation_override(response, disease_name)
+    return response
 
 
 def _find_record_for_user(user_id: str, record_id: str) -> dict | None:
@@ -1492,23 +1497,30 @@ class _NumberedReportCanvas(Canvas):
 
 
 class _MetricCard(Flowable):
-    def __init__(self, value: str, label: str, width: float, height: float = 44 * mm):
+    """A compact executive KPI card with a restrained green accent."""
+    def __init__(self, value: str, label: str, note: str, width: float, height: float = 35 * mm, note_color: str = "#2F6E54"):
         Flowable.__init__(self)
-        self.value, self.label, self.width, self.height = value, label, width, height
+        self.value, self.label, self.note = value, label, note
+        self.width, self.height, self.note_color = width, height, note_color
 
     def wrap(self, available_width, available_height):
         return self.width, self.height
 
     def draw(self):
-        self.canv.setFillColor(colors.HexColor("#F8FAFC"))
-        self.canv.setStrokeColor(colors.HexColor("#E2E8F0"))
-        self.canv.roundRect(0, 0, self.width, self.height, 4 * mm, fill=1, stroke=1)
-        self.canv.setFillColor(colors.HexColor("#164D37"))
-        self.canv.setFont("Helvetica-Bold", 17)
-        self.canv.drawCentredString(self.width / 2, 25 * mm, self.value[:23])
+        self.canv.setFillColor(colors.white)
+        self.canv.setStrokeColor(colors.HexColor("#DDE5E0"))
+        self.canv.roundRect(0, 0, self.width, self.height, 3 * mm, fill=1, stroke=1)
+        self.canv.setFillColor(colors.HexColor("#41966E"))
+        self.canv.roundRect(0, 0, 2.6 * mm, self.height, 2 * mm, fill=1, stroke=0)
         self.canv.setFillColor(colors.HexColor("#64748B"))
-        self.canv.setFont("Helvetica-Bold", 7.5)
-        self.canv.drawCentredString(self.width / 2, 14 * mm, self.label.upper())
+        self.canv.setFont("Helvetica", 7.4)
+        self.canv.drawString(6 * mm, 25 * mm, self.label.upper())
+        self.canv.setFillColor(colors.HexColor("#20252B"))
+        self.canv.setFont("Helvetica-Bold", 18)
+        self.canv.drawString(6 * mm, 14.5 * mm, self.value[:20])
+        self.canv.setFillColor(colors.HexColor(self.note_color))
+        self.canv.setFont("Helvetica-Bold", 7.2)
+        self.canv.drawString(6 * mm, 5.2 * mm, self.note[:30])
 
 
 class _StatusBadge(Flowable):
@@ -1537,10 +1549,67 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     def safe(value: Any) -> str:
         return str(value or "-").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    # Match the dashboard Detection Color Key, including its model-label aliases.
+    detection_colors = {
+        "healthy": "#22C55E",
+        "caterpillars": "#F97316",
+        "cercospora": "#EC4899",
+        "drying of leaflets": "#2563EB",
+        "leaf rot": "#2563EB",
+        "pestalotiopsis": "#06B6D4",
+        "bud root": "#D4D800",
+        "bud rot": "#D4D800",
+    }
+
+    def detection_color(disease: str) -> str:
+        return detection_colors.get(str(disease or "").replace("_", " ").strip().lower(), "#64748B")
+
     disease_stats = defaultdict(lambda: {"count": 0, "confidence": []})
     monthly_counts = defaultdict(int)
+    monthly_disease_counts = defaultdict(lambda: defaultdict(int))
+    severity_counts = defaultdict(int)
+    # Keep the PDF's spatial analysis aligned with the four areas displayed on
+    # the Disease Location Map in the web dashboard.
+    map_bounds = {"min_lat": 7.35140, "max_lat": 7.35295, "min_lng": 125.64055, "max_lng": 125.64215}
+    lat_step = (map_bounds["max_lat"] - map_bounds["min_lat"]) / 2
+    lng_step = (map_bounds["max_lng"] - map_bounds["min_lng"]) / 2
+    area_stats = {
+        f"Area {index}": {"samples": 0, "severity": defaultdict(int)}
+        for index in range(1, 5)
+    }
     verified_records = 0
     top_confidences = []
+
+    def severity_for_disease(disease: str) -> str:
+        normalized_disease = disease.lower()
+        if any(name in normalized_disease for name in ("lethal", "bud rot", "bud root")):
+            return "Critical"
+        if any(name in normalized_disease for name in ("blight", "pestalotiopsis")):
+            return "Severe"
+        if normalized_disease != "healthy":
+            return "Moderate"
+        return "Mild"
+
+    def mapped_area(record: dict) -> Optional[str]:
+        gps_data = record.get("gps_data") or record.get("gps") or {}
+        if isinstance(gps_data, str):
+            try:
+                gps_data = json.loads(gps_data)
+            except (TypeError, ValueError):
+                gps_data = {}
+        if not isinstance(gps_data, dict):
+            gps_data = {}
+        try:
+            lat = float(record.get("lat") if record.get("lat") is not None else gps_data.get("latitude", gps_data.get("lat")))
+            lng = float(record.get("lng") if record.get("lng") is not None else gps_data.get("longitude", gps_data.get("lng")))
+        except (TypeError, ValueError):
+            return None
+        if not (map_bounds["min_lat"] <= lat <= map_bounds["max_lat"] and map_bounds["min_lng"] <= lng <= map_bounds["max_lng"]):
+            return None
+        row = min(1, int((lat - map_bounds["min_lat"]) / lat_step))
+        column = min(1, int((lng - map_bounds["min_lng"]) / lng_step))
+        return f"Area {row * 2 + column + 1}"
+
     for record in records:
         timestamp = str(record.get("timestamp") or "")
         if timestamp:
@@ -1548,42 +1617,92 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         status = title_case(normalize_verification_status(record))
         verified_records += int(status == "Verified")
         detections = record.get("detections") or []
+        record_severity = "Mild"
         if detections:
             top_confidences.append(max(float(item.get("confidence") or 0) for item in detections))
         for detection in detections:
             disease = title_case(detection.get("class") or detection.get("disease") or "Unknown")
             disease_stats[disease]["count"] += 1
             disease_stats[disease]["confidence"].append(float(detection.get("confidence") or 0))
+            if timestamp:
+                monthly_disease_counts[timestamp[:7]][disease] += 1
+            severity = severity_for_disease(disease)
+            severity_counts[severity] += 1
+            if ("Mild", "Moderate", "Severe", "Critical").index(severity) > ("Mild", "Moderate", "Severe", "Critical").index(record_severity):
+                record_severity = severity
+        area_name = mapped_area(record)
+        if area_name:
+            area_stats[area_name]["samples"] += 1
+            area_stats[area_name]["severity"][record_severity] += 1
 
     primary_disease = max(disease_stats, key=lambda item: disease_stats[item]["count"], default="No Detection")
     average_top_confidence = (sum(top_confidences) / len(top_confidences) * 100) if top_confidences else 0
+    total_detections = sum(values["count"] for values in disease_stats.values())
+    healthy_detections = disease_stats.get("Healthy", {}).get("count", 0)
+    disease_incidence = ((total_detections - healthy_detections) / total_detections * 100) if total_detections else 0
+    generated_at = datetime.now(timezone.utc).astimezone()
     buffer = BytesIO()
     page_width, page_height = A4
     styles = getSampleStyleSheet()
-    normal = ParagraphStyle("ExecNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=8.2, leading=10.5, textColor=colors.HexColor("#334155"))
+    normal = ParagraphStyle("ExecNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=8.8, leading=12.2, textColor=colors.HexColor("#293138"))
     small = ParagraphStyle("ExecSmall", parent=normal, fontSize=7.3, leading=9)
     table_header = ParagraphStyle("ExecTableHeader", parent=small, fontName="Helvetica-Bold", textColor=colors.white)
-    heading = ParagraphStyle("ExecHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=16, textColor=colors.HexColor("#164D37"), spaceBefore=5, spaceAfter=7)
+    detail_small = ParagraphStyle("ExecDetailSmall", parent=normal, fontSize=6.5, leading=7.6)
+    detail_header = ParagraphStyle("ExecDetailHeader", parent=detail_small, fontName="Helvetica-Bold", textColor=colors.white)
+    heading = ParagraphStyle("ExecHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13.5, leading=16, textColor=colors.HexColor("#1D4938"), spaceBefore=3, spaceAfter=4)
+    insight = ParagraphStyle("ExecInsight", parent=normal, fontName="Helvetica-BoldOblique", fontSize=8.4, leading=10.3, textColor=colors.HexColor("#1D4938"), leftIndent=5 * mm, rightIndent=5 * mm, spaceBefore=3 * mm, spaceAfter=3 * mm)
 
     def chart_image(kind: str) -> BytesIO:
-        figure, axis = plt.subplots(figsize=(5.5, 2.2), dpi=160)
+        # The map-area chart is a wide horizontal chart.  Give it a matching
+        # canvas rather than stretching a square image across the PDF page.
+        chart_size = (7.0, 2.45) if kind == "severity" else (7.0, 3.45)
+        figure, axis = plt.subplots(figsize=chart_size, dpi=170)
         figure.patch.set_facecolor("#FFFFFF")
         if kind == "trend":
-            labels, values = zip(*sorted(monthly_counts.items())) if monthly_counts else (["No data"], [0])
-            axis.plot(labels, values, marker="o", linewidth=2.2, color="#15803D")
-            axis.fill_between(range(len(values)), values, color="#DCFCE7", alpha=0.75)
-            axis.set_title("Monthly record trend", loc="left", fontsize=10, fontweight="bold", color="#1E293B")
-            axis.set_ylabel("Records", fontsize=8)
+            months = sorted(monthly_disease_counts) or ["No data"]
+            labels = [datetime.strptime(month, "%Y-%m").strftime("%b") if month != "No data" else month for month in months]
+            leading = sorted(disease_stats, key=lambda item: disease_stats[item]["count"], reverse=True)[:3] or ["No detections"]
+            # Use the dashboard's detection colours; distinct shapes keep
+            # series identifiable when the report is printed in grayscale.
+            line_markers = ["o", "s", "^"]
+            totals = [sum(monthly_disease_counts[month].values()) for month in months]
+            for index, disease in enumerate(leading):
+                values = [(monthly_disease_counts[month].get(disease, 0) / total * 100) if total else 0 for month, total in zip(months, totals)]
+                axis.plot(labels, values, marker=line_markers[index], markersize=5.8, linewidth=2.35,
+                          markeredgecolor="#1F2937", markeredgewidth=0.65,
+                          color=detection_color(disease), label=disease)
+            axis.set_ylabel("Share of classified findings (%)", fontsize=8, color="#64748B")
+            axis.set_ylim(bottom=0)
+            axis.legend(loc="upper left", frameon=False, ncol=min(3, len(leading)), fontsize=7.3, bbox_to_anchor=(0, 1.18))
+        elif kind == "severity":
+            labels = ["Mild", "Moderate", "Severe", "Critical"]
+            area_names = list(area_stats)
+            left = [0] * len(area_names)
+            for label, color in zip(labels, ["#77C89D", "#EEA634", "#C14B20", "#8E2025"]):
+                values = [area_stats[name]["severity"][label] for name in area_names]
+                axis.barh(area_names[::-1], values[::-1], left=left[::-1], color=color, label=label, edgecolor="white", height=0.56)
+                left = [current + value for current, value in zip(left, values)]
+            axis.set_xlabel("GPS-tagged samples", fontsize=8, color="#64748B", labelpad=5)
+            # The report section already supplies the title.  Keeping only a
+            # compact legend above the plot prevents label collisions.
+            axis.legend(loc="lower center", frameon=False, ncol=4, fontsize=7.2,
+                        bbox_to_anchor=(0.5, 1.03), columnspacing=1.4, handlelength=1.5)
+            axis.margins(y=0.18)
         else:
-            labels = list(disease_stats.keys()) or ["No detections"]
-            values = [disease_stats[item]["count"] for item in labels] or [0]
-            axis.barh(labels[::-1], values[::-1], color="#0F766E")
-            axis.set_title("Disease distribution", loc="left", fontsize=10, fontweight="bold", color="#1E293B")
-            axis.set_xlabel("Detections", fontsize=8)
+            ordered = sorted(disease_stats, key=lambda item: disease_stats[item]["count"], reverse=True) or ["No detections"]
+            values = [disease_stats[item]["count"] for item in ordered] if disease_stats else [0]
+            bars = axis.barh(ordered[::-1], values[::-1], color=[detection_color(item) for item in ordered[::-1]])
+            axis.set_title("Disease Distribution Across Scanned Samples", loc="left", fontsize=10, fontweight="bold", color="#1D4938", pad=12)
+            axis.set_xlabel("Number of detected conditions", fontsize=8, color="#64748B")
+            maximum = max(values) if values else 0
+            axis.set_xlim(0, max(1, maximum * 1.22))
+            for bar, value in zip(bars, values[::-1]):
+                axis.text(bar.get_width() + max(0.2, maximum * 0.018), bar.get_y() + bar.get_height() / 2, str(value), va="center", fontsize=7.8, fontweight="bold", color="#293138")
         axis.spines[["top", "right", "left"]].set_visible(False)
         axis.grid(axis="y" if kind == "trend" else "x", color="#E2E8F0", linewidth=0.7)
         axis.tick_params(labelsize=7, colors="#64748B")
-        figure.tight_layout(pad=1.0)
+        # Keep axes, labels, and legends comfortably separated inside the chart frame.
+        figure.tight_layout(pad=1.7)
         image_buffer = BytesIO()
         figure.savefig(image_buffer, format="png", transparent=False)
         plt.close(figure)
@@ -1592,28 +1711,53 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
 
     def first_page(canvas_obj, doc):
         canvas_obj.saveState()
-        canvas_obj.setFillColor(colors.HexColor("#123D2D"))
-        canvas_obj.rect(0, page_height - 20 * mm, page_width, 20 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.HexColor("#194936"))
+        canvas_obj.rect(0, page_height - 32 * mm, page_width, 32 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.HexColor("#76C9A1"))
+        canvas_obj.rect(0, page_height - 32 * mm, page_width, 1.3 * mm, fill=1, stroke=0)
         canvas_obj.setFillColor(colors.white)
-        canvas_obj.setFont("Helvetica-Bold", 16)
-        canvas_obj.drawString(16 * mm, page_height - 11 * mm, "Coconut Leaf Disease Analytics")
-        canvas_obj.setFont("Helvetica", 8.5)
-        canvas_obj.drawString(16 * mm, page_height - 16 * mm, f"Executive dashboard report | Prepared for {email or 'User'}")
+        canvas_obj.setFont("Helvetica-Bold", 18.5)
+        canvas_obj.drawString(16 * mm, page_height - 13 * mm, "Coconut Leaf Disease Analytics Report")
+        canvas_obj.setFillColor(colors.HexColor("#D5E5DC"))
+        canvas_obj.setFont("Helvetica", 9.2)
+        canvas_obj.drawString(16 * mm, page_height - 20 * mm, "Plant Health Monitoring  |  Detection Summary")
+        canvas_obj.setFillColor(colors.HexColor("#78CBA3"))
+        canvas_obj.setFont("Helvetica-Bold", 8.3)
+        canvas_obj.drawRightString(page_width - 16 * mm, page_height - 13 * mm, f"REPORT NO. CLD-{generated_at.strftime('%Y-%m')}")
+        canvas_obj.setFillColor(colors.HexColor("#D5E5DC"))
+        canvas_obj.setFont("Helvetica", 7.8)
+        canvas_obj.drawRightString(page_width - 16 * mm, page_height - 19.2 * mm, generated_at.strftime("%B %d, %Y"))
         canvas_obj.restoreState()
 
     def later_pages(canvas_obj, doc):
         canvas_obj.saveState()
-        canvas_obj.setFillColor(colors.HexColor("#123D2D"))
-        canvas_obj.rect(0, page_height - 14 * mm, page_width, 14 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.HexColor("#194936"))
+        canvas_obj.rect(0, page_height - 32 * mm, page_width, 32 * mm, fill=1, stroke=0)
+        canvas_obj.setFillColor(colors.HexColor("#76C9A1"))
+        canvas_obj.rect(0, page_height - 32 * mm, page_width, 1.3 * mm, fill=1, stroke=0)
         canvas_obj.setFillColor(colors.white)
-        canvas_obj.setFont("Helvetica-Bold", 9.5)
-        canvas_obj.drawString(16 * mm, page_height - 9 * mm, "Coconut Leaf Disease Analytics Report")
+        canvas_obj.setFont("Helvetica-Bold", 18.5)
+        canvas_obj.drawString(16 * mm, page_height - 13 * mm, "Coconut Leaf Disease Analytics Report")
+        page_subtitles = {
+            2: "Monthly Detection Trends",
+            3: "Severity by Map Area",
+            4: "Disease Distribution",
+        }
+        canvas_obj.setFillColor(colors.HexColor("#D5E5DC"))
+        canvas_obj.setFont("Helvetica", 9.2)
+        canvas_obj.drawString(16 * mm, page_height - 20 * mm, page_subtitles.get(canvas_obj.getPageNumber(), "Detection Record Details"))
+        canvas_obj.setFillColor(colors.HexColor("#78CBA3"))
+        canvas_obj.setFont("Helvetica-Bold", 8.3)
+        canvas_obj.drawRightString(page_width - 16 * mm, page_height - 13 * mm, f"REPORT NO. CLD-{generated_at.strftime('%Y-%m')}")
+        canvas_obj.setFillColor(colors.HexColor("#D5E5DC"))
+        canvas_obj.setFont("Helvetica", 7.8)
+        canvas_obj.drawRightString(page_width - 16 * mm, page_height - 19.2 * mm, generated_at.strftime("%B %d, %Y"))
         canvas_obj.restoreState()
 
-    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=27 * mm, bottomMargin=22 * mm, title="Coconut Leaf Disease Analytics Report")
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=39 * mm, bottomMargin=22 * mm, title="Coconut Leaf Disease Analytics Report")
     card_column_width = (page_width - 32 * mm) / 4
     card_width = card_column_width - 3 * mm
-    cards = Table([[ _MetricCard(str(len(records)), "Total Records", card_width), _MetricCard(primary_disease, "Primary Disease", card_width), _MetricCard(f"{average_top_confidence:.1f}%", "Avg. Top Confidence", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", card_width) ]], colWidths=[card_column_width] * 4)
+    cards = Table([[_MetricCard(str(len(records)), "Samples Scanned", "Detection records", card_width), _MetricCard(f"{disease_incidence:.1f}%", "Disease Incidence", "Of all detections", card_width, note_color="#C44A1D"), _MetricCard(f"{average_top_confidence:.1f}%", "Model Confidence", "Average top result", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", "Expert-reviewed cases", card_width)]], colWidths=[card_column_width] * 4)
     cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
 
     distribution_rows = [[Paragraph("Disease", table_header), Paragraph("Detections", table_header), Paragraph("Avg. confidence", table_header)]]
@@ -1622,22 +1766,57 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         distribution_rows.append([Paragraph(safe(disease), small), Paragraph(str(values["count"]), small), Paragraph(f"{average:.1f}%", small)])
     if len(distribution_rows) == 1:
         distribution_rows.append([Paragraph("No detections", small), Paragraph("0", small), Paragraph("-", small)])
-    distribution_table = Table(distribution_rows, colWidths=[45 * mm, 27 * mm, 35 * mm], repeatRows=1)
-    distribution_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    distribution_table = Table(distribution_rows, colWidths=[45 * mm, 27 * mm, 35 * mm], rowHeights=[11 * mm] + [12 * mm] * (len(distribution_rows) - 1), repeatRows=1)
+    distribution_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9)]))
 
-    story = [Spacer(1, 4 * mm), cards, Spacer(1, 7 * mm), Paragraph("Analytics overview", heading)]
-    story.append(Table([[Image(chart_image("trend"), width=86 * mm, height=40 * mm), Image(chart_image("distribution"), width=86 * mm, height=40 * mm)]], colWidths=[88 * mm, 88 * mm], style=[("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("LEFTPADDING", (0, 0), (-1, -1), 2 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm), ("TOPPADDING", (0, 0), (-1, -1), 2 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 2 * mm)]))
-    story += [Spacer(1, 6 * mm), Paragraph("Disease distribution", heading), distribution_table, PageBreak(), Paragraph("Detection record details", heading)]
+    summary_text = (f"This report summarizes {len(records):,} detection record{'s' if len(records) != 1 else ''} for {email or 'the authenticated user'}. "
+                    f"The leading detected condition is {primary_disease}, while {disease_incidence:.1f}% of classified findings indicate a disease condition. "
+                    f"Average top-result confidence is {average_top_confidence:.1f}%.")
+    key_text = (f"<b>Key insight:</b> {primary_disease} is the most frequently detected condition, accounting for "
+                f"{(disease_stats.get(primary_disease, {}).get('count', 0) / total_detections * 100) if total_detections else 0:.1f}% of all classified findings. "
+                "Use verified records to prioritize field inspection and treatment follow-up.")
+    chart_box = Table([[Image(chart_image("distribution"), width=169 * mm, height=83 * mm)]], colWidths=[175 * mm], style=[("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor("#E0E7E3")), ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)])
+    insight_box = Table([[Paragraph(key_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F6F3")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#E1E9E4")), ("ROUNDEDCORNERS", [3 * mm])])
+    story = [Paragraph("Executive Summary", heading), Spacer(1, 1 * mm), Paragraph(summary_text, normal), Spacer(1, 5 * mm), cards, Spacer(1, 18 * mm), Paragraph("Disease Distribution Across Scanned Samples", heading), Spacer(1, 3 * mm), chart_box, Spacer(1, 7 * mm), insight_box]
+    severity_rows = [[Paragraph("Map area", table_header), Paragraph("Mild", table_header), Paragraph("Moderate", table_header), Paragraph("Severe", table_header), Paragraph("Critical", table_header), Paragraph("Treatment priority", table_header)]]
+    severity_rank = {"Mild": 0, "Moderate": 1, "Severe": 3, "Critical": 5}
+    mapped_areas = []
+    for area_name, values in area_stats.items():
+        counts = values["severity"]
+        treatment_score = sum(counts[label] * severity_rank[label] for label in severity_rank)
+        diseased = values["samples"] - counts["Mild"]
+        prevalence = (diseased / values["samples"] * 100) if values["samples"] else 0
+        mapped_areas.append((area_name, treatment_score, prevalence, diseased, values["samples"]))
+        severity_rows.append([
+            Paragraph(f"<b>{area_name}</b><br/><font color='#687583'>{values['samples']} mapped sample{'s' if values['samples'] != 1 else ''}</font>", small),
+            Paragraph(str(counts["Mild"]), small), Paragraph(str(counts["Moderate"]), small),
+            Paragraph(str(counts["Severe"]), small), Paragraph(str(counts["Critical"]), small),
+            Paragraph("No treatment cases" if not treatment_score else ("Urgent" if counts["Critical"] else "Treat / inspect"), small),
+        ])
+    priority_area = max(mapped_areas, key=lambda item: (item[1], item[2], item[3]), default=None)
+    priority_text = ("<b>Priority treatment area:</b> No GPS-tagged samples fall within the mapped farm areas yet."
+                     if not priority_area or not priority_area[1] else
+                     f"<b>Priority treatment area: {priority_area[0]}</b> - {priority_area[3]} of {priority_area[4]} mapped samples show disease ({priority_area[2]:.0f}%). "
+                     f"This area has the highest treatment priority based on its severe and critical findings.")
+    severity_table = Table(severity_rows, colWidths=[39 * mm, 17 * mm, 22 * mm, 18 * mm, 19 * mm, 47 * mm], repeatRows=1)
+    severity_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    trend_narrative = (f"The monthly mix highlights the leading classified conditions across the available reporting period. "
+                       f"{primary_disease} remains the most frequent result, with disease conditions representing {disease_incidence:.1f}% of all classified findings.")
+    priority_box = Table([[Paragraph(priority_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF7ED")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#F5D6B3")), ("ROUNDEDCORNERS", [3 * mm])])
+    story += [PageBreak(), Paragraph("Monthly Detection Trend", heading), Spacer(1, 6 * mm), Image(chart_image("trend"), width=171 * mm, height=83 * mm), Spacer(1, 7 * mm), Paragraph(trend_narrative, normal), PageBreak(), Paragraph("Severity by Map Area", heading), Spacer(1, 3 * mm), Image(chart_image("severity"), width=171 * mm, height=55 * mm), Spacer(1, 4 * mm), severity_table, Spacer(1, 5 * mm), priority_box, PageBreak(), Paragraph("Disease distribution", heading), Spacer(1, 7 * mm), distribution_table, PageBreak(), Paragraph("Detection record details", heading)]
 
-    detail_rows = [[Paragraph("Date", table_header), Paragraph("Source", table_header), Paragraph("Detections", table_header), Paragraph("Status", table_header)]]
+    detail_rows = [[Paragraph("Date", detail_header), Paragraph("Source", detail_header), Paragraph("Detections", detail_header), Paragraph("Status", detail_header)]]
     for record in records:
-        details = "; ".join(f"{title_case(item.get('class'))} ({float(item.get('confidence') or 0) * 100:.1f}%)" for item in record.get("detections") or []) or "No detections"
+        details = "; ".join(f"{title_case(item.get('class'))} ({float(item.get('confidence') or 0) * 100:.0f}%)" for item in record.get("detections") or []) or "No detections"
         status = title_case(normalize_verification_status(record))
-        detail_rows.append([Paragraph(safe(str(record.get("timestamp") or "-")[:16].replace("T", " ")), small), Paragraph(safe(title_case(record.get("type") or record.get("source") or "Upload")), small), Paragraph(safe(details), small), _StatusBadge(status)])
+        detail_rows.append([Paragraph(safe(str(record.get("timestamp") or "-")[:10]), detail_small), Paragraph(safe(title_case(record.get("type") or record.get("source") or "Upload")), detail_small), Paragraph(safe(details), detail_small), _StatusBadge(status)])
     if len(detail_rows) == 1:
-        detail_rows.append([Paragraph("No records available", small), Paragraph("-", small), Paragraph("-", small), _StatusBadge("Pending Verification")])
-    detail_table = Table(detail_rows, colWidths=[31 * mm, 25 * mm, 82 * mm, 43 * mm], repeatRows=1)
-    detail_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
+        detail_rows.append([Paragraph("No records available", detail_small), Paragraph("-", detail_small), Paragraph("-", detail_small), _StatusBadge("Pending Verification")])
+    # A compact, full-width table keeps small overflows from creating an
+    # almost-empty final page.  If there are truly many records, ReportLab
+    # paginates it with the header repeated on every continuation page.
+    detail_table = Table(detail_rows, colWidths=[25 * mm, 20 * mm, 91 * mm, 42 * mm], repeatRows=1, splitByRow=1)
+    detail_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3), ("LEFTPADDING", (0, 0), (-1, -1), 2.5), ("RIGHTPADDING", (0, 0), (-1, -1), 2.5)]))
     story.append(detail_table)
     document.build(story, onFirstPage=first_page, onLaterPages=later_pages, canvasmaker=_NumberedReportCanvas)
     return buffer.getvalue()
@@ -2074,35 +2253,26 @@ async def update_expert_recommendation(
     payload: ExpertRecommendationUpdate,
     decoded: dict = Depends(verify_firebase_token),
 ):
-    """Create or update an expert recommendation override."""
+    """Save an expert recommendation for exactly one uploaded record."""
     if not is_expert_identity(decoded):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Expert access required")
 
-    disease_key = normalize_disease_key(disease)
-    overrides = load_expert_recommendations()
-    overrides[disease_key] = {
-        "disease": payload.disease or disease,
-        "fertilizer": payload.fertilizer,
-        "treatment": payload.treatment,
-        "prevention": payload.prevention,
-        "note": payload.note or "",
-        "active": payload.active,
-        "updated_by": decoded.get("email"),
-        "updated_by_uid": decoded.get("uid"),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    save_expert_recommendations(overrides)
-    synced_count = _sync_recommendation_snapshot_for_disease(payload.disease or disease)
-
-    direct_record_synced = False
     target_user_id = str(payload.target_user_id or "").strip()
     target_record_id = str(payload.target_record_id or "").strip()
-    if target_user_id and target_record_id:
-        target_record = _find_record_for_user(target_user_id, target_record_id)
-        if target_record:
-            try:
-                target_primary_disease, target_primary_confidence = _extract_primary_disease(target_record)
-                expert_snapshot = {
+    if not target_user_id or not target_record_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select a pending upload before saving a recommendation",
+        )
+
+    target_record = _find_record_for_user(target_user_id, target_record_id)
+    if not target_record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected record not found")
+
+    direct_record_synced = False
+    try:
+        target_primary_disease, target_primary_confidence = _extract_primary_disease(target_record)
+        expert_snapshot = {
                     "disease": payload.disease or target_primary_disease or disease,
                     "confidence_percent": round(float(target_primary_confidence or 0) * 100, 2),
                     "model_used": "Expert Override",
@@ -2118,44 +2288,43 @@ async def update_expert_recommendation(
                     },
                     "note": payload.note or "",
                     "source": "expert_override",
+                    "recommendation_scope": "record",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
-                direct_record_synced = _update_record_status_everywhere(
-                    target_user_id,
-                    target_record_id,
-                    {
-                        "verification_status": VERIFIED_STATUS,
-                        "verified_by": decoded.get("email"),
-                        "verified_by_uid": decoded.get("uid"),
-                        "verified_at": datetime.now(timezone.utc).isoformat(),
-                        "recommendation_snapshot": expert_snapshot,
-                        "recommendation_source": "expert_override",
-                    },
-                )
-            except Exception as error:
-                logger.warning(f"Could not sync exact expert record {target_record_id}: {error}")
+        direct_record_synced = _update_record_status_everywhere(
+            target_user_id,
+            target_record_id,
+            {
+                "verification_status": VERIFIED_STATUS,
+                "verified_by": decoded.get("email"),
+                "verified_by_uid": decoded.get("uid"),
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+                "recommendation_snapshot": expert_snapshot,
+                "recommendation_source": "expert_override",
+            },
+        )
+    except Exception as error:
+        logger.warning(f"Could not save expert recommendation for record {target_record_id}: {error}")
 
     append_expert_audit_event(
         action="update_recommendation",
         actor=decoded,
         target={
             "disease": disease,
-            "disease_key": disease_key,
             "user_id": payload.target_user_id,
             "record_id": payload.target_record_id,
         },
         details={
             "active": payload.active,
             "prevention_count": len(payload.prevention or []),
-            "synced_records": synced_count,
+            "synced_records": 0,
             "direct_record_synced": direct_record_synced,
         },
     )
     return {
-        "message": "Recommendation override saved",
+        "message": "Recommendation saved for the selected record",
         "disease": disease,
-        "override": overrides[disease_key],
-        "synced_records": synced_count,
+        "synced_records": 0,
         "direct_record_synced": direct_record_synced,
     }
 

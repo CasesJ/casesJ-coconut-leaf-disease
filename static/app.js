@@ -200,6 +200,11 @@ function openExpertRecommendationEditor() {
   if (editor) editor.classList.remove('hidden');
 }
 
+function hideExpertRecommendationEditor() {
+  const editor = document.getElementById('expert-recommendation-editor');
+  if (editor) editor.classList.add('hidden');
+}
+
 window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
@@ -1830,6 +1835,15 @@ window.toggleRecordRecommendation = async function toggleRecordRecommendation(re
     return;
   }
 
+  // A verified record can already contain its own expert-edited snapshot.
+  // Reuse that snapshot instead of replacing it with a recommendation fetched
+  // for every record that has the same disease name.
+  if (panel.dataset.loaded === '1' && panel.innerHTML.trim()) {
+    panel.style.display = 'block';
+    if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
+    return;
+  }
+
   panel.innerHTML = '<div class="no-records">Loading the current disease recommendation...</div>';
   panel.style.display = 'block';
   if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
@@ -2297,31 +2311,34 @@ function renderExpertRecordsTable(records) {
       : '<span class="expert-table-muted">Verified</span>';
 
     return `<tr>
-      <td>${imageCell}</td>
-      <td><strong>${escapeHtml(imageLabel)}</strong></td>
-      <td>${escapeHtml(owner)}</td>
-      <td>${escapeHtml(formatDiseaseClass(disease))}<br><span class="expert-table-muted">${Math.round(confidence * 100)}% confidence</span></td>
-      <td>${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round((d.confidence || 0) * 100)}%</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
-      <td>${buildRecordStatusBadge(record)}</td>
-      <td>${lat !== undefined && lat !== null && lng !== undefined && lng !== null ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}` : '<span class="expert-table-muted">Not available</span>'}</td>
-      <td>${escapeHtml(timestamp)}</td>
-      <td>${actions}</td>
+      <td data-label="Image">${imageCell}</td>
+      <td data-label="Record"><strong>${escapeHtml(imageLabel)}</strong></td>
+      <td data-label="Farmer">${escapeHtml(owner)}</td>
+      <td data-label="Primary detection">${escapeHtml(formatDiseaseClass(disease))}<br><span class="expert-table-muted">${Math.round(confidence * 100)}% confidence</span></td>
+      <td data-label="All detections">${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round((d.confidence || 0) * 100)}%</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
+      <td data-label="Status">${buildRecordStatusBadge(record)}</td>
+      <td data-label="Location">${lat !== undefined && lat !== null && lng !== undefined && lng !== null ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}` : '<span class="expert-table-muted">Not available</span>'}</td>
+      <td data-label="Submitted">${escapeHtml(timestamp)}</td>
+      <td data-label="Actions">${actions}</td>
     </tr>`;
   }).join('');
 
-  return `<div class="expert-table-wrap"><table class="expert-records-table"><thead><tr><th>Image</th><th>Record</th><th>Farmer</th><th>Primary detection</th><th>All detections</th><th>Status</th><th>Location</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="expert-table-wrap"><table class="expert-records-table expert-records-data"><colgroup><col class="col-image"><col class="col-record"><col class="col-farmer"><col class="col-primary"><col class="col-detections"><col class="col-status"><col class="col-location"><col class="col-submitted"><col class="col-actions"></colgroup><thead><tr><th>Image</th><th>Record</th><th>Farmer</th><th>Primary detection</th><th>All detections</th><th>Status</th><th>Location</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderExpertAuditTable(events) {
+  const formatAuditDetails = (details) => {
+    const status = details?.verification_status;
+    return status ? `Verification status: ${formatVerificationStatus(status).label}` : 'No details';
+  };
+
   const rows = events.map((entry) => {
     const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
     const target = entry.target || {};
     const upload = entry.upload || {};
     const details = entry.details || {};
     const action = String(entry.action || 'action').replace(/_/g, ' ');
-    const detailLabel = Object.keys(details).length
-      ? Object.entries(details).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join(' • ')
-      : 'No details';
+    const detailLabel = formatAuditDetails(details);
     return `<tr><td>${escapeHtml(timestamp)}</td><td><strong>${escapeHtml(action)}</strong></td><td>${escapeHtml(entry.actor_email || entry.actor_uid || 'Unknown expert')}</td><td>${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</td><td>${escapeHtml(upload.email || '—')}</td><td>${escapeHtml(detailLabel)}</td></tr>`;
   }).join('');
   return `<div class="expert-table-wrap"><table class="expert-records-table"><thead><tr><th>Date and time</th><th>Action</th><th>Expert</th><th>Record</th><th>Uploaded by</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -2448,7 +2465,7 @@ async function loadUserRecords() {
         </div>
       </div>`;
       const recommendationPanel = status.cls === 'verified'
-        ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
+        ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';
       
       return `
@@ -2533,10 +2550,12 @@ window.downloadMyRecordsPdf = async function downloadMyRecordsPdf() {
   }
 };
 
-window.loadExpertReview = async function loadExpertReview(filterName = currentExpertFilter || 'all') {
+window.loadExpertReview = async function loadExpertReview() {
   if (!currentToken || !currentUserIsExpert) return;
 
-  currentExpertFilter = String(filterName || 'all').toLowerCase();
+  // This is a work queue, not a history view. Verified records remain in the
+  // Expert Audit Log under My Records.
+  currentExpertFilter = 'pending';
   const pendingListEl = document.getElementById('expert-pending-list');
   const filterStateEl = document.getElementById('expert-filter-state');
   if (pendingListEl) pendingListEl.innerHTML = '<div class="no-records">Loading expert queue...</div>';
@@ -2544,7 +2563,7 @@ window.loadExpertReview = async function loadExpertReview(filterName = currentEx
 
   try {
     const [recordsRes, overridesRes] = await Promise.all([
-      fetch(`/expert/records?status=${encodeURIComponent(currentExpertFilter)}`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+      fetch('/expert/records?status=pending', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
       fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } })
     ]);
 
@@ -2554,12 +2573,11 @@ window.loadExpertReview = async function loadExpertReview(filterName = currentEx
     const records = recordsData.records || [];
     const overridesData = overridesRes.ok ? await overridesRes.json() : { overrides: {} };
     const overrides = overridesData.overrides || {};
-    const pending = records.filter(record => formatVerificationStatus(record.verification_status).cls === 'pending');
     const pendingCountEl = document.getElementById('expert-pending-records');
     const totalCountEl = document.getElementById('expert-total-records');
     const overrideCountEl = document.getElementById('expert-override-count');
-    if (pendingCountEl) pendingCountEl.textContent = pending.length;
-    if (totalCountEl) totalCountEl.textContent = records.length;
+    if (pendingCountEl) pendingCountEl.textContent = recordsData.pending_records ?? records.length;
+    if (totalCountEl) totalCountEl.textContent = recordsData.total_records ?? records.length;
     if (overrideCountEl) overrideCountEl.textContent = Object.keys(overrides).length;
 
     if (pendingListEl) {
@@ -2705,7 +2723,6 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
 
     if (statusEl) statusEl.textContent = `Saved expert override for ${disease}.`;
     showToast(`Saved recommendation for ${disease}`);
-    openExpertRecommendationEditor();
 
     const target = currentExpertRecommendationTarget;
     if (target && target.userId && target.recordId) {
@@ -2720,6 +2737,10 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
     } else if (typeof loadExpertReview === 'function') {
       loadExpertReview();
     }
+
+    // The editor is shown only while an expert is working on a selected
+    // recommendation. Close it once that record has been saved.
+    hideExpertRecommendationEditor();
   } catch (error) {
     console.error('Error saving expert recommendation:', error);
     showToast(`Save failed: ${error.message}`);

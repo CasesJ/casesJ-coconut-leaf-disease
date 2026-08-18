@@ -558,7 +558,7 @@
     #records-list .record-det.high { background:rgba(62,201,122,0.15); color:var(--bright); font-weight:600; }
     .record-filter.active { background:var(--mid); color:#fff; border-color:var(--mid); }
     /* EXPERT RECORD TABLES */
-    .expert-table-wrap { overflow-x:auto; padding:0; }
+    .expert-table-wrap { overflow:hidden; padding:0; }
     .expert-records-table { width:100%; min-width:880px; border-collapse:collapse; font-size:var(--text-xs); }
     .expert-records-table th { padding:0.8rem 0.75rem; text-align:left; color:var(--text2); background:rgba(38,134,90,0.07); border-bottom:1px solid rgba(11,42,31,0.12); font-size:0.7rem; letter-spacing:0.06em; text-transform:uppercase; white-space:nowrap; }
     .expert-records-table td { padding:0.75rem; vertical-align:middle; color:var(--text); border-bottom:1px solid rgba(11,42,31,0.07); }
@@ -570,7 +570,37 @@
     .expert-records-table .table-actions { display:flex; gap:0.4rem; flex-wrap:wrap; min-width:155px; }
     .expert-records-table .table-actions .btn { padding:0.35rem 0.55rem; font-size:0.68rem; white-space:nowrap; }
     .expert-table-muted { color:var(--text3); }
-    @media(max-width:640px) { .expert-table-wrap { margin:0 -0.75rem; } }
+    /* Keep the nine expert-record fields inside the review panel at desktop
+       sizes instead of relying on a wide, scrollable table. */
+    .expert-records-data { min-width:0; table-layout:fixed; width:100%; }
+    .expert-records-data .col-image { width:5%; }
+    .expert-records-data .col-record { width:19%; }
+    .expert-records-data .col-farmer { width:15%; }
+    .expert-records-data .col-primary { width:11%; }
+    .expert-records-data .col-detections { width:13%; }
+    .expert-records-data .col-status { width:8%; }
+    .expert-records-data .col-location { width:10%; }
+    .expert-records-data .col-submitted { width:9%; }
+    .expert-records-data .col-actions { width:10%; }
+    .expert-records-data th { padding:0.65rem 0.45rem; white-space:normal; line-height:1.2; }
+    .expert-records-data td { padding:0.65rem 0.45rem; overflow-wrap:anywhere; word-break:break-word; }
+    .expert-records-data .expert-record-thumb { width:36px; height:36px; }
+    .expert-records-data .table-actions { min-width:0; gap:0.25rem; }
+    .expert-records-data .table-actions .btn { padding:0.3rem 0.4rem; font-size:0.62rem; white-space:normal; }
+    @media(max-width:760px) {
+      .expert-table-wrap { overflow:visible; margin:0; }
+      .expert-records-data { display:block; min-width:0; font-size:var(--text-xs); }
+      .expert-records-data thead { display:none; }
+      .expert-records-data tbody { display:block; }
+      .expert-records-data tr { display:block; margin:0 0 0.75rem; padding:0.35rem 0.65rem; border:1px solid rgba(11,42,31,0.1); border-radius:8px; background:#fff; }
+      .expert-records-data td { display:grid; grid-template-columns:minmax(6.25rem, 34%) minmax(0, 1fr); gap:0.5rem; padding:0.45rem 0; border-bottom:1px solid rgba(11,42,31,0.07); overflow-wrap:anywhere; }
+      .expert-records-data td:last-child { border-bottom:none; }
+      .expert-records-data td::before { content:attr(data-label); color:var(--text3); font-size:0.66rem; font-weight:700; letter-spacing:0.04em; line-height:1.3; text-transform:uppercase; }
+      .expert-records-data .expert-record-thumb { width:36px; height:36px; }
+      .expert-records-data .record-det { font-size:0.65rem; padding:0.18rem 0.35rem; }
+      .expert-records-data .table-actions { min-width:0; gap:0.3rem; }
+      .expert-records-data .table-actions .btn { padding:0.3rem 0.45rem; font-size:0.65rem; }
+    }
     
     .no-records { text-align:center; padding:clamp(2rem, 5vw, 2.5rem) var(--spacing-md); color:var(--text3); font-size:var(--text-base); }
 
@@ -982,7 +1012,7 @@
     let currentToken = null;
     let currentUserRole = 'farmer';
     let currentUserIsExpert = false;
-    let currentExpertFilter = 'all';
+    let currentExpertFilter = 'pending';
     let authMode = 'login';
     let auth = null;
     let userHasExplicitlyLoggedIn = false;
@@ -1183,7 +1213,7 @@
       Disease Map
     </a>
     <a href="#records" class="nav-link" id="nav-records-link" onclick="switchTab('records',this);loadUserRecords();return false;">
-      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg>
       My Records
     </a>
     <a href="#expert" class="nav-link" id="expert-nav-link" style="display:none;" onclick="switchTab('expert',this);loadExpertReview();return false;">
@@ -1468,15 +1498,12 @@
 
       <div class="records-container">
         <div class="records-head">
-          <h4>Expert Records</h4>
+          <h4>Pending Expert Review</h4>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-o" onclick="loadExpertReview('pending')" style="padding:6px 12px;font-size:12px;">Pending</button>
-            <button class="btn btn-o" onclick="loadExpertReview('verified')" style="padding:6px 12px;font-size:12px;">Verified</button>
-            <button class="btn btn-o" onclick="loadExpertReview('all')" style="padding:6px 12px;font-size:12px;">All</button>
-            <button class="btn btn-o" onclick="loadExpertReview(currentExpertFilter)" style="padding:6px 12px;font-size:12px;">Refresh</button>
+            <button class="btn btn-o" onclick="loadExpertReview()" style="padding:6px 12px;font-size:12px;">Refresh</button>
           </div>
         </div>
-        <div id="expert-filter-state" style="padding:0 16px 12px;color:var(--text3);font-size:12px;">Showing all records</div>
+        <div id="expert-filter-state" style="padding:0 16px 12px;color:var(--text3);font-size:12px;">Showing pending uploads</div>
         <div id="expert-pending-list" class="records-list">
           <div class="no-records">Loading expert queue...</div>
         </div>
@@ -1512,6 +1539,7 @@
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn btn-p" onclick="saveExpertRecommendation()" style="padding:8px 14px;">Save Recommendation</button>
+            <button class="btn btn-o" onclick="document.getElementById('expert-recommendation-editor').classList.add('hidden')" style="padding:8px 14px;">Cancel</button>
           </div>
         </div>
         <div id="expert-recommendation-status" style="padding:0 16px 16px;color:var(--text3);font-size:12px;"></div>
