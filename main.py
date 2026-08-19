@@ -2315,6 +2315,9 @@ async def update_expert_recommendation(
             "record_id": payload.target_record_id,
         },
         details={
+            # Saving a recommendation also verifies the selected upload. Keep
+            # this explicit so the audit log can show the final record status.
+            "verification_status": VERIFIED_STATUS if direct_record_synced else "pending",
             "active": payload.active,
             "prevention_count": len(payload.prevention or []),
             "synced_records": 0,

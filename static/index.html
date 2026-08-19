@@ -318,8 +318,8 @@
     .result-nav { position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:42px; height:42px; border:0; border-radius:50%; background:rgba(11,42,31,0.82); color:#fff; cursor:pointer; font-size:28px; line-height:1; }
     .result-nav:hover:not(:disabled) { background:var(--mid); }
     .result-nav:disabled { opacity:0.35; cursor:default; }
-    .result-nav.previous { left:14px; }
-    .result-nav.next { right:14px; }
+    .result-nav.next { left:14px; }
+    .result-nav.previous { right:14px; }
     .det-card { background:var(--white); border-radius:var(--r); box-shadow:var(--sh); border:1px solid rgba(11,42,31,0.06); display:flex; flex-direction:column; overflow:hidden; min-height:clamp(300px, 50vh, 500px); }
     .det-head { padding:clamp(1rem, 2.5vw, 1.5rem); border-bottom:1px solid rgba(11,42,31,0.06); display:flex; align-items:center; justify-content:space-between; }
     .det-head h4 { font-size:var(--text-lg); font-weight:700; color:var(--deep); }
@@ -460,6 +460,13 @@
     .area-meta { color:var(--text3); font-size:var(--text-xs); margin-top:0.25rem; }
     .area-bar { height:5px; border-radius:5px; background:#e8eee8; overflow:hidden; margin-top:0.65rem; }
     .area-bar span { display:block; height:100%; border-radius:inherit; }
+    .map-toolbar { padding:.75rem var(--spacing-sm); background:#f8fbf8; border-bottom:1px solid rgba(11,42,31,.08); display:grid; grid-template-columns:repeat(3,minmax(110px,1fr)); gap:.55rem; }
+    .map-filter { display:flex; flex-direction:column; gap:.22rem; font-size:.68rem; font-weight:700; color:var(--text3); letter-spacing:.04em; text-transform:uppercase; }
+    .map-filter select,.map-filter input { width:100%; min-height:36px; border:1px solid rgba(11,42,31,.14); border-radius:7px; background:#fff; color:var(--text); padding:0 .6rem; font:inherit; font-size:var(--text-sm); text-transform:none; letter-spacing:normal; outline:none; }.map-filter select:focus,.map-filter input:focus { border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,.12); }
+    .legend-group { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; }.legend-title { color:var(--deep); font-weight:700; font-size:var(--text-sm); }.severity-pill { display:inline-flex; align-items:center; gap:.3rem; font-weight:600; font-size:var(--text-xs); }.severity-dot { width:.52rem; height:.52rem; border-radius:50%; display:inline-block; }
+    .area-details { display:grid; grid-template-columns:1fr 1fr; gap:.3rem .65rem; margin-top:.65rem; font-size:var(--text-xs); color:var(--text2); }.area-details strong { display:block; color:var(--deep); font-size:var(--text-sm); }
+    .map-popup { min-width:240px; color:#1f342a; }.map-popup h3 { margin:0 0 .55rem; font-size:1rem; color:var(--deep); }.map-popup dl { display:grid; grid-template-columns:auto 1fr; gap:.3rem .65rem; margin:0; font-size:.77rem; }.map-popup dt { color:#64748b; }.map-popup dd { margin:0; font-weight:600; }.popup-actions { display:flex; gap:.45rem; margin-top:.8rem; }.popup-actions button { flex:1; border:0; border-radius:6px; padding:.45rem; font:600 .72rem 'DM Sans',sans-serif; cursor:pointer; background:#e7f4eb; color:#17633e; }.popup-actions button:last-child { background:#17633e; color:#fff; }
+    @media(max-width:900px) { .map-toolbar { grid-template-columns:repeat(2,1fr); } } @media(max-width:480px) { .map-toolbar { grid-template-columns:1fr; } .area-details { grid-template-columns:1fr; } }
     @media(max-width:640px) { .area-grid { grid-template-columns:1fr; } }
 
     /* RECORDS PANEL */
@@ -1005,6 +1012,73 @@
       max-width:none;
       min-width:0;
     }
+
+    /* REFINED APPLICATION SHELL */
+    :root { --sidebar-collapsed:76px; --surface:#fffdfa; --line:rgba(15,63,43,.10); }
+    .sidebar { padding:20px 12px; background:linear-gradient(180deg,#08281d 0%,#0d3a2a 100%); }
+    .sidebar-logo { position:relative; display:flex; align-items:center; gap:11px; padding:10px 10px 22px; margin:0 0 16px; }
+    .sidebar-logo::before { content:'C'; display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:10px; color:#fff; font-weight:800; background:linear-gradient(135deg,var(--accent),var(--bright)); box-shadow:0 7px 16px rgba(62,201,122,.2); }
+    .sidebar-logo h3 { font-size:18px; letter-spacing:-.3px; margin:0; }
+    .sidebar-logo p { font-size:10px; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+    .sidebar-section { color:rgba(255,255,255,.42); font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; padding:14px 11px 7px; }
+    .sidebar-nav a { min-height:43px; gap:12px; padding:10px 11px; margin:2px 0; border-left:0; border-radius:9px; font-size:13px; }
+    .sidebar-nav a:hover, .sidebar-nav a:focus-visible, .sidebar-nav a.active { border-left:0; border-radius:9px; transform:none; background:rgba(62,201,122,.17); }
+    .sidebar-nav a.active { box-shadow:inset 3px 0 0 var(--accent); }
+    .sidebar-nav a svg { width:18px; height:18px; flex:0 0 18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .sidebar-collapse { position:absolute; right:-15px; top:28px; width:30px; height:30px; display:grid; place-items:center; border:1px solid var(--line); border-radius:50%; background:var(--surface); color:var(--mid); cursor:pointer; box-shadow:var(--sh); }
+    @media(min-width:1024px) {
+      body.sidebar-collapsed { --sidebar-width:var(--sidebar-collapsed); }
+      body.sidebar-collapsed .sidebar-logo h3, body.sidebar-collapsed .sidebar-logo p, body.sidebar-collapsed .sidebar-section, body.sidebar-collapsed .sidebar-nav a span { display:none; }
+      body.sidebar-collapsed .sidebar-logo { padding-left:9px; }
+      body.sidebar-collapsed .sidebar-nav a { justify-content:center; padding-left:0; padding-right:0; }
+      body.sidebar-collapsed .sidebar-collapse { transform:rotate(180deg); }
+    }
+    .dashboard-intro { display:flex; justify-content:space-between; align-items:end; gap:16px; margin:3px 0 22px; }
+    .dashboard-intro h1 { color:var(--deep); font-size:clamp(25px,3vw,34px); line-height:1.1; letter-spacing:-.8px; }
+    .dashboard-intro p { color:var(--text3); font-size:14px; margin-top:6px; }
+    .dashboard-date { padding:8px 11px; color:var(--mid); background:#edf8f1; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
+    .dashboard-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
+    .stat-box { align-items:flex-start; text-align:left; min-height:145px; padding:20px; border-radius:14px; }
+    .stat-box .stat-icon { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; margin-bottom:14px; background:color-mix(in srgb,var(--stat-accent) 14%, white); color:var(--stat-accent); }
+    .stat-box .stat-icon svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.9; }
+    .stat-box h4 { order:2; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .stat-box .stat-value { order:3; margin:5px 0 0; font-size:28px; }
+    .stat-box .stat-subtext { order:4; margin-top:3px; }
+    .stat-box.mapped { --stat-accent:#5579c9; }
+    .dashboard-lower { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:18px; margin-top:18px; }
+    .dashboard-section-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--sh); }
+    .dashboard-section-card h4 { font-size:15px; color:var(--deep); }
+    .dashboard-section-card > p { color:var(--text3); font-size:12px; margin:4px 0 15px; }
+    .attention-list, .activity-list { display:grid; gap:9px; }
+    .attention-item, .activity-item { display:flex; align-items:center; gap:10px; padding:10px; border-radius:9px; background:#fafbf8; }
+    .severity-dot { width:9px; height:9px; border-radius:50%; flex:0 0 9px; } .severity-dot.low{background:#3ec97a}.severity-dot.moderate{background:#f0b429}.severity-dot.high{background:#e04f4f}
+    .attention-item strong, .activity-item strong { display:block; font-size:13px; color:var(--text); } .attention-item span, .activity-item span { display:block; font-size:11px; color:var(--text3); margin-top:2px; }
+    .attention-item b { margin-left:auto; font-size:11px; font-weight:700; color:var(--text2); }
+    .quick-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+    .quick-action { display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; padding:11px; color:var(--mid); background:#fff; text-decoration:none; font-size:12px; font-weight:700; cursor:pointer; transition:.2s; }
+    .quick-action:hover { border-color:var(--bright); background:#f2fbf6; transform:translateY(-1px); }
+    .quick-action svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; }
+    @media(max-width:1100px) { .dashboard-stats {grid-template-columns:repeat(2,minmax(0,1fr));} .dashboard-lower{grid-template-columns:1fr;} }
+    @media(max-width:600px) { .dashboard-intro{align-items:flex-start;flex-direction:column}.dashboard-stats{grid-template-columns:1fr}.dashboard-date{display:none} }
+
+    /* DETECTION WORKFLOW */
+    .detection-workflow { display:flex; align-items:center; margin:0 0 18px; overflow:auto; }
+    .workflow-step { display:flex; align-items:center; gap:8px; color:var(--text3); font-size:12px; font-weight:700; white-space:nowrap; }
+    .workflow-step b { display:grid; place-items:center; width:25px; height:25px; border-radius:50%; color:var(--mid); background:#e8f3ec; font-size:11px; }
+    .workflow-step.active { color:var(--deep); } .workflow-step.active b { color:#fff; background:var(--bright); }
+    .workflow-line { height:1px; width:40px; margin:0 10px; flex:0 0 40px; background:rgba(11,42,31,.16); }
+    .upload-feed-card { border:1px solid var(--line); box-shadow:var(--sh); overflow:visible; }
+    .upload-drop-inner { min-height:250px; padding:32px 24px; border:1.5px dashed rgba(38,134,90,.35); background:linear-gradient(135deg,#fbfdfb,#f2faf5); }
+    .upload-drop-inner input[type="file"] { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+    .upload-drop-inner .uicon { width:54px; height:54px; margin-bottom:12px; background:#dff3e7; }
+    .upload-drop-inner h3 { font-size:19px; }.upload-drop-inner p { font-size:13px; }
+    .browse-files { position:relative; z-index:2; margin:16px 0 12px; padding:10px 16px; border:0; border-radius:8px; background:var(--deep); color:#fff; font:700 13px 'DM Sans',sans-serif; cursor:pointer; }
+    .browse-files:hover { background:var(--mid); }.upload-drop-inner .ftypes { margin-top:0; }.upload-drop-inner .ftypes span { background:#fff; border:1px solid var(--line); }
+    .preview-panel { margin:14px 16px 0; padding:14px; border:1px solid rgba(38,134,90,.2); border-radius:10px; background:#f8fcf9; }
+    .preview-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }.preview-head strong { font-size:13px; color:var(--deep); }.preview-head span { font-size:11px; color:var(--text3); }
+    .preview-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(94px,1fr)); gap:10px; }.preview-item { position:relative; min-width:0; }.preview-item img { display:block; width:100%; height:76px; border-radius:7px; object-fit:cover; background:#eaf2ec; }.preview-item p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:5px; color:var(--text2); font-size:10px; }.preview-remove { position:absolute; top:4px; right:4px; display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:50%; color:#fff; background:rgba(11,42,31,.78); font-size:15px; line-height:1; cursor:pointer; }
+    .upload-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }.run-detection { padding:9px 15px !important; background:var(--bright) !important; box-shadow:0 5px 14px rgba(38,134,90,.2); }
+    @media(max-width:600px) { .workflow-line{width:18px;flex-basis:18px;margin:0 6px}.workflow-step{font-size:10px;gap:5px}.workflow-step b{width:21px;height:21px}.upload-drop-inner{min-height:220px} }
   </style>
   <script>
     // ── GLOBAL SCOPE SETUP - All variables and stubs defined FIRST ──
@@ -1196,34 +1270,36 @@
 <!-- SIDEBAR NAVIGATION -->
 <div class="sidebar">
   <div class="sidebar-logo">
-    <h3>CoconutAI</h3>
-    <p>Disease Detection System</p>
+    <div><h3>CoconutAI</h3><p>Disease Detection System</p></div>
+    <button class="sidebar-collapse" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" onclick="document.body.classList.toggle('sidebar-collapsed')">‹</button>
   </div>
   <nav class="sidebar-nav">
+    <div class="sidebar-section">Main</div>
     <a href="#dashboard" class="nav-link active" onclick="switchTab('dashboard',this);return false;">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-      Dashboard
+      <span>Dashboard</span>
     </a>
     <a href="#upload" class="nav-link" id="nav-upload-link" onclick="switchTab('upload',this);return false;">
       <svg viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-      Upload Image
+      <span>Disease Detection</span>
     </a>
     <a href="#map" class="nav-link" id="nav-map-link" onclick="switchTab('map',this);return false;">
       <svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
-      Disease Map
+      <span>Disease Map</span>
     </a>
+    <div class="sidebar-section">Management</div>
     <a href="#records" class="nav-link" id="nav-records-link" onclick="switchTab('records',this);loadUserRecords();return false;">
       <svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg>
-      My Records
+      <span>Detection Records</span>
     </a>
     <a href="#expert" class="nav-link" id="expert-nav-link" style="display:none;" onclick="switchTab('expert',this);loadExpertReview();return false;">
       <svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.4L21 12l-6.6 3.6L12 22l-2.4-6.4L3 12l6.6-3.6L12 2z"/></svg>
-      Expert Review
+      <span>Expert Review</span>
     </a>
-    <hr style="margin:20px 0;border:none;border-top:1px solid rgba(255,255,255,0.1)">
+    <div class="sidebar-section">System</div>
     <a href="#settings" class="nav-link" onclick="switchTab('settings',this);return false;">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l1.72-1.34c.15-.12.19-.34.1-.51l-1.63-2.83c-.12-.22-.37-.29-.59-.22l-2.03.8c-.42-.32-.9-.6-1.42-.82l-.31-2.15c-.04-.24-.24-.41-.5-.41h-3.26c-.26 0-.46.17-.49.41l-.31 2.15c-.52.23-1 .5-1.42.82l-2.03-.8c-.23-.09-.47 0-.59.22L2.74 8.87c-.09.17-.05.39.1.51l1.72 1.34c-.05.3-.07.62-.07.94s.02.64.07.94l-1.72 1.34c-.15.12-.19.34-.1.51l1.63 2.83c.12.22.37.29.59.22l2.03-.8c.42.32.9.6 1.42.82l.31 2.15c.05.24.24.41.5.41h3.26c.26 0 .46-.17.49-.41l.31-2.15c.52-.23 1-.5 1.42-.82l2.03.8c.23.09.47 0 .59-.22l1.63-2.83c.09-.17.05-.39-.1-.51l-1.72-1.34zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-      Settings
+      <span>Settings</span>
     </a>
   </nav>
 </div>
@@ -1259,26 +1335,39 @@
 <!-- DASHBOARD PANEL WITH STATS -->
 <div id="panel-dashboard" class="panel active">
   <div class="panels">
+    <div class="dashboard-intro">
+      <div><h1>Farm health overview</h1><p>Monitor coconut tree health and act early on disease risks.</p></div>
+      <div class="dashboard-date" id="dashboard-date">Today</div>
+    </div>
     <div class="dashboard-stats">
-      <div class="stat-box">
+      <div class="stat-box total">
+        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></svg></div>
         <h4>Total Detections</h4>
         <div class="stat-value" id="total-detections">0</div>
         <div class="stat-subtext">All logged detections</div>
       </div>
-      <div class="stat-box">
-        <h4>Disease Cases</h4>
+      <div class="stat-box disease">
+        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 3v10M12 21v.01M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg></div>
+        <h4>Diseased Trees</h4>
         <div class="stat-value" id="disease-count">0</div>
         <div class="stat-subtext">Active detections</div>
       </div>
-      <div class="stat-box">
+      <div class="stat-box healthy">
+        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 21c5-3 8-7.1 8-12V4l-5 2-3-3-3 3-5-2v5c0 4.9 3 9 8 12Z"/><path d="m9 12 2 2 4-4"/></svg></div>
         <h4>Healthy Trees</h4>
         <div class="stat-value" id="healthy-count">0</div>
         <div class="stat-subtext">No disease detected</div>
       </div>
+      <div class="stat-box mapped">
+        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg></div>
+        <h4>Mapped Locations</h4>
+        <div class="stat-value" id="mapped-locations">0</div>
+        <div class="stat-subtext">Locations with detections</div>
+      </div>
     </div>
 
     <!-- Health Analytics & Trends Dashboard -->
-    <div class="records-container">
+    <div class="records-container" id="analytics-section">
       <div class="records-head">
         <h4>Health Analytics & Trends</h4>
         <div style="display:flex;gap:10px;align-items:center;">
@@ -1319,6 +1408,12 @@
   <div id="panel-upload" class="panel">
     <div class="panels">
       <p class="section-label">Image Upload — Disease Detection</p>
+      <div class="detection-workflow" aria-label="Detection workflow">
+        <div class="workflow-step active"><b>1</b>Upload Image</div><div class="workflow-line"></div>
+        <div class="workflow-step"><b>2</b>Preview Images</div><div class="workflow-line"></div>
+        <div class="workflow-step"><b>3</b>Run Detection</div><div class="workflow-line"></div>
+        <div class="workflow-step"><b>4</b>View Results</div>
+      </div>
       <div class="upload-feed-card">
         <div class="feed-toolbar">
           <div class="ftleft">
@@ -1330,20 +1425,22 @@
              ondragover="event.preventDefault();event.stopPropagation();this.classList.add('over')"
              ondragleave="event.stopPropagation();this.classList.remove('over')"
              ondrop="handleDrop(event)">
-          <input type="file" id="fileInput" accept="image/*" multiple onchange="stageUploadImage(this.files)"/>
+          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" multiple onchange="stageUploadImage(this.files)"/>
           <div class="loverlay" id="upload-loading"><div class="spin"></div><p id="upload-loading-text">Analyzing leaf...</p></div>
           <div class="uicon">
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
           </div>
-          <h3>Drop your leaf images here</h3>
-          <p>or click to browse and select one or more images</p>
+          <h3>Upload coconut leaf images</h3>
+          <p>Drag and drop one or more images here, or choose files from your device.</p>
+          <button class="browse-files" type="button" onclick="document.getElementById('fileInput').click();event.stopPropagation();">Browse Files</button>
           <div class="ftypes"><span>JPG</span><span>PNG</span><span>WEBP</span></div>
         </div>
-        <div id="upload-confirmation" style="display:none;margin:14px 16px 0;padding:12px 14px;background:rgba(38,134,90,0.08);border:1px solid rgba(38,134,90,0.2);border-radius:8px;">
-          <div id="upload-confirmation-name" style="font-size:12px;color:var(--text2);margin-bottom:10px;"></div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <div id="upload-confirmation" class="preview-panel" style="display:none;">
+          <div class="preview-head"><strong>Image previews</strong><span id="upload-confirmation-name"></span></div>
+          <div id="staged-image-previews" class="preview-grid"></div>
+          <div class="upload-actions">
             <button class="btn btn-o" type="button" onclick="cancelStagedUpload()" style="padding:7px 12px;font-size:12px;">Cancel</button>
-            <button class="btn btn-p" type="button" onclick="confirmStagedUpload()" style="padding:7px 12px;font-size:12px;">Confirm Upload</button>
+            <button class="btn btn-p run-detection" type="button" onclick="confirmStagedUpload()">Run Detection</button>
           </div>
         </div>
       </div>
@@ -1392,12 +1489,15 @@
               <button class="btn btn-o" style="padding:6px 12px;font-size:12px" onclick="clearPins()">Clear</button>
             </div>
           </div>
+          <div class="map-toolbar" aria-label="Disease map filters">
+            <label class="map-filter">Disease<select id="map-filter-disease" onchange="applyMapFilters()"><option value="">All diseases</option><option value="healthy">Healthy</option><option value="cercospora">Cercospora</option><option value="leaf rot">Leaf Rot</option><option value="pestalotiopsis">Pestaltiopsis</option><option value="bud rot">Bud Rot</option></select></label>
+            <label class="map-filter">Area<select id="map-filter-area" onchange="applyMapFilters()"><option value="">All areas</option><option value="area-1">Area 1</option><option value="area-2">Area 2</option><option value="area-3">Area 3</option><option value="area-4">Area 4</option></select></label>
+            <label class="map-filter">Severity<select id="map-filter-severity" onchange="applyMapFilters()"><option value="">All levels</option><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
+          </div>
           <div id="disease-map"></div>
           <div class="map-legend">
-            <div class="leg-item"><div class="leg-dot" style="background:var(--red)"></div>Disease detected</div>
-            <div class="leg-item"><div class="leg-dot" style="background:var(--yellow)"></div>Warning zone</div>
-            <div class="leg-item"><div class="leg-dot" style="background:var(--accent)"></div>Healthy</div>
-            <div class="leg-item"><div class="leg-dot" style="background:#888"></div>Upload pin</div>
+            <div class="legend-group"><span class="legend-title">Disease</span><div class="leg-item"><i class="leg-dot" style="background:#22c55e"></i>Healthy</div><div class="leg-item"><i class="leg-dot" style="background:#9333ea"></i>Cercospora</div><div class="leg-item"><i class="leg-dot" style="background:#2563eb"></i>Leaf Rot</div><div class="leg-item"><i class="leg-dot" style="background:#06b6d4"></i>Pestaltiopsis</div><div class="leg-item"><i class="leg-dot" style="background:#eab308"></i>Bud Rot</div></div>
+            <div class="legend-group"><span class="legend-title">Severity</span><span class="severity-pill"><i class="severity-dot" style="background:#22c55e"></i>Low</span><span class="severity-pill"><i class="severity-dot" style="background:#f97316"></i>Moderate</span><span class="severity-pill"><i class="severity-dot" style="background:#ef4444"></i>High</span></div>
             <div class="leg-item"><span style="font-size:11px">🔴🟠🟡 Heatmap shows disease concentration</span></div>
           </div>
         </div>

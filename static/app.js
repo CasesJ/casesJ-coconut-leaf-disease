@@ -302,13 +302,21 @@ window.loadDashboardStats = async function loadDashboardStats() {
     const totalDetections = detectionItems.length;
     const diseaseCount = detectionItems.filter(det => isDiseaseClass(det.class)).length;
     const healthyCount = detectionItems.filter(det => isHealthyClass(det.class)).length;
+    const mappedLocations = new Set(dashboardRecords.map(record => {
+      const lat = record.lat ?? record.gps_data?.latitude ?? record.gps_data?.lat ?? record.gps?.lat ?? record.gps?.latitude;
+      const lng = record.lng ?? record.gps_data?.longitude ?? record.gps_data?.lng ?? record.gps?.lng ?? record.gps?.longitude;
+      return lat != null && lng != null ? `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}` : null;
+    }).filter(Boolean)).size;
 
     const totalEl = document.getElementById('total-detections');
     const diseaseEl = document.getElementById('disease-count');
     const healthyEl = document.getElementById('healthy-count');
+    const mappedEl = document.getElementById('mapped-locations');
     if (totalEl) totalEl.textContent = totalDetections;
     if (diseaseEl) diseaseEl.textContent = diseaseCount;
     if (healthyEl) healthyEl.textContent = healthyCount;
+    if (mappedEl) mappedEl.textContent = mappedLocations;
+    renderDashboardHighlights(dashboardRecords);
 
     // Render analytics charts instead of records list
     renderAnalyticsCharts(dashboardRecords);
@@ -345,11 +353,11 @@ function isDiseaseClass(label) {
 const DETECTION_CLASS_COLORS = {
   healthy: '#22c55e',
   'caterpillars': '#f97316',
-  'cercospora': '#ec4899',
+  'cercospora': '#9333ea',
   'drying of leaflets': '#2563eb',
   'leaf rot': '#2563eb',
   'pestalotiopsis': '#06b6d4',
-  'bud root': '#d4d800',
+  'bud root': '#eab308',
   unknown: '#64748b'
 };
 
@@ -462,6 +470,43 @@ window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedL
   content.innerHTML = `<img src="${imageUrl}" alt="${imageLabel}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
   modal.classList.remove('hidden');
 };
+
+function renderDashboardHighlights(records) {
+  const attentionEl = document.getElementById('attention-list');
+  const activityEl = document.getElementById('recent-activity');
+  const dateEl = document.getElementById('dashboard-date');
+  if (dateEl) dateEl.textContent = new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+  const areaCounts = new Map();
+  records.forEach(record => {
+    const lat = record.lat ?? record.gps_data?.latitude ?? record.gps_data?.lat ?? record.gps?.lat ?? record.gps?.latitude;
+    const lng = record.lng ?? record.gps_data?.longitude ?? record.gps_data?.lng ?? record.gps?.lng ?? record.gps?.longitude;
+    const diseases = (record.detections || []).filter(det => isDiseaseClass(det.class)).length;
+    if (lat != null && lng != null && diseases) {
+      const key = `${Number(lat).toFixed(3)}, ${Number(lng).toFixed(3)}`;
+      areaCounts.set(key, (areaCounts.get(key) || 0) + diseases);
+    }
+  });
+  const areas = [...areaCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (attentionEl) {
+    attentionEl.innerHTML = areas.length ? areas.map(([location, count]) => {
+      const level = count >= 6 ? 'high' : count >= 3 ? 'moderate' : 'low';
+      const label = level[0].toUpperCase() + level.slice(1);
+      return `<div class="attention-item"><i class="severity-dot ${level}"></i><div><strong>Mapped area · ${location}</strong><span>${count} disease detection${count === 1 ? '' : 's'} recorded</span></div><b>${label}</b></div>`;
+    }).join('') : '<div class="attention-item"><i class="severity-dot low"></i><div><strong>Low prevalence</strong><span>No mapped areas require immediate action.</span></div><b>Monitor</b></div>';
+  }
+  if (activityEl) {
+    const recent = [...records].sort((a, b) => new Date(b.timestamp || b.created_at || 0) - new Date(a.timestamp || a.created_at || 0)).slice(0, 3);
+    activityEl.innerHTML = recent.length ? recent.map(record => {
+      const first = (record.detections || [])[0];
+      const disease = first ? formatDiseaseClass(first.class) : 'Detection logged';
+      const when = record.timestamp || record.created_at;
+      const time = when ? new Date(when).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'Recently';
+      const level = first && isDiseaseClass(first.class) ? 'moderate' : 'low';
+      return `<div class="activity-item"><i class="severity-dot ${level}"></i><div><strong>${disease}</strong><span>${time}</span></div></div>`;
+    }).join('') : '<div class="activity-item"><i class="severity-dot low"></i><div><strong>No recent activity</strong><span>New detections will appear here.</span></div></div>';
+  }
+}
 
 function getTreatmentRecommendation(diseaseName) {
   const normalized = String(diseaseName).toLowerCase();
@@ -1129,9 +1174,17 @@ function createMarkerElement(color){
   return el;
 }
 
+function getSeverity(label, confidence) { return (isHealthyClass(label) || confidence < 0.5) ? 'low' : confidence < 0.75 ? 'moderate' : 'high'; }
+function severityColor(level) { return level === 'high' ? '#ef4444' : level === 'moderate' ? '#f97316' : '#22c55e'; }
+function mapAreaForPoint(lat, lng) { const row = lat < (AREA_MONITORING_BOUNDS.minLat + AREA_MONITORING_BOUNDS.maxLat) / 2 ? 0 : 1, col = lng < (AREA_MONITORING_BOUNDS.minLng + AREA_MONITORING_BOUNDS.maxLng) / 2 ? 0 : 1; return `Area ${row * 2 + col + 1}`; }
+function popupHtml(entry, index) { const level = getSeverity(entry.label, entry.confidence), tree = `Tree-${String(index + 1).padStart(3, '0')}`; return `<div class="map-popup"><h3>${formatDiseaseClass(entry.label)}</h3><dl><dt>Location / Tree ID</dt><dd>${entry.address || tree} · ${tree}</dd><dt>Confidence</dt><dd>${Math.round(entry.confidence * 100)}%</dd><dt>Date</dt><dd>${entry.date || new Date().toLocaleDateString()}</dd><dt>Coordinates</dt><dd>${Number(entry.lat).toFixed(6)}, ${Number(entry.lng).toFixed(6)}</dd><dt>Severity</dt><dd style="color:${severityColor(level)};text-transform:capitalize">${level}</dd></dl><div class="popup-actions"><button onclick="viewDetection(${index})">View Detection</button></div></div>`; }
+window.applyMapFilters = function() { const disease=document.getElementById('map-filter-disease')?.value||'',area=document.getElementById('map-filter-area')?.value||'',severity=document.getElementById('map-filter-severity')?.value||''; log.forEach((entry,index)=>{ const show=(!disease||normalizeDiseaseClass(entry.label)===disease)&&(!area||mapAreaForPoint(entry.lat,entry.lng).toLowerCase().replace(' ','-')===area)&&(!severity||getSeverity(entry.label,entry.confidence)===severity); const marker=mainMarkers[mainMarkers.length-1-index]?.marker, mini=miniMarkers[miniMarkers.length-1-index]; if(marker)marker.getElement().style.display=show?'':'none'; if(mini)mini.getElement().style.display=show?'':'none'; }); renderLog(); };
+window.viewDetection = index => flyTo(index);
+
 function addPin(lat,lng,label,confidence,source){
-  const c=cls(label,confidence), color=clsColor(c), pct=Math.round(confidence*100);
+  const c=cls(label,confidence), color=getDetectionClassColor(label), pct=Math.round(confidence*100);
   const time=new Date().toLocaleTimeString();
+  const date=new Date().toISOString().slice(0,10);
   
   // Build popup with loading state for address
   let popupContent=`<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>Source: ${source}<br><span style="font-size:11px;color:#666">Loading location...</span><br>Time: ${time}`;
@@ -1143,7 +1196,7 @@ function addPin(lat,lng,label,confidence,source){
   if(mapsReady){
     // Main map marker
     markerElement = createMarkerElement(color);
-    popup = new maplibregl.Popup({offset: 25}).setHTML(popupContent);
+    popup = new maplibregl.Popup({offset: 25});
     const mainMarker = new maplibregl.Marker({element: markerElement})
       .setLngLat([lng, lat])
       .setPopup(popup)
@@ -1173,8 +1226,9 @@ function addPin(lat,lng,label,confidence,source){
     }
   }
   
-  const entry = {lat,lng,label,confidence,time,source,c,color,address:'Loading...',mainMarker: markerElement, popup: popup};
+  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker: markerElement, popup: popup};
   log.unshift(entry);
+  if (popup) popup.setHTML(popupHtml(entry, 0));
   
   // ✅ Save pin to sessionStorage for farm location map
   try {
@@ -1197,7 +1251,7 @@ function addPin(lat,lng,label,confidence,source){
     // Update marker popup with real address
     if(popup) {
       const updatedPopup = `<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>📍 <b>${address}</b><br>Source: ${source}<br>Time: ${time}`;
-      popup.setHTML(updatedPopup);
+      popup.setHTML(popupHtml(entry, log.indexOf(entry)));
     }
     
     renderLog(); // Re-render with address
@@ -1307,12 +1361,12 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
       area.samples += 1;
       if ((record.detections || []).some(det => !isHealthyClass(det.class))) area.diseased += 1;
     });
-    areas.forEach(area => { area.prevalence = area.samples ? Math.round(area.diseased / area.samples * 100) : 0; area.color = areaColor(area.prevalence); });
+    areas.forEach(area => { area.prevalence = area.samples ? Math.round(area.diseased / area.samples * 100) : 0; area.color = areaColor(area.prevalence); area.severity = area.prevalence >= 60 ? 'High' : area.prevalence >= 30 ? 'Moderate' : 'Low'; });
     const gpsSamples = areas.reduce((sum, area) => sum + area.samples, 0);
     const diseasedSamples = areas.reduce((sum, area) => sum + area.diseased, 0);
     const highest = [...areas].sort((a, b) => b.prevalence - a.prevalence)[0];
     if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Disease Prevalence</h4><div class="stat-value">${gpsSamples ? Math.round(diseasedSamples / gpsSamples * 100) : 0}%</div><div class="stat-subtext">Across mapped areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${gpsSamples && highest.prevalence ? highest.name : '—'}</div><div class="stat-subtext">Highest disease prevalence</div></div>`;
-    gridEl.innerHTML = areas.map(area => `<div class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">${area.diseased} diseased / ${area.samples} GPS samples</div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></div>`).join('');
+    gridEl.innerHTML = areas.map(area => `<div class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">Disease prevalence</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : 'No samples'}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></div>`).join('');
     if (mapsReady && mainMap.getSource('area-monitoring-src')) mainMap.getSource('area-monitoring-src').setData({ type: 'FeatureCollection', features: buildAreaFeatures(areas) });
     areaMonitoringLoaded = true;
   } catch (error) {
@@ -1411,12 +1465,48 @@ function stageUploadImage(files) {
   const confirmation = document.getElementById('upload-confirmation');
   const fileName = document.getElementById('upload-confirmation-name');
   if (fileName) {
-    const names = stagedUploadFiles.slice(0, 3).map(file => file.name).join(', ');
-    const more = stagedUploadFiles.length > 3 ? ` and ${stagedUploadFiles.length - 3} more` : '';
-    fileName.textContent = `Ready to upload ${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'}: ${names}${more}`;
+    fileName.textContent = `${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'} ready`;
   }
+  renderStagedImagePreviews();
+  setDetectionWorkflowStep(2);
   if (confirmation) confirmation.style.display = 'block';
 }
+
+function renderStagedImagePreviews() {
+  const previewGrid = document.getElementById('staged-image-previews');
+  if (!previewGrid) return;
+  previewGrid.innerHTML = '';
+  stagedUploadFiles.forEach((file, index) => {
+    const item = document.createElement('div');
+    item.className = 'preview-item';
+    const image = document.createElement('img');
+    const imageUrl = URL.createObjectURL(file);
+    image.src = imageUrl;
+    image.alt = file.name;
+    image.onload = () => URL.revokeObjectURL(imageUrl);
+    const remove = document.createElement('button');
+    remove.className = 'preview-remove';
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `Remove ${file.name}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => removeStagedUpload(index));
+    const name = document.createElement('p');
+    name.textContent = file.name;
+    item.append(image, remove, name);
+    previewGrid.appendChild(item);
+  });
+}
+
+window.removeStagedUpload = function removeStagedUpload(index) {
+  stagedUploadFiles.splice(index, 1);
+  if (!stagedUploadFiles.length) {
+    cancelStagedUpload();
+    return;
+  }
+  const fileName = document.getElementById('upload-confirmation-name');
+  if (fileName) fileName.textContent = `${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'} ready`;
+  renderStagedImagePreviews();
+};
 
 window.confirmStagedUpload = async function confirmStagedUpload() {
   if (!stagedUploadFiles.length) return;
@@ -1424,14 +1514,23 @@ window.confirmStagedUpload = async function confirmStagedUpload() {
   stagedUploadFiles = [];
   const confirmation = document.getElementById('upload-confirmation');
   if (confirmation) confirmation.style.display = 'none';
+  setDetectionWorkflowStep(3);
   await detectImages(files);
 };
+
+function setDetectionWorkflowStep(step) {
+  document.querySelectorAll('.detection-workflow .workflow-step').forEach((element, index) => {
+    element.classList.toggle('active', index < step);
+  });
+}
 
 window.cancelStagedUpload = function cancelStagedUpload() {
   stagedUploadFiles = [];
   const confirmation = document.getElementById('upload-confirmation');
   const fileInput = document.getElementById('fileInput');
   if (confirmation) confirmation.style.display = 'none';
+  const previewGrid = document.getElementById('staged-image-previews');
+  if (previewGrid) previewGrid.innerHTML = '';
   if (fileInput) fileInput.value = '';
 };
 
@@ -1602,6 +1701,7 @@ function renderUpload(data){
   if (feedToolbar) feedToolbar.style.display='none';
   if (uploadDrop) uploadDrop.style.display='none';
   if (resultArea) resultArea.style.display='block';
+  setDetectionWorkflowStep(4);
   
   const allDetections = Array.isArray(data.detections) ? data.detections : [];
   const diseaseDetections = allDetections.filter(d => isDiseaseClass(d.class));
@@ -1641,6 +1741,7 @@ function clearUploadResults(){
   if (resultArea) resultArea.style.display='none';
   if (feedToolbar) feedToolbar.style.display='';
   if (uploadDrop) uploadDrop.style.display='';
+  setDetectionWorkflowStep(1);
   if (fileInput) fileInput.value='';
   if (sTotal) sTotal.textContent='0';
   if (sConf) sConf.textContent='—';
@@ -2328,7 +2429,10 @@ function renderExpertRecordsTable(records) {
 
 function renderExpertAuditTable(events) {
   const formatAuditDetails = (details) => {
-    const status = details?.verification_status;
+    // Older recommendation events did not include verification_status, but
+    // direct_record_synced means that save also verified the selected record.
+    const status = details?.verification_status
+      || (details?.direct_record_synced ? 'verified' : '');
     return status ? `Verification status: ${formatVerificationStatus(status).label}` : 'No details';
   };
 
