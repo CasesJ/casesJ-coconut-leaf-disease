@@ -610,6 +610,8 @@
     }
     
     .no-records { text-align:center; padding:clamp(2rem, 5vw, 2.5rem) var(--spacing-md); color:var(--text3); font-size:var(--text-base); }
+    .records-toolbar { display:grid; grid-template-columns:minmax(180px,2fr) repeat(5,minmax(115px,1fr)); gap:.6rem; padding:1rem 1.25rem; border-bottom:1px solid rgba(11,42,31,.08); background:#f8fbf8; }.records-toolbar input,.records-toolbar select { width:100%; min-height:38px; border:1px solid rgba(11,42,31,.14); border-radius:7px; padding:0 .65rem; background:#fff; color:var(--text); font:inherit; font-size:var(--text-sm); }.record-actions { display:flex; gap:.45rem; flex-wrap:wrap; margin-top:.75rem; }.record-actions .btn { padding:.4rem .6rem; font-size:.72rem; }.record-severity { display:inline-block; margin-left:.35rem; padding:.2rem .45rem; border-radius:999px; font-size:.68rem; font-weight:700; background:#fff0f0; color:#c0392b; } .record-modal-image { width:100%; max-height:320px; object-fit:contain; background:#f3f8f3; border-radius:10px; border:1px solid rgba(11,42,31,.1); }
+    @media(max-width:1000px) { .records-toolbar { grid-template-columns:repeat(3,1fr); } } @media(max-width:620px) { .records-toolbar { grid-template-columns:1fr; padding:1rem; } }
 
 
     /* TOAST / FOOTER */
@@ -1079,6 +1081,16 @@
     .preview-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(94px,1fr)); gap:10px; }.preview-item { position:relative; min-width:0; }.preview-item img { display:block; width:100%; height:76px; border-radius:7px; object-fit:cover; background:#eaf2ec; }.preview-item p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:5px; color:var(--text2); font-size:10px; }.preview-remove { position:absolute; top:4px; right:4px; display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:50%; color:#fff; background:rgba(11,42,31,.78); font-size:15px; line-height:1; cursor:pointer; }
     .upload-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }.run-detection { padding:9px 15px !important; background:var(--bright) !important; box-shadow:0 5px 14px rgba(38,134,90,.2); }
     @media(max-width:600px) { .workflow-line{width:18px;flex-basis:18px;margin:0 6px}.workflow-step{font-size:10px;gap:5px}.workflow-step b{width:21px;height:21px}.upload-drop-inner{min-height:220px} }
+
+    /* CONSISTENT SETTINGS, FEEDBACK & NOTIFICATIONS */
+    .notification-wrap { position:relative; }
+    .notification-button { position:relative; display:grid; place-items:center; width:38px; height:38px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--mid); cursor:pointer; transition:.2s; }
+    .notification-button:hover, .notification-button[aria-expanded="true"] { background:#edf8f1; border-color:rgba(38,134,90,.3); }
+    .notification-button svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.8; }
+    .notification-count { position:absolute; top:-5px; right:-5px; display:grid; place-items:center; min-width:17px; height:17px; padding:0 4px; border:2px solid var(--surface); border-radius:999px; background:var(--red); color:#fff; font-size:10px; font-weight:800; }
+    .notification-menu { position:absolute; top:46px; right:0; width:min(360px,calc(100vw - 28px)); padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shm); display:none; z-index:350; }
+    .notification-menu.open { display:block; animation:fadeUp .18s ease both; }.notification-head { display:flex; justify-content:space-between; align-items:center; padding:4px 5px 9px; }.notification-head strong{font-size:13px}.notification-head span{color:var(--text3);font-size:11px}.notice-item{display:flex;gap:9px;padding:10px 6px;border-top:1px solid var(--line)}.notice-icon{display:grid;place-items:center;width:27px;height:27px;border-radius:8px;background:#edf8f1;color:var(--bright);font-size:13px}.notice-item strong{display:block;font-size:12px}.notice-item p{margin-top:2px;color:var(--text3);font-size:11px;line-height:1.35}
+    .settings-layout { display:block; }.settings-stack { display:grid; gap:18px; }.settings-card { padding:0; overflow:hidden; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--sh); }.settings-card-head { display:flex; align-items:flex-start; gap:11px; padding:17px 18px 13px; border-bottom:1px solid var(--line); }.settings-card-head h4{font-size:15px;color:var(--deep)}.settings-card-head p{margin-top:3px;color:var(--text3);font-size:12px;line-height:1.4}.settings-icon{display:grid;place-items:center;flex:0 0 33px;width:33px;height:33px;border-radius:9px;background:#e7f5ed;color:var(--bright)}.settings-body{padding:4px 18px 14px}.setting-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 0;border-bottom:1px solid rgba(15,63,43,.08)}.setting-row:last-child{border-bottom:0}.setting-row strong{display:block;font-size:13px;color:var(--text)}.setting-row span{display:block;margin-top:3px;color:var(--text3);font-size:11px;line-height:1.4}.profile-summary{display:flex;align-items:center;gap:11px;padding:14px 0}.profile-avatar{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--deep);color:#fff;font:18px 'DM Serif Display',serif}.profile-summary p{font-size:12px;color:var(--text3);margin-top:3px}.system-list div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid rgba(15,63,43,.08);font-size:12px}.system-list div:last-child{border-bottom:0}.system-list span{color:var(--text3)}.system-list strong{color:var(--mid)}.settings-danger .settings-icon{background:var(--red-bg);color:var(--red)}.settings-footer{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}.settings-unified-grid{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(270px,1.15fr);gap:0}.settings-section{padding:18px}.settings-section + .settings-section{border-left:1px solid var(--line)}.settings-section.account-section{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:18px}.settings-section-title{display:flex;align-items:center;gap:9px;margin-bottom:8px}.settings-section-title h5{font-size:13px;color:var(--deep)}.settings-section-title .settings-icon{width:28px;height:28px;flex-basis:28px;font-size:12px}#panel-expert .records-toolbar{display:none}#settings-enhanced-root{display:none}#panel-settings.active~#settings-enhanced-root{display:block}.hide-confidence .ltag{display:none}.toast{display:flex;align-items:center;gap:8px}.toast.show{animation:fadeUp .25s ease both}@media(max-width:700px){.settings-unified-grid{grid-template-columns:1fr}.settings-section + .settings-section{border-left:0;border-top:1px solid var(--line)}.settings-section.account-section{grid-column:auto;align-items:flex-start;flex-direction:column}.settings-footer{margin-top:0}}@media(max-width:560px){.notification-menu{right:-8px}.header-right{gap:8px}}
   </style>
   <script>
     // ── GLOBAL SCOPE SETUP - All variables and stubs defined FIRST ──
@@ -1317,6 +1329,10 @@
     </div>
   </div>
   <div class="header-right">
+    <div class="notification-wrap">
+      <button id="notification-button" class="notification-button" type="button" aria-label="Open notifications" aria-expanded="false" onclick="toggleNotifications()"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="notification-count" class="notification-count">3</span></button>
+      <div id="notification-menu" class="notification-menu" role="status" aria-live="polite"><div class="notification-head"><strong>System alerts</strong><span>Live updates</span></div><div class="notice-item"><div class="notice-icon">!</div><div><strong>High disease prevalence</strong><p>Review mapped areas with high-severity detections.</p></div></div><div class="notice-item"><div class="notice-icon">+</div><div><strong>New detections</strong><p>Recent detection records are available for review.</p></div></div><div class="notice-item"><div class="notice-icon">✓</div><div><strong>Analysis completed</strong><p>Your latest detection analysis is ready.</p></div></div></div>
+    </div>
     <div id="auth-status" style="display:flex;gap:16px;align-items:center;">
       <button class="btn btn-p" style="display:none;padding:8px 16px;font-size:12px;white-space:nowrap;" id="login-btn">
         <svg style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -1527,12 +1543,12 @@
       <!-- Disease Stats -->
       <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
         <div class="stat-box">
-          <h4>Total Diseases Found</h4>
+          <h4>Diseased Trees</h4>
           <div class="stat-value" id="total-diseases-found">0</div>
           <div class="stat-subtext">All disease cases recorded</div>
         </div>
         <div class="stat-box">
-          <h4>Active Detection Records</h4>
+          <h4>Detection Records</h4>
           <div class="stat-value" id="total-records-count">0</div>
           <div class="stat-subtext">Detection sessions</div>
         </div>
@@ -1545,7 +1561,7 @@
 
       <div class="records-container" id="detection-history-container">
         <div class="records-head">
-          <h4>Detection History</h4>
+          <h4>Detection Records</h4>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             <button id="records-filter-all" class="btn btn-o record-filter active" onclick="setUserRecordsFilter('all')" aria-pressed="true" style="padding:6px 12px;font-size:12px;">All</button>
             <button id="records-filter-pending" class="btn btn-o record-filter" onclick="setUserRecordsFilter('pending')" aria-pressed="false" style="padding:6px 12px;font-size:12px;">Pending</button>
@@ -1598,10 +1614,21 @@
 
       <div class="records-container">
         <div class="records-head">
-          <h4>Pending Expert Review</h4>
+          <h4>Expert Review</h4>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button id="expert-filter-all" class="btn btn-o record-filter" onclick="setExpertReviewFilter('all')" aria-pressed="false" style="padding:6px 12px;font-size:12px;">All</button>
+            <button id="expert-filter-pending" class="btn btn-o record-filter active" onclick="setExpertReviewFilter('pending')" aria-pressed="true" style="padding:6px 12px;font-size:12px;">Pending</button>
+            <button id="expert-filter-verified" class="btn btn-o record-filter" onclick="setExpertReviewFilter('verified')" aria-pressed="false" style="padding:6px 12px;font-size:12px;">Verified</button>
             <button class="btn btn-o" onclick="loadExpertReview()" style="padding:6px 12px;font-size:12px;">Refresh</button>
           </div>
+        </div>
+        <div class="records-toolbar" aria-label="Detection history filters">
+          <input id="records-search" type="search" placeholder="Search disease, location, coordinates…" oninput="loadUserRecords()" aria-label="Search records">
+          <select id="records-disease-filter" onchange="loadUserRecords()"><option value="">All diseases</option><option value="healthy">Healthy</option><option value="cercospora">Cercospora</option><option value="leaf rot">Leaf Rot</option><option value="pestalotiopsis">Pestaltiopsis</option><option value="bud rot">Bud Rot</option></select>
+          <input id="records-date-filter" type="date" onchange="loadUserRecords()" aria-label="Filter by date">
+          <select id="records-area-filter" onchange="loadUserRecords()"><option value="">All areas</option><option value="area 1">Area 1</option><option value="area 2">Area 2</option><option value="area 3">Area 3</option><option value="area 4">Area 4</option></select>
+          <select id="records-confidence-filter" onchange="loadUserRecords()"><option value="">Any confidence</option><option value="high">High (75%+)</option><option value="medium">Medium (50–74%)</option><option value="low">Low (&lt;50%)</option></select>
+          <select id="records-status-filter" onchange="loadUserRecords()"><option value="">Any status</option><option value="pending">Pending</option><option value="verified">Verified</option></select>
         </div>
         <div id="expert-filter-state" style="padding:0 16px 12px;color:var(--text3);font-size:12px;">Showing pending uploads</div>
         <div id="expert-pending-list" class="records-list">
@@ -1671,6 +1698,7 @@
     </div>
   </div>
 
+<div id="settings-enhanced-root"></div>
 </div><!-- /panels -->
 
 <div class="record-modal hidden" id="record-modal" onclick="if(event.target.id === 'record-modal') closeDetectionModal()">

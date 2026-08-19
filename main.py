@@ -65,6 +65,7 @@ UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.20
 UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.20
 EXPERT_RECOMMENDATIONS_PATH = Path("expert_recommendations.json")
 EXPERT_AUDIT_LOG_PATH = Path("expert_audit_log.jsonl")
+USER_NOTIFICATIONS_PATH = Path("user_notifications.json")
 UPLOAD_IMAGE_DIR = Path("static/uploads")
 ANNOTATED_IMAGE_DIR = Path("static/annotated_uploads")
 EXPERT_ACCOUNT_EMAIL = os.getenv("EXPERT_ACCOUNT_EMAIL", "expert2@gmail.com").strip().lower()
@@ -226,6 +227,45 @@ def append_expert_audit_event(action: str, actor: dict, target: dict | None = No
             file.write(json.dumps(entry, ensure_ascii=True) + "\n")
     except Exception as error:
         logger.warning(f"Could not write expert audit entry: {error}")
+
+
+def create_user_notification(user_id: str, record_id: str, title: str, message: str) -> None:
+    """Persist an in-app alert for a record owner across app sessions."""
+    if not user_id:
+        return
+    notice = {
+        "id": str(uuid.uuid4()), "record_id": record_id, "title": title,
+        "message": message, "type": "verification", "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        db.reference(f"users/{user_id}/notifications/{notice['id']}").set(notice)
+    except Exception as error:
+        logger.warning(f"RTDB notification write failed: {error}")
+    try:
+        stored = json.loads(USER_NOTIFICATIONS_PATH.read_text(encoding="utf-8")) if USER_NOTIFICATIONS_PATH.exists() else {}
+        items = stored.get(user_id, [])
+        items.insert(0, notice)
+        stored[user_id] = items[:100]
+        USER_NOTIFICATIONS_PATH.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    except Exception as error:
+        logger.warning(f"Local notification write failed: {error}")
+
+
+def get_user_notifications(user_id: str) -> list[dict]:
+    """Read notifications, preferring Firebase but retaining offline support."""
+    try:
+        remote = db.reference(f"users/{user_id}/notifications").get() or {}
+        if isinstance(remote, dict) and remote:
+            return sorted(remote.values(), key=lambda item: item.get("created_at", ""), reverse=True)
+    except Exception as error:
+        logger.warning(f"RTDB notification read failed: {error}")
+    try:
+        stored = json.loads(USER_NOTIFICATIONS_PATH.read_text(encoding="utf-8")) if USER_NOTIFICATIONS_PATH.exists() else {}
+        return stored.get(user_id, [])
+    except Exception as error:
+        logger.warning(f"Local notification read failed: {error}")
+        return []
 
 
 def read_expert_audit_events(limit: int = 100) -> list[dict]:
@@ -1951,6 +1991,57 @@ async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_t
 
 
 # ─── Get User Detection Records (Public endpoint for frontend) ──────────────────
+# In-app alerts are tied to the authenticated account, never to a caller-supplied ID.
+@app.get("/notifications")
+async def get_notifications(decoded: dict = Depends(verify_firebase_token)):
+    user_id = str(decoded.get("uid") or "")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
+    notices = get_user_notifications(user_id)
+    return {"notifications": notices[:30], "unread_count": sum(1 for notice in notices if not notice.get("read"))}
+
+
+@app.post("/notifications/clear")
+async def clear_notifications(decoded: dict = Depends(verify_firebase_token)):
+    """Clear alerts after the account holder has viewed them in the bell."""
+    user_id = str(decoded.get("uid") or "")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
+    try:
+        db.reference(f"users/{user_id}/notifications").delete()
+    except Exception as error:
+        logger.warning(f"RTDB notification clear failed: {error}")
+    try:
+        stored = json.loads(USER_NOTIFICATIONS_PATH.read_text(encoding="utf-8")) if USER_NOTIFICATIONS_PATH.exists() else {}
+        stored.pop(user_id, None)
+        USER_NOTIFICATIONS_PATH.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    except Exception as error:
+        logger.warning(f"Local notification clear failed: {error}")
+    return {"message": "Notifications cleared"}
+
+
+@app.post("/notifications/mark-read")
+async def mark_notifications_read(decoded: dict = Depends(verify_firebase_token)):
+    """Mark alerts as viewed while preserving the user's notification history."""
+    user_id = str(decoded.get("uid") or "")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
+    notices = get_user_notifications(user_id)
+    for notice in notices:
+        notice["read"] = True
+    try:
+        db.reference(f"users/{user_id}/notifications").set({notice["id"]: notice for notice in notices if notice.get("id")})
+    except Exception as error:
+        logger.warning(f"RTDB notification mark-read failed: {error}")
+    try:
+        stored = json.loads(USER_NOTIFICATIONS_PATH.read_text(encoding="utf-8")) if USER_NOTIFICATIONS_PATH.exists() else {}
+        stored[user_id] = notices
+        USER_NOTIFICATIONS_PATH.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    except Exception as error:
+        logger.warning(f"Local notification mark-read failed: {error}")
+    return {"message": "Notifications marked as read"}
+
+
 @app.get("/records")
 async def get_records(user_id: str = None):
     """Get detection records for a user (public endpoint, accepts user_id as query param)"""
@@ -2189,6 +2280,13 @@ async def verify_expert_record(
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
 
+    if desired_status == VERIFIED_STATUS:
+        create_user_notification(
+            user_id, record_id,
+            "Upload verified by an expert",
+            "Your uploaded image has been reviewed and verified. View your Detection Records for the result.",
+        )
+
     append_expert_audit_event(
         action="verify_record",
         actor=decoded,
@@ -2305,6 +2403,13 @@ async def update_expert_recommendation(
         )
     except Exception as error:
         logger.warning(f"Could not save expert recommendation for record {target_record_id}: {error}")
+
+    if direct_record_synced:
+        create_user_notification(
+            target_user_id, target_record_id,
+            "Upload verified by an expert",
+            "Your uploaded image was verified and an expert recommendation is now available in Detection Records.",
+        )
 
     append_expert_audit_event(
         action="update_recommendation",

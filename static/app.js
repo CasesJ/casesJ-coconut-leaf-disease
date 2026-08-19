@@ -244,6 +244,8 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   if (currentUserIsExpert && typeof loadExpertAuditLog === 'function') {
     setTimeout(loadExpertAuditLog, 450);
   }
+  if (typeof loadNotifications === 'function') setTimeout(loadNotifications, 500);
+  if (typeof renderEnhancedSettings === 'function') renderEnhancedSettings();
 };
 
 window.updateUIOnLogout = function updateUIOnLogout() {
@@ -253,6 +255,8 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   if (loginBtn) loginBtn.style.display = 'flex';
   if (userBadge) userBadge.style.display = 'none';
   if (expertNavLink) expertNavLink.style.display = 'none';
+  const notificationCount = document.getElementById('notification-count');
+  if (notificationCount) notificationCount.style.display = 'none';
   setFarmerNavigationVisible(true);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
@@ -429,7 +433,11 @@ function openDetectionModal(record) {
 
   title.textContent = `${record.isHealthy ? 'Healthy Tree' : 'Treatment Guidance'} • ${diseaseName}`;
   subtitle.textContent = `${new Date(record.timestamp).toLocaleString()} • ${record.sourceLabel} source`;
+  const coords = getRecordCoordinates(record);
+  const image = record.annotated_image_url || record.image_url || '';
+  const verification = formatVerificationStatus(record.verification_status).label;
   content.innerHTML = `
+    ${image ? `<img class="record-modal-image" src="${image}" alt="Annotated detection result">` : ''}
     <div class="detail-card">
       <div class="detail-label">Disease / Status</div>
       <div class="detail-value">${record.isHealthy ? 'Healthy tree' : diseaseName}</div>
@@ -439,6 +447,8 @@ function openDetectionModal(record) {
       <div class="detail-label">Model Confidence</div>
       <div class="detail-value">${confidence} confidence</div>
     </div>
+    <div class="detail-card"><div class="detail-label">Location / Coordinates</div><div class="detail-value">${coords ? `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}` : 'No GPS coordinates recorded'}</div></div>
+    <div class="detail-card"><div class="detail-label">Verification Status</div><div class="detail-value">${verification}</div></div>
     <div class="detail-card">
       <div class="detail-label">Recommended Action</div>
       <div class="detail-value">${treatment}</div>
@@ -468,8 +478,70 @@ window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedL
   title.textContent = 'Detection Image';
   subtitle.textContent = imageLabel;
   content.innerHTML = `<img src="${imageUrl}" alt="${imageLabel}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
+  content.innerHTML += `<div class="record-actions"><button class="btn btn-o" onclick="closeDetectionModal();${coords ? `switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${coords.lat},${coords.lng})` : ''}">View on Map</button><button class="btn btn-o" onclick="showToast('Marked as inspected for this session.')">Mark as Inspected</button></div>`;
   modal.classList.remove('hidden');
 };
+
+// UI preferences are intentionally local: they refine presentation without changing
+// the existing detection API, model, or record schema.
+const UI_SETTINGS_KEY = 'coconutai-ui-settings';
+const UI_SETTINGS_DEFAULTS = { confidence: 50, boxes: true, scores: true, autosave: true, mapStyle: 'satellite', markers: true, heatmap: true };
+function getUiSettings() { try { return { ...UI_SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem(UI_SETTINGS_KEY) || '{}') }; } catch (_) { return { ...UI_SETTINGS_DEFAULTS }; } }
+function applyUiSettings(settings = getUiSettings()) {
+  document.body.classList.toggle('hide-confidence', !settings.scores);
+  mainMarkers.forEach(item => { if (item?.marker) item.marker.getElement().style.display = settings.markers ? '' : 'none'; });
+  miniMarkers.forEach(item => { if (item) item.getElement().style.display = settings.markers ? '' : 'none'; });
+  if (mainMap?.getLayer?.('disease-heatmap')) mainMap.setLayoutProperty('disease-heatmap', 'visibility', settings.heatmap ? 'visible' : 'none');
+  if (mainMap?.getLayer?.('osm-tiles')) mainMap.setPaintProperty('osm-tiles', 'raster-opacity', settings.mapStyle === 'muted' ? .68 : 1);
+}
+window.updateConfidenceLabel = value => { const el = document.getElementById('setting-confidence-value'); if (el) el.textContent = `${value}%`; };
+window.saveUiSettings = function saveUiSettings() {
+  const settings = { confidence: Number(document.getElementById('setting-confidence')?.value || 50), boxes: document.getElementById('setting-boxes')?.checked !== false, scores: document.getElementById('setting-scores')?.checked !== false, autosave: document.getElementById('setting-autosave')?.checked !== false, mapStyle: document.getElementById('setting-map-style')?.value || 'satellite', markers: document.getElementById('setting-markers')?.checked !== false, heatmap: document.getElementById('setting-heatmap')?.checked !== false };
+  localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(settings)); applyUiSettings(settings); showToast('Preferences saved');
+};
+window.resetUiSettings = function resetUiSettings() { localStorage.removeItem(UI_SETTINGS_KEY); renderEnhancedSettings(); applyUiSettings(UI_SETTINGS_DEFAULTS); showToast('Preferences reset'); };
+window.toggleNotifications = function toggleNotifications() { const menu = document.getElementById('notification-menu'), button = document.getElementById('notification-button'); if (!menu || !button) return; const open = menu.classList.toggle('open'); button.setAttribute('aria-expanded', String(open)); if (open) loadNotifications(true); };
+window.loadNotifications = async function loadNotifications(markViewed = false) {
+  const menu = document.getElementById('notification-menu'); const count = document.getElementById('notification-count');
+  if (!menu || !count || !currentToken || !currentUser) return;
+  try {
+    const response = await fetch('/notifications', { headers: { Authorization: `Bearer ${currentToken}` } });
+    if (!response.ok) throw new Error('Unable to load alerts');
+    const data = await response.json(); const notices = Array.isArray(data.notifications) ? data.notifications : [];
+    const unread = Number(data.unread_count || 0); count.textContent = unread; count.style.display = unread ? 'grid' : 'none';
+    menu.innerHTML = `<div class="notification-head"><strong>System alerts</strong><span>${unread ? `${unread} unread` : 'All caught up'}</span></div>${notices.length ? notices.map(notice => `<div class="notice-item"><div class="notice-icon">✓</div><div><strong>${escapeHtml(notice.title || 'System update')}</strong><p>${escapeHtml(notice.message || '')}</p></div></div>`).join('') : '<div class="notice-item"><div class="notice-icon">✓</div><div><strong>No notifications</strong><p>Verification updates will appear here.</p></div></div>'}${notices.length ? '<div style="padding:10px 5px 2px;text-align:right;"><button class="btn btn-o" type="button" onclick="clearNotificationHistory()" style="padding:6px 10px;font-size:11px;">Clear history</button></div>' : ''}`;
+    if (markViewed && notices.length) {
+      // Viewing an alert removes its unread badge but preserves history until
+      // the user explicitly chooses Clear history.
+      count.textContent = '0'; count.style.display = 'none';
+      fetch('/notifications/mark-read', { method: 'POST', headers: { Authorization: `Bearer ${currentToken}` } })
+        .catch(error => console.warn('Notification mark-read failed:', error));
+      const state = menu.querySelector('.notification-head span');
+      if (state) state.textContent = 'Viewed';
+    }
+  } catch (error) { console.warn('Notification load failed:', error); }
+};
+window.clearNotificationHistory = async function clearNotificationHistory() {
+  if (!currentToken) return;
+  try {
+    const response = await fetch('/notifications/clear', { method: 'POST', headers: { Authorization: `Bearer ${currentToken}` } });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || `Unable to clear notification history (${response.status})`);
+    }
+    const menu = document.getElementById('notification-menu'); const count = document.getElementById('notification-count');
+    if (count) { count.textContent = '0'; count.style.display = 'none'; }
+    if (menu) menu.innerHTML = '<div class="notification-head"><strong>System alerts</strong><span>All caught up</span></div><div class="notice-item"><div class="notice-icon">✓</div><div><strong>No notifications</strong><p>Verification updates will appear here.</p></div></div>';
+  } catch (error) { showToast(error.message); }
+};
+function renderEnhancedSettings() {
+  const root = document.getElementById('settings-enhanced-root'); if (!root) return;
+  const s = getUiSettings();
+  root.innerHTML = `<div class="panels"><div class="dashboard-intro"><div><h1>Settings</h1><p>Review your account and the CoconutAI system information.</p></div></div><div class="settings-layout"><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">S</div><div><h4>System Settings</h4><p>Your account, application services, and session controls in one place.</p></div></div><div class="settings-unified-grid"><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">P</div><h5>Profile</h5></div><div class="profile-summary"><div class="profile-avatar">${(currentUser?.email || 'C').charAt(0).toUpperCase()}</div><div><strong>${currentUser?.email || 'CoconutAI user'}</strong><p>${currentUser?.email || 'Sign in to view your profile'}</p></div></div><div class="setting-row"><div><strong>Account role</strong><span>${currentUserIsExpert ? 'Expert account' : 'Farmer account'}</span></div><span class="hbadge g">Active</span></div></div><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">i</div><h5>System Information</h5></div><div class="system-list"><div><span>System</span><strong>CoconutAI</strong></div><div><span>Detection model</span><strong>YOLO11</strong></div><div><span>API service</span><strong>FastAPI</strong></div><div><span>Map engine</span><strong>MapLibre GL</strong></div><div><span>Version</span><strong>1.0.0</strong></div></div></div><div class="settings-section account-section"><div><div class="settings-section-title"><div class="settings-icon">A</div><h5>Account Management</h5></div><p style="font-size:12px;color:var(--text3);">End this session securely on this device.</p></div><div class="settings-footer"><button class="logout-btn" type="button" onclick="logout()">Logout</button></div></div></div></section></div></div>`;
+  const legacy = document.querySelector('#panel-settings .panels'); if (legacy) legacy.style.display = 'none';
+}
+function settingToggle(id, title, description, checked) { return `<div class="setting-row"><div><strong>${title}</strong><span>${description}</span></div><label class="switch"><input id="${id}" type="checkbox" ${checked ? 'checked' : ''} onchange="saveUiSettings()"><span class="switch-slider"></span></label></div>`; }
+document.addEventListener('DOMContentLoaded', () => { renderEnhancedSettings(); applyUiSettings(); document.addEventListener('click', event => { const wrap = event.target.closest('.notification-wrap'); if (!wrap) { document.getElementById('notification-menu')?.classList.remove('open'); document.getElementById('notification-button')?.setAttribute('aria-expanded', 'false'); } }); });
 
 function renderDashboardHighlights(records) {
   const attentionEl = document.getElementById('attention-list');
@@ -685,6 +757,7 @@ window.addEventListener('load', () => {
     });
     
     mapsReady = true;
+    applyUiSettings();
 
     mainMap.addSource('area-monitoring-src', {
       type: 'geojson',
@@ -1240,7 +1313,7 @@ function addPin(lat,lng,label,confidence,source){
   }
   
   // ✅ Save pin to Firebase if user is logged in
-  if (currentUser) {
+  if (currentUser && getUiSettings().autosave) {
     savePinToFirebase(lat, lng, label, confidence, source);
   }
   
@@ -2359,6 +2432,11 @@ function getExpertFilterLabel(filterName) {
   return 'pending uploads';
 }
 
+window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
+  currentExpertFilter = ['all', 'pending', 'verified'].includes(filterName) ? filterName : 'pending';
+  loadExpertReview();
+};
+
 let expertAuditEvents = [];
 
 function renderAuditEntry(entry) {
@@ -2386,6 +2464,7 @@ function renderAuditEntry(entry) {
         <span class="record-det high">${detailLabel}</span>
       </div>
     </div>
+    <div class="record-actions"><button class="btn btn-o" onclick="closeDetectionModal();${coords ? `switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${coords.lat},${coords.lng})` : ''}">View on Map</button><button class="btn btn-o" onclick="showToast('Marked as inspected for this session.')">Mark as Inspected</button></div>
   `;
 }
 
@@ -2499,9 +2578,26 @@ async function loadUserRecords() {
       return;
     }
 
-    const records = currentUserRecordsFilter === 'all'
+    let records = currentUserRecordsFilter === 'all'
       ? allRecords
       : allRecords.filter((record) => formatVerificationStatus(record.verification_status).cls === currentUserRecordsFilter);
+
+    const search = (document.getElementById('records-search')?.value || '').toLowerCase();
+    const diseaseFilter = document.getElementById('records-disease-filter')?.value || '';
+    const dateFilter = document.getElementById('records-date-filter')?.value || '';
+    const areaFilter = document.getElementById('records-area-filter')?.value || '';
+    const confidenceFilter = document.getElementById('records-confidence-filter')?.value || '';
+    const statusFilter = document.getElementById('records-status-filter')?.value || '';
+    records = records.filter(record => {
+      const primary = getPrimaryDetection(record);
+      const confidence = Number(primary.confidence || 0);
+      const disease = normalizeDiseaseClass(primary.class);
+      const coords = getRecordCoordinates(record);
+      const area = coords ? mapAreaForPoint(coords.lat, coords.lng).toLowerCase() : '';
+      const date = String(record.timestamp || '').slice(0, 10);
+      const status = formatVerificationStatus(record.verification_status).cls;
+      return (!search || `${disease} ${area} ${coords ? `${coords.lat} ${coords.lng}` : ''}`.includes(search)) && (!diseaseFilter || disease === diseaseFilter) && (!dateFilter || date === dateFilter) && (!areaFilter || area === areaFilter) && (!statusFilter || status === statusFilter) && (!confidenceFilter || (confidenceFilter === 'high' && confidence >= .75) || (confidenceFilter === 'medium' && confidence >= .5 && confidence < .75) || (confidenceFilter === 'low' && confidence < .5));
+    });
 
     if (records.length === 0) {
       const statusLabel = currentUserRecordsFilter === 'pending' ? 'pending' : 'verified';
@@ -2581,6 +2677,7 @@ async function loadUserRecords() {
           </div>
           <div class="record-detections">
             ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
+            <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
           ${locationDisplay}
           ${recommendationPanel}
@@ -2657,9 +2754,14 @@ window.downloadMyRecordsPdf = async function downloadMyRecordsPdf() {
 window.loadExpertReview = async function loadExpertReview() {
   if (!currentToken || !currentUserIsExpert) return;
 
-  // This is a work queue, not a history view. Verified records remain in the
-  // Expert Audit Log under My Records.
-  currentExpertFilter = 'pending';
+  currentExpertFilter = ['all', 'pending', 'verified'].includes(currentExpertFilter) ? currentExpertFilter : 'pending';
+  ['all', 'pending', 'verified'].forEach(filter => {
+    const button = document.getElementById(`expert-filter-${filter}`);
+    if (!button) return;
+    const active = filter === currentExpertFilter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
   const pendingListEl = document.getElementById('expert-pending-list');
   const filterStateEl = document.getElementById('expert-filter-state');
   if (pendingListEl) pendingListEl.innerHTML = '<div class="no-records">Loading expert queue...</div>';
@@ -2667,7 +2769,7 @@ window.loadExpertReview = async function loadExpertReview() {
 
   try {
     const [recordsRes, overridesRes] = await Promise.all([
-      fetch('/expert/records?status=pending', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+      fetch(`/expert/records?status=${encodeURIComponent(currentExpertFilter)}`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
       fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } })
     ]);
 
