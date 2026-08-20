@@ -1687,8 +1687,6 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     normal = ParagraphStyle("ExecNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=8.8, leading=12.2, textColor=colors.HexColor("#293138"))
     small = ParagraphStyle("ExecSmall", parent=normal, fontSize=7.3, leading=9)
     table_header = ParagraphStyle("ExecTableHeader", parent=small, fontName="Helvetica-Bold", textColor=colors.white)
-    detail_small = ParagraphStyle("ExecDetailSmall", parent=normal, fontSize=6.5, leading=7.6)
-    detail_header = ParagraphStyle("ExecDetailHeader", parent=detail_small, fontName="Helvetica-Bold", textColor=colors.white)
     heading = ParagraphStyle("ExecHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13.5, leading=16, textColor=colors.HexColor("#1D4938"), spaceBefore=3, spaceAfter=4)
     insight = ParagraphStyle("ExecInsight", parent=normal, fontName="Helvetica-BoldOblique", fontSize=8.4, leading=10.3, textColor=colors.HexColor("#1D4938"), leftIndent=5 * mm, rightIndent=5 * mm, spaceBefore=3 * mm, spaceAfter=3 * mm)
 
@@ -1732,8 +1730,8 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
             ordered = sorted(disease_stats, key=lambda item: disease_stats[item]["count"], reverse=True) or ["No detections"]
             values = [disease_stats[item]["count"] for item in ordered] if disease_stats else [0]
             bars = axis.barh(ordered[::-1], values[::-1], color=[detection_color(item) for item in ordered[::-1]])
-            axis.set_title("Disease Distribution Across Scanned Samples", loc="left", fontsize=10, fontweight="bold", color="#1D4938", pad=12)
-            axis.set_xlabel("Number of detected conditions", fontsize=8, color="#64748B")
+            axis.set_title("Disease Distribution Across Classified Findings", loc="left", fontsize=10, fontweight="bold", color="#1D4938", pad=12)
+            axis.set_xlabel("Number of classified findings", fontsize=8, color="#64748B")
             maximum = max(values) if values else 0
             axis.set_xlim(0, max(1, maximum * 1.22))
             for bar, value in zip(bars, values[::-1]):
@@ -1785,7 +1783,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         }
         canvas_obj.setFillColor(colors.HexColor("#D5E5DC"))
         canvas_obj.setFont("Helvetica", 9.2)
-        canvas_obj.drawString(16 * mm, page_height - 20 * mm, page_subtitles.get(canvas_obj.getPageNumber(), "Detection Record Details"))
+        canvas_obj.drawString(16 * mm, page_height - 20 * mm, page_subtitles.get(canvas_obj.getPageNumber(), "Detection Summary"))
         canvas_obj.setFillColor(colors.HexColor("#78CBA3"))
         canvas_obj.setFont("Helvetica-Bold", 8.3)
         canvas_obj.drawRightString(page_width - 16 * mm, page_height - 13 * mm, f"REPORT NO. CLD-{generated_at.strftime('%Y-%m')}")
@@ -1797,7 +1795,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=39 * mm, bottomMargin=22 * mm, title="Coconut Leaf Disease Analytics Report")
     card_column_width = (page_width - 32 * mm) / 4
     card_width = card_column_width - 3 * mm
-    cards = Table([[_MetricCard(str(len(records)), "Samples Scanned", "Detection records", card_width), _MetricCard(f"{disease_incidence:.1f}%", "Disease Incidence", "Of all detections", card_width, note_color="#C44A1D"), _MetricCard(f"{average_top_confidence:.1f}%", "Model Confidence", "Average top result", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", "Expert-reviewed cases", card_width)]], colWidths=[card_column_width] * 4)
+    cards = Table([[_MetricCard(str(len(records)), "Records Scanned", "Uploaded detection records", card_width), _MetricCard(f"{disease_incidence:.1f}%", "Disease Incidence", f"Of {total_detections} classified findings", card_width, note_color="#C44A1D"), _MetricCard(f"{average_top_confidence:.1f}%", "Model Confidence", "Average top result", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", "Expert-reviewed cases", card_width)]], colWidths=[card_column_width] * 4)
     cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
 
     distribution_rows = [[Paragraph("Disease", table_header), Paragraph("Detections", table_header), Paragraph("Avg. confidence", table_header)]]
@@ -1809,7 +1807,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     distribution_table = Table(distribution_rows, colWidths=[45 * mm, 27 * mm, 35 * mm], rowHeights=[11 * mm] + [12 * mm] * (len(distribution_rows) - 1), repeatRows=1)
     distribution_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9)]))
 
-    summary_text = (f"This report summarizes {len(records):,} detection record{'s' if len(records) != 1 else ''} for {email or 'the authenticated user'}. "
+    summary_text = (f"This report summarizes {len(records):,} detection record{'s' if len(records) != 1 else ''} containing {total_detections:,} classified finding{'s' if total_detections != 1 else ''} for {email or 'the authenticated user'}. "
                     f"The leading detected condition is {primary_disease}, while {disease_incidence:.1f}% of classified findings indicate a disease condition. "
                     f"Average top-result confidence is {average_top_confidence:.1f}%.")
     key_text = (f"<b>Key insight:</b> {primary_disease} is the most frequently detected condition, accounting for "
@@ -1817,7 +1815,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
                 "Use verified records to prioritize field inspection and treatment follow-up.")
     chart_box = Table([[Image(chart_image("distribution"), width=169 * mm, height=83 * mm)]], colWidths=[175 * mm], style=[("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor("#E0E7E3")), ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)])
     insight_box = Table([[Paragraph(key_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F6F3")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#E1E9E4")), ("ROUNDEDCORNERS", [3 * mm])])
-    story = [Paragraph("Executive Summary", heading), Spacer(1, 1 * mm), Paragraph(summary_text, normal), Spacer(1, 5 * mm), cards, Spacer(1, 18 * mm), Paragraph("Disease Distribution Across Scanned Samples", heading), Spacer(1, 3 * mm), chart_box, Spacer(1, 7 * mm), insight_box]
+    story = [Paragraph("Executive Summary", heading), Spacer(1, 1 * mm), Paragraph(summary_text, normal), Spacer(1, 5 * mm), cards, Spacer(1, 18 * mm), Paragraph("Disease Distribution Across Classified Findings", heading), Spacer(1, 3 * mm), chart_box, Spacer(1, 7 * mm), insight_box]
     severity_rows = [[Paragraph("Map area", table_header), Paragraph("Mild", table_header), Paragraph("Moderate", table_header), Paragraph("Severe", table_header), Paragraph("Critical", table_header), Paragraph("Treatment priority", table_header)]]
     severity_rank = {"Mild": 0, "Moderate": 1, "Severe": 3, "Critical": 5}
     mapped_areas = []
@@ -1843,21 +1841,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     trend_narrative = (f"The monthly mix highlights the leading classified conditions across the available reporting period. "
                        f"{primary_disease} remains the most frequent result, with disease conditions representing {disease_incidence:.1f}% of all classified findings.")
     priority_box = Table([[Paragraph(priority_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF7ED")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#F5D6B3")), ("ROUNDEDCORNERS", [3 * mm])])
-    story += [PageBreak(), Paragraph("Monthly Detection Trend", heading), Spacer(1, 6 * mm), Image(chart_image("trend"), width=171 * mm, height=83 * mm), Spacer(1, 7 * mm), Paragraph(trend_narrative, normal), PageBreak(), Paragraph("Severity by Map Area", heading), Spacer(1, 3 * mm), Image(chart_image("severity"), width=171 * mm, height=55 * mm), Spacer(1, 4 * mm), severity_table, Spacer(1, 5 * mm), priority_box, PageBreak(), Paragraph("Disease distribution", heading), Spacer(1, 7 * mm), distribution_table, PageBreak(), Paragraph("Detection record details", heading)]
-
-    detail_rows = [[Paragraph("Date", detail_header), Paragraph("Source", detail_header), Paragraph("Detections", detail_header), Paragraph("Status", detail_header)]]
-    for record in records:
-        details = "; ".join(f"{title_case(item.get('class'))} ({float(item.get('confidence') or 0) * 100:.0f}%)" for item in record.get("detections") or []) or "No detections"
-        status = title_case(normalize_verification_status(record))
-        detail_rows.append([Paragraph(safe(str(record.get("timestamp") or "-")[:10]), detail_small), Paragraph(safe(title_case(record.get("type") or record.get("source") or "Upload")), detail_small), Paragraph(safe(details), detail_small), _StatusBadge(status)])
-    if len(detail_rows) == 1:
-        detail_rows.append([Paragraph("No records available", detail_small), Paragraph("-", detail_small), Paragraph("-", detail_small), _StatusBadge("Pending Verification")])
-    # A compact, full-width table keeps small overflows from creating an
-    # almost-empty final page.  If there are truly many records, ReportLab
-    # paginates it with the header repeated on every continuation page.
-    detail_table = Table(detail_rows, colWidths=[25 * mm, 20 * mm, 91 * mm, 42 * mm], repeatRows=1, splitByRow=1)
-    detail_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3), ("LEFTPADDING", (0, 0), (-1, -1), 2.5), ("RIGHTPADDING", (0, 0), (-1, -1), 2.5)]))
-    story.append(detail_table)
+    story += [PageBreak(), Paragraph("Monthly Detection Trend", heading), Spacer(1, 6 * mm), Image(chart_image("trend"), width=171 * mm, height=83 * mm), Spacer(1, 7 * mm), Paragraph(trend_narrative, normal), PageBreak(), Paragraph("Severity by Map Area", heading), Spacer(1, 3 * mm), Image(chart_image("severity"), width=171 * mm, height=55 * mm), Spacer(1, 4 * mm), severity_table, Spacer(1, 5 * mm), priority_box, PageBreak(), Paragraph("Disease distribution", heading), Spacer(1, 7 * mm), distribution_table]
     document.build(story, onFirstPage=first_page, onLaterPages=later_pages, canvasmaker=_NumberedReportCanvas)
     return buffer.getvalue()
 

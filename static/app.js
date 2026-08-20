@@ -175,8 +175,10 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
 function setFarmerNavigationVisible(visible) {
   const uploadNav = document.getElementById('nav-upload-link');
   const mapNav = document.getElementById('nav-map-link');
+  const historyNav = document.getElementById('nav-history-link');
   if (uploadNav) uploadNav.style.display = visible ? '' : 'none';
   if (mapNav) mapNav.style.display = visible ? '' : 'none';
+  if (historyNav) historyNav.style.display = visible ? '' : 'none';
 }
 
 function setExpertRecommendationDisease(diseaseName) {
@@ -478,7 +480,15 @@ window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedL
   title.textContent = 'Detection Image';
   subtitle.textContent = imageLabel;
   content.innerHTML = `<img src="${imageUrl}" alt="${imageLabel}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
-  content.innerHTML += `<div class="record-actions"><button class="btn btn-o" onclick="closeDetectionModal();${coords ? `switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${coords.lat},${coords.lng})` : ''}">View on Map</button><button class="btn btn-o" onclick="showToast('Marked as inspected for this session.')">Mark as Inspected</button></div>`;
+  modal.classList.remove('hidden');
+};
+
+window.openExpertImageResult = function openExpertImageResult(encodedOriginal, encodedAnnotated, encodedLabel) {
+  const modal = document.getElementById('record-modal'), title = document.getElementById('record-modal-title'), subtitle = document.getElementById('record-modal-subtitle'), content = document.getElementById('record-modal-content');
+  if (!modal || !title || !subtitle || !content) return;
+  const original = decodeURIComponent(encodedOriginal || ''), annotated = decodeURIComponent(encodedAnnotated || ''), label = decodeURIComponent(encodedLabel || 'Detection image');
+  title.textContent = 'Annotated Detection Result'; subtitle.textContent = label;
+  content.innerHTML = annotated ? `<img src="${escapeHtml(annotated)}" alt="Annotated result for ${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;">` : '<p style="padding:18px;color:var(--text3);font-size:12px;">No annotated result is available for this record.</p>';
   modal.classList.remove('hidden');
 };
 
@@ -839,6 +849,7 @@ function switchTab(name, btn) {
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
   if(name==='expert' && typeof loadExpertReview === 'function') loadExpertReview();
   if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
+  if(name==='history' && typeof loadVerifiedDiseaseHistory === 'function') loadVerifiedDiseaseHistory();
   if(name==='map' && typeof loadAreaMonitoring === 'function') loadAreaMonitoring();
   if(name==='dashboard') {
     const statusPill = document.getElementById('drone-status-text');
@@ -2389,6 +2400,83 @@ function stopDrone(){
 
 // ── Load User Detection Records ──
 let currentUserRecordsFilter = 'all';
+let verifiedHistoryRecords = [];
+
+window.filterVerifiedHistory = function filterVerifiedHistory() {
+  const query = String(document.getElementById('history-search')?.value || '').toLowerCase();
+  const disease = String(document.getElementById('history-disease-filter')?.value || '').toLowerCase();
+  const date = document.getElementById('history-date-filter')?.value || '';
+  const location = String(document.getElementById('history-location-filter')?.value || '').toLowerCase();
+  const list = document.getElementById('verified-history-list');
+  const matches = verifiedHistoryRecords.filter(record => { const ds = record.detections || []; const text = `${record.filename || ''} ${record.verified_by || ''} ${record.location || ''} ${ds.map(d => d.class).join(' ')}`.toLowerCase(); return (!query || text.includes(query)) && (!disease || ds.some(d => formatDiseaseClass(d.class).toLowerCase() === disease)) && (!date || String(record.verified_at || record.timestamp || '').slice(0,10) === date) && (!location || text.includes(location)); });
+  if (list) list.innerHTML = matches.length ? matches.map(record => { const ds = record.detections || []; const loc = record.location || record.area || (record.lat ? `${Number(record.lat).toFixed(5)}, ${Number(record.lng).toFixed(5)}` : 'Location unavailable'); return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0)*100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T',' ').slice(0,16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div><div class="history-actions"><button class="btn btn-o" onclick="openRecordImageModal('${encodeURIComponent(record.image_url || record.annotated_image_url || '')}','${encodeURIComponent(record.filename || 'Record')}')">View Record</button>${record.lat ? `<button class="btn btn-o" onclick="switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${record.lat},${record.lng})">View on Map</button>` : ''}</div></div>`; }).join('') : '<div class="no-records">No verified records match these filters.</div>';
+};
+
+// Verified history is deliberately separate from the general records list: an
+// upload enters this view only after an expert has marked it as verified.
+window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() {
+  if (!currentToken) {
+    showToast('Please log in first');
+    return;
+  }
+
+  const summaryEl = document.getElementById('verified-disease-summary');
+  const listEl = document.getElementById('verified-history-list');
+  const countEl = document.getElementById('verified-history-count');
+  if (!summaryEl || !listEl) return;
+  listEl.innerHTML = '<div class="no-records">Loading verified history...</div>';
+
+  try {
+    const response = await fetch('/detections/my-records', {
+      headers: { 'Authorization': `Bearer ${currentToken}` }
+    });
+    if (!response.ok) throw new Error('Failed to load verified history');
+
+    const payload = await response.json();
+    const verifiedRecords = (payload.records || []).filter((record) =>
+      formatVerificationStatus(record.verification_status).cls === 'verified'
+    );
+    const diseaseCounts = {};
+    const diseaseRecords = verifiedRecords.filter((record) => {
+      const diseases = (record.detections || []).filter((detection) => isDiseaseClass(detection.class));
+      diseases.forEach((detection) => {
+        const label = normalizeDiseaseClass(detection.class);
+        diseaseCounts[label] = (diseaseCounts[label] || 0) + 1;
+      });
+      return diseases.length > 0;
+    });
+    const totalCases = Object.values(diseaseCounts).reduce((total, value) => total + value, 0);
+    const cercosporaTotal = diseaseCounts.cercospora || 0;
+    const corrected = verifiedRecords.filter(record => record.recommendation_source === 'expert_override' || record.expert_note).length;
+    const uncertain = verifiedRecords.filter(record => (record.detections || []).some(d => Number(d.confidence || 0) < .5)).length;
+    const cards = [`<div class="stat-box"><h4>Total Verified Records</h4><div class="stat-value">${verifiedRecords.length}</div><div class="stat-subtext">Expert-approved records</div></div>`,`<div class="stat-box disease"><h4>Confirmed AI Detections</h4><div class="stat-value">${totalCases}</div><div class="stat-subtext">Disease findings confirmed</div></div>`,`<div class="stat-box"><h4>Expert-Corrected</h4><div class="stat-value">${corrected}</div><div class="stat-subtext">Expert recommendation overrides</div></div>`,`<div class="stat-box"><h4>Uncertain Cases</h4><div class="stat-value">${uncertain}</div><div class="stat-subtext">Verified low-confidence findings</div></div>`];
+    summaryEl.innerHTML = cards.join('');
+    if (countEl) countEl.textContent = `${diseaseRecords.length} verified record${diseaseRecords.length === 1 ? '' : 's'}`;
+
+    if (!diseaseRecords.length) {
+      listEl.innerHTML = '<div class="no-records">No expert-verified disease records yet. Records will appear here after expert verification.</div>';
+      return;
+    }
+
+    verifiedHistoryRecords = diseaseRecords;
+    const diseaseSelect = document.getElementById('history-disease-filter');
+    if (diseaseSelect) diseaseSelect.innerHTML = '<option value="">All diseases</option>' + [...new Set(diseaseRecords.flatMap(r => (r.detections || []).map(d => formatDiseaseClass(d.class))))].sort().map(name => `<option value="${escapeHtml(name.toLowerCase())}">${escapeHtml(name)}</option>`).join('');
+    filterVerifiedHistory();
+    /*listEl.innerHTML = diseaseRecords.map((record) => {
+      const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
+      const diseases = (record.detections || []).filter((detection) => isDiseaseClass(detection.class));
+      return `<div class="record-item">
+        <span class="record-status verified">Verified</span>
+        <div class="record-meta"><strong>${escapeHtml(timestamp)}</strong><br>${escapeHtml(record.filename || record.image_path || 'Detection record')}</div>
+        <div class="record-detections">${diseases.map((detection) => `<span class="record-det high">${escapeHtml(formatDiseaseClass(detection.class))} ${Math.round(Number(detection.confidence || 0) * 100)}%</span>`).join('')}</div>
+      </div>`;
+    }).join('');*/
+  } catch (error) {
+    console.error('Error loading verified disease history:', error);
+    summaryEl.innerHTML = '<div class="stat-box disease"><h4>Verified Disease Cases</h4><div class="stat-value">—</div><div class="stat-subtext">Unable to load history</div></div>';
+    listEl.innerHTML = `<div class="no-records">Unable to load verified history.<br>${escapeHtml(error.message)}</div>`;
+  }
+};
 
 window.setUserRecordsFilter = function setUserRecordsFilter(filterName) {
   currentUserRecordsFilter = ['all', 'pending', 'verified'].includes(filterName) ? filterName : 'all';
@@ -2513,6 +2601,57 @@ window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
 };
 
 let expertAuditEvents = [];
+let expertQueueRecords = [];
+let currentExpertQueueQuickFilter = 'all';
+
+function getExpertQueueDetails(record) {
+  const primary = getPrimaryDetection(record);
+  const detections = Array.isArray(record.detections) ? record.detections : [];
+  const confidence = Number(primary.confidence || record.primaryConfidence || record.primary_confidence || detections[0]?.confidence || 0);
+  const status = formatVerificationStatus(record.verification_status).cls;
+  const corrected = Boolean(record.recommendation_source === 'expert_override' || record.expert_note || record.expertNote);
+  const location = [record.area, record.location, record.lat || record.gps_data?.latitude, record.lng || record.gps_data?.longitude].filter(Boolean).join(' ').toLowerCase();
+  return { primary, detections, confidence, status, corrected, location };
+}
+
+function updateExpertQueueDiseaseOptions(records) {
+  const select = document.getElementById('expert-queue-disease');
+  if (!select) return;
+  const current = select.value;
+  const diseases = [...new Set(records.flatMap(record => getExpertQueueDetails(record).detections.map(item => formatDiseaseClass(item.class))).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">All diseases</option>' + diseases.map(disease => `<option value="${escapeHtml(disease.toLowerCase())}">${escapeHtml(disease)}</option>`).join('');
+  select.value = diseases.some(disease => disease.toLowerCase() === current) ? current : '';
+}
+
+window.filterExpertQueue = function filterExpertQueue() {
+  const search = String(document.getElementById('expert-queue-search')?.value || '').trim().toLowerCase();
+  const disease = String(document.getElementById('expert-queue-disease')?.value || '').toLowerCase();
+  const confidenceFilter = document.getElementById('expert-queue-confidence')?.value || '';
+  const statusFilter = document.getElementById('expert-queue-status')?.value || '';
+  const date = document.getElementById('expert-queue-date')?.value || '';
+  const farmer = String(document.getElementById('expert-queue-farmer')?.value || '').trim().toLowerCase();
+  const area = String(document.getElementById('expert-queue-area')?.value || '').trim().toLowerCase();
+  const matches = expertQueueRecords.filter(record => {
+    const info = getExpertQueueDetails(record);
+    const haystack = `${record.filename || ''} ${record.email || ''} ${record.user_id || ''} ${info.primary.class || ''} ${info.location}`.toLowerCase();
+    const confidenceMatch = !confidenceFilter || (confidenceFilter === 'high' && info.confidence >= .75) || (confidenceFilter === 'moderate' && info.confidence >= .5 && info.confidence < .75) || (confidenceFilter === 'low' && info.confidence < .5);
+    const statusMatch = !statusFilter || (statusFilter === 'pending' && info.status !== 'verified') || (statusFilter === 'verified' && info.status === 'verified') || (statusFilter === 'corrected' && info.corrected);
+    const quickMatch = currentExpertQueueQuickFilter === 'all' || (currentExpertQueueQuickFilter === 'pending' && info.status !== 'verified') || (currentExpertQueueQuickFilter === 'low' && info.confidence < .5) || (currentExpertQueueQuickFilter === 'multiple' && info.detections.length > 1) || (currentExpertQueueQuickFilter === 'verified' && info.status === 'verified') || (currentExpertQueueQuickFilter === 'corrected' && info.corrected);
+    return (!search || haystack.includes(search)) && (!disease || info.detections.some(item => formatDiseaseClass(item.class).toLowerCase() === disease)) && confidenceMatch && statusMatch && (!date || String(record.timestamp || '').slice(0, 10) === date) && (!farmer || `${record.email || ''} ${record.user_id || ''}`.toLowerCase().includes(farmer)) && (!area || info.location.includes(area)) && quickMatch;
+  });
+  const queue = document.getElementById('expert-pending-list');
+  const count = document.getElementById('expert-queue-count');
+  const state = document.getElementById('expert-filter-state');
+  if (queue) queue.innerHTML = matches.length ? renderExpertRecordsTable(matches) : '<div class="no-records">No records match the selected queue filters.</div>';
+  if (count) count.textContent = `${matches.length} of ${expertQueueRecords.length} records`;
+  if (state) state.textContent = `Showing ${matches.length} matching review record${matches.length === 1 ? '' : 's'}`;
+};
+
+window.setExpertQueueQuickFilter = function setExpertQueueQuickFilter(filter, button) {
+  currentExpertQueueQuickFilter = filter;
+  document.querySelectorAll('.expert-quick-filter').forEach(item => item.classList.toggle('active', item === button));
+  filterExpertQueue();
+};
 
 function renderAuditEntry(entry) {
   const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
@@ -2550,27 +2689,30 @@ function renderExpertRecordsTable(records) {
     const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
     const owner = record.email || record.user_id || 'Unknown farmer';
     const previewImage = record.image_url || record.annotated_image_url || '';
+    const annotatedImage = record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Image';
     const disease = primary.class || record.primaryDisease || detections[0]?.class || 'No detection';
     const confidence = Number(primary.confidence || detections[0]?.confidence || 0);
+    const confidenceClass = confidence >= 0.75 ? 'high' : confidence >= 0.5 ? 'moderate' : 'low';
     const lat = record.lat || record.gps_data?.latitude || record.gps_data?.lat || record.gps?.lat || record.gps?.latitude;
     const lng = record.lng || record.gps_data?.longitude || record.gps_data?.lng || record.gps?.lng || record.gps?.longitude;
     const recordId = String(record.id || '').replace(/'/g, '&#39;');
     const userId = String(record.user_id || '').replace(/'/g, '&#39;');
     const diseaseArg = String(disease).replace(/'/g, '&#39;');
     const imageCell = previewImage
-      ? `<img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" title="View ${escapeHtml(imageLabel)}" onclick="openRecordImageModal('${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')">`
+      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
-      ? `<div class="table-actions"><button class="btn btn-p" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}')">Recommendation</button></div>`
+      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}')">Recommendation</button></div>`
       : '<span class="expert-table-muted">Verified</span>';
 
     return `<tr>
       <td data-label="Image">${imageCell}</td>
       <td data-label="Record"><strong>${escapeHtml(imageLabel)}</strong></td>
       <td data-label="Farmer">${escapeHtml(owner)}</td>
-      <td data-label="Primary detection">${escapeHtml(formatDiseaseClass(disease))}<br><span class="expert-table-muted">${Math.round(confidence * 100)}% confidence</span></td>
-      <td data-label="All detections">${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round((d.confidence || 0) * 100)}%</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
+      <td data-label="Disease"><strong>${escapeHtml(formatDiseaseClass(disease))}</strong></td>
+      <td data-label="Confidence"><span class="expert-confidence ${confidenceClass}">${Math.round(confidence * 100)}%</span></td>
+      <td data-label="Detections">${detections.map(d => `<span class="record-det">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('') || '<span class="expert-table-muted">None</span>'}</td>
       <td data-label="Status">${buildRecordStatusBadge(record)}</td>
       <td data-label="Location">${lat !== undefined && lat !== null && lng !== undefined && lng !== null ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}` : '<span class="expert-table-muted">Not available</span>'}</td>
       <td data-label="Submitted">${escapeHtml(timestamp)}</td>
@@ -2578,7 +2720,7 @@ function renderExpertRecordsTable(records) {
     </tr>`;
   }).join('');
 
-  return `<div class="expert-table-wrap"><table class="expert-records-table expert-records-data"><colgroup><col class="col-image"><col class="col-record"><col class="col-farmer"><col class="col-primary"><col class="col-detections"><col class="col-status"><col class="col-location"><col class="col-submitted"><col class="col-actions"></colgroup><thead><tr><th>Image</th><th>Record</th><th>Farmer</th><th>Primary detection</th><th>All detections</th><th>Status</th><th>Location</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="expert-table-wrap"><table class="expert-records-table expert-records-data"><colgroup><col class="col-image"><col class="col-record"><col class="col-farmer"><col class="col-primary"><col class="col-primary"><col class="col-detections"><col class="col-status"><col class="col-location"><col class="col-submitted"><col class="col-actions"></colgroup><thead><tr><th>Image</th><th>Record</th><th>Farmer</th><th>Disease</th><th>Confidence</th><th>Detections</th><th>Status</th><th>Location</th><th>Submitted</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderExpertAuditTable(events) {
@@ -2826,10 +2968,92 @@ window.downloadMyRecordsPdf = async function downloadMyRecordsPdf() {
   }
 };
 
+function expertIsToday(value) {
+  const date = new Date(value || 0);
+  const now = new Date();
+  return !Number.isNaN(date.getTime()) && date.toDateString() === now.toDateString();
+}
+
+function renderExpertCommandCenter(records, auditEvents, overrides) {
+  const safeRecords = Array.isArray(records) ? records : [];
+  const safeEvents = Array.isArray(auditEvents) ? auditEvents : [];
+  const getConfidence = record => {
+    const primary = getPrimaryDetection(record);
+    return Number(primary.confidence || record.primaryConfidence || record.primary_confidence || 0);
+  };
+  const pending = safeRecords.filter(record => formatVerificationStatus(record.verification_status).cls !== 'verified');
+  // Daily progress is based on the actual records submitted today. This
+  // naturally resets when the calendar day changes and grows as farmers
+  // upload new disease detections. A Review action changes the existing
+  // record status to verified, so it immediately moves from Pending to
+  // Verified after the queue reloads.
+  const submittedToday = safeRecords.filter(record => expertIsToday(record.timestamp));
+  const todayPending = submittedToday.filter(record => formatVerificationStatus(record.verification_status).cls !== 'verified').length;
+  const todayVerified = submittedToday.filter(record => formatVerificationStatus(record.verification_status).cls === 'verified').length;
+  const todayCorrected = safeEvents.filter(event => expertIsToday(event.timestamp) && event.action === 'update_recommendation').length;
+  const todayTotal = submittedToday.length;
+  const reviewed = todayVerified;
+  const percent = todayTotal ? Math.round((reviewed / todayTotal) * 100) : 0;
+  const lowConfidence = pending.filter(record => getConfidence(record) < 0.5).length;
+
+  const setText = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
+  setText('expert-verified-today', todayVerified);
+  setText('expert-low-confidence', lowConfidence);
+  setText('expert-progress-percent', `${percent}%`);
+  setText('expert-progress-count', `${reviewed} reviewed`);
+  setText('expert-progress-detail', `${reviewed} of ${todayTotal} records submitted today reviewed`);
+  setText('expert-progress-pending-count', todayPending);
+  setText('expert-progress-verified-count', todayVerified);
+  setText('expert-progress-corrected-count', todayCorrected);
+  [['expert-progress-pending', todayPending], ['expert-progress-verified', todayVerified], ['expert-progress-corrected', todayCorrected]].forEach(([id, count]) => {
+    const element = document.getElementById(id);
+    if (element) element.style.width = `${todayTotal ? (Number(count) / todayTotal) * 100 : 0}%`;
+  });
+
+  const priorities = pending.map(record => {
+    const detections = Array.isArray(record.detections) ? record.detections : [];
+    const confidence = getConfidence(record);
+    const isLow = confidence < 0.5;
+    const isMulti = detections.length > 1;
+    const isNew = expertIsToday(record.timestamp);
+    const score = (isLow ? 4 : 0) + (isMulti ? 2 : 0) + (isNew ? 1 : 0);
+    return { record, detections, confidence, isLow, isMulti, isNew, score };
+  }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || new Date(b.record.timestamp || 0) - new Date(a.record.timestamp || 0)).slice(0, 5);
+  setText('expert-priority-count', `${priorities.length} queued`);
+  const priorityList = document.getElementById('expert-priority-list');
+  if (priorityList) priorityList.innerHTML = priorities.length ? priorities.map(({ record, detections, confidence, isLow, isMulti, isNew }) => {
+    const primary = getPrimaryDetection(record);
+    const disease = primary.class || record.primaryDisease || 'Unclassified detection';
+    const tags = [isLow && `<span class="expert-priority-badge low">${Math.round(confidence * 100)}% confidence</span>`, isMulti && `<span class="expert-priority-badge multi">${detections.length} detections</span>`, isNew && '<span class="expert-priority-badge new">New today</span>'].filter(Boolean).join('');
+    return `<div class="expert-priority-item"><div><h4>${escapeHtml(formatDiseaseClass(disease))}</h4><p>${escapeHtml(record.filename || record.email || 'Farmer upload')} · ${escapeHtml(new Date(record.timestamp || Date.now()).toLocaleString())}</p><div class="expert-priority-meta">${tags}</div></div><button class="btn btn-p" onclick="reviewExpertPriority('${String(record.user_id || '').replace(/'/g, '&#39;')}','${String(record.id || '').replace(/'/g, '&#39;')}')">Review Now</button></div>`;
+  }).join('') : '<div class="expert-empty">No priority reviews right now. New pending records will appear here automatically.</div>';
+
+  const activityList = document.getElementById('expert-activity-list');
+  if (activityList) activityList.innerHTML = safeEvents.slice(0, 5).map(event => {
+    const action = event.action || 'action';
+    const isCorrection = action === 'update_recommendation';
+    const isVerification = action === 'verify_record';
+    const label = isVerification ? 'Verification completed' : isCorrection ? 'Recommendation updated' : action.replace(/_/g, ' ');
+    const target = event.upload?.filename || event.target?.disease || event.target?.record_id || 'record';
+    const badge = isVerification ? 'Verified' : isCorrection ? 'Updated' : 'Activity';
+    return `<div class="expert-activity-item"><span class="expert-activity-icon">${isVerification ? '✓' : isCorrection ? '↺' : '•'}</span><div><h4>${escapeHtml(label)}</h4><p>${escapeHtml(target)} · ${escapeHtml(new Date(event.timestamp || Date.now()).toLocaleString())}</p></div><span class="expert-activity-badge ${isCorrection ? 'updated' : ''}">${badge}</span></div>`;
+  }).join('') || '<div class="expert-empty">No expert activity recorded yet.</div>';
+}
+
+window.reviewExpertPriority = function reviewExpertPriority(userId, recordId) {
+  currentExpertFilter = 'pending';
+  loadExpertReview().then(() => {
+    const queue = document.getElementById('expert-pending-list');
+    if (queue) queue.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const button = queue?.querySelector(`button[onclick*="verifyExpertRecord('${userId}','${recordId}')"]`);
+    if (button) button.focus();
+  });
+};
+
 window.loadExpertReview = async function loadExpertReview() {
   if (!currentToken || !currentUserIsExpert) return;
 
-  currentExpertFilter = ['all', 'pending', 'verified'].includes(currentExpertFilter) ? currentExpertFilter : 'pending';
+  currentExpertFilter = 'all';
   ['all', 'pending', 'verified'].forEach(filter => {
     const button = document.getElementById(`expert-filter-${filter}`);
     if (!button) return;
@@ -2843,29 +3067,32 @@ window.loadExpertReview = async function loadExpertReview() {
   if (filterStateEl) filterStateEl.textContent = `Showing ${getExpertFilterLabel(currentExpertFilter)}`;
 
   try {
-    const [recordsRes, overridesRes] = await Promise.all([
+    const [recordsRes, allRecordsRes, overridesRes, auditRes] = await Promise.all([
       fetch(`/expert/records?status=${encodeURIComponent(currentExpertFilter)}`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
-      fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } })
+      fetch('/expert/records?status=all', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+      fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+      fetch('/expert/audit-log?limit=10', { headers: { 'Authorization': `Bearer ${currentToken}` } })
     ]);
 
     if (!recordsRes.ok) throw new Error('Failed to load expert records');
 
     const recordsData = await recordsRes.json();
     const records = recordsData.records || [];
+    expertQueueRecords = records;
+    updateExpertQueueDiseaseOptions(expertQueueRecords);
+    const allRecordsData = allRecordsRes.ok ? await allRecordsRes.json() : recordsData;
     const overridesData = overridesRes.ok ? await overridesRes.json() : { overrides: {} };
     const overrides = overridesData.overrides || {};
+    const dashboardEvents = auditRes.ok ? (await auditRes.json()).events || [] : [];
     const pendingCountEl = document.getElementById('expert-pending-records');
     const totalCountEl = document.getElementById('expert-total-records');
     const overrideCountEl = document.getElementById('expert-override-count');
     if (pendingCountEl) pendingCountEl.textContent = recordsData.pending_records ?? records.length;
     if (totalCountEl) totalCountEl.textContent = recordsData.total_records ?? records.length;
     if (overrideCountEl) overrideCountEl.textContent = Object.keys(overrides).length;
+    renderExpertCommandCenter(allRecordsData.records || records, dashboardEvents, overrides);
 
-    if (pendingListEl) {
-      pendingListEl.innerHTML = records.length
-        ? renderExpertRecordsTable(records)
-        : `<div class="no-records">No ${getExpertFilterLabel(currentExpertFilter)} found.</div>`;
-    }
+    filterExpertQueue();
 
     const statusEl = document.getElementById('expert-recommendation-status');
     if (statusEl) {
