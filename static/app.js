@@ -2430,13 +2430,9 @@ let currentUserRecordsFilter = 'all';
 let verifiedHistoryRecords = [];
 
 window.filterVerifiedHistory = function filterVerifiedHistory() {
-  const query = String(document.getElementById('history-search')?.value || '').toLowerCase();
-  const disease = String(document.getElementById('history-disease-filter')?.value || '').toLowerCase();
-  const date = document.getElementById('history-date-filter')?.value || '';
-  const location = String(document.getElementById('history-location-filter')?.value || '').toLowerCase();
   const list = document.getElementById('verified-history-list');
-  const matches = verifiedHistoryRecords.filter(record => { const ds = record.detections || []; const text = `${record.filename || ''} ${record.verified_by || ''} ${record.location || ''} ${ds.map(d => d.class).join(' ')}`.toLowerCase(); return (!query || text.includes(query)) && (!disease || ds.some(d => formatDiseaseClass(d.class).toLowerCase() === disease)) && (!date || String(record.verified_at || record.timestamp || '').slice(0,10) === date) && (!location || text.includes(location)); });
-  if (list) list.innerHTML = matches.length ? matches.map(record => { const ds = record.detections || []; const loc = record.location || record.area || (record.lat ? `${Number(record.lat).toFixed(5)}, ${Number(record.lng).toFixed(5)}` : 'Location unavailable'); return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0)*100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T',' ').slice(0,16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div><div class="history-actions"><button class="btn btn-o" onclick="openRecordImageModal('${encodeURIComponent(record.image_url || record.annotated_image_url || '')}','${encodeURIComponent(record.filename || 'Record')}')">View Record</button>${record.lat ? `<button class="btn btn-o" onclick="switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${record.lat},${record.lng})">View on Map</button>` : ''}</div></div>`; }).join('') : '<div class="no-records">No verified records match these filters.</div>';
+  const matches = verifiedHistoryRecords;
+  if (list) list.innerHTML = matches.length ? matches.map(record => { const ds = record.detections || []; const loc = record.location || record.area || (record.lat ? `${Number(record.lat).toFixed(5)}, ${Number(record.lng).toFixed(5)}` : 'Location unavailable'); return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0)*100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T',' ').slice(0,16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div><div class="history-actions"><button class="btn btn-o" onclick="openRecordImageModal('${encodeURIComponent(record.image_url || record.annotated_image_url || '')}','${encodeURIComponent(record.filename || 'Record')}')">View Record</button>${record.lat ? `<button class="btn btn-o" onclick="switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${record.lat},${record.lng})">View on Map</button>` : ''}</div></div>`; }).join('') : '<div class="no-records">No verified disease records available.</div>';
 };
 
 // Verified history is deliberately separate from the general records list: an
@@ -2472,22 +2468,27 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
       });
       return diseases.length > 0;
     });
-    const totalCases = Object.values(diseaseCounts).reduce((total, value) => total + value, 0);
-    const cercosporaTotal = diseaseCounts.cercospora || 0;
-    const corrected = verifiedRecords.filter(record => record.recommendation_source === 'expert_override' || record.expert_note).length;
-    const uncertain = verifiedRecords.filter(record => (record.detections || []).some(d => Number(d.confidence || 0) < .5)).length;
-    const cards = [`<div class="stat-box"><h4>Total Verified Records</h4><div class="stat-value">${verifiedRecords.length}</div><div class="stat-subtext">Expert-approved records</div></div>`,`<div class="stat-box disease"><h4>Confirmed AI Detections</h4><div class="stat-value">${totalCases}</div><div class="stat-subtext">Disease findings confirmed</div></div>`,`<div class="stat-box"><h4>Expert-Corrected</h4><div class="stat-value">${corrected}</div><div class="stat-subtext">Expert recommendation overrides</div></div>`,`<div class="stat-box"><h4>Uncertain Cases</h4><div class="stat-value">${uncertain}</div><div class="stat-subtext">Verified low-confidence findings</div></div>`];
+    const verifiedHistoryDiseases = ['bud root', 'cercospora', 'leaf rot', 'pestalotiopsis'];
+    const diseaseCards = verifiedHistoryDiseases
+      .map((disease) => {
+        const count = diseaseCounts[disease] || 0;
+        const color = DETECTION_CLASS_COLORS[disease] || 'var(--accent)';
+        const label = formatDiseaseClass(disease);
+        return `<div class="stat-box disease" style="--stat-accent:${color};"><h4>${escapeHtml(label)}</h4><div class="stat-value">${count}</div><div class="stat-subtext">Verified disease record${count === 1 ? '' : 's'}</div></div>`;
+      });
+    const cards = [
+      `<div class="stat-box total"><h4>Total Verified History Results</h4><div class="stat-value">${diseaseRecords.length}</div><div class="stat-subtext">Verified disease record${diseaseRecords.length === 1 ? '' : 's'}</div></div>`,
+      ...diseaseCards,
+    ];
     summaryEl.innerHTML = cards.join('');
     if (countEl) countEl.textContent = `${diseaseRecords.length} verified record${diseaseRecords.length === 1 ? '' : 's'}`;
 
     if (!diseaseRecords.length) {
-      listEl.innerHTML = '<div class="no-records">No expert-verified disease records yet. Records will appear here after expert verification.</div>';
+      listEl.innerHTML = '<div class="no-records">No verified disease records yet. Records will appear here after verification.</div>';
       return;
     }
 
     verifiedHistoryRecords = diseaseRecords;
-    const diseaseSelect = document.getElementById('history-disease-filter');
-    if (diseaseSelect) diseaseSelect.innerHTML = '<option value="">All diseases</option>' + [...new Set(diseaseRecords.flatMap(r => (r.detections || []).map(d => formatDiseaseClass(d.class))))].sort().map(name => `<option value="${escapeHtml(name.toLowerCase())}">${escapeHtml(name)}</option>`).join('');
     filterVerifiedHistory();
     /*listEl.innerHTML = diseaseRecords.map((record) => {
       const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
