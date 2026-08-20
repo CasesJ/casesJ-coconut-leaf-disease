@@ -1213,8 +1213,8 @@ async function loadSavedMapPins(userId) {
       
       // Clear current log and markers
       log = [];
-      mainMarkers.forEach(m => mainMap.removeLayer(m));
-      miniMarkers.forEach(m => miniMap.removeLayer(m));
+      mainMarkers.forEach(item => item?.marker?.remove());
+      miniMarkers.forEach(marker => marker?.remove());
       mainMarkers = [];
       miniMarkers = [];
       
@@ -1251,7 +1251,80 @@ function getSeverity(label, confidence) { return (isHealthyClass(label) || confi
 function severityColor(level) { return level === 'high' ? '#ef4444' : level === 'moderate' ? '#f97316' : '#22c55e'; }
 function mapAreaForPoint(lat, lng) { const row = lat < (AREA_MONITORING_BOUNDS.minLat + AREA_MONITORING_BOUNDS.maxLat) / 2 ? 0 : 1, col = lng < (AREA_MONITORING_BOUNDS.minLng + AREA_MONITORING_BOUNDS.maxLng) / 2 ? 0 : 1; return `Area ${row * 2 + col + 1}`; }
 function popupHtml(entry, index) { const level = getSeverity(entry.label, entry.confidence), tree = `Tree-${String(index + 1).padStart(3, '0')}`; return `<div class="map-popup"><h3>${formatDiseaseClass(entry.label)}</h3><dl><dt>Location / Tree ID</dt><dd>${entry.address || tree} · ${tree}</dd><dt>Confidence</dt><dd>${Math.round(entry.confidence * 100)}%</dd><dt>Date</dt><dd>${entry.date || new Date().toLocaleDateString()}</dd><dt>Coordinates</dt><dd>${Number(entry.lat).toFixed(6)}, ${Number(entry.lng).toFixed(6)}</dd><dt>Severity</dt><dd style="color:${severityColor(level)};text-transform:capitalize">${level}</dd></dl><div class="popup-actions"><button onclick="viewDetection(${index})">View Detection</button></div></div>`; }
-window.applyMapFilters = function() { const disease=document.getElementById('map-filter-disease')?.value||'',area=document.getElementById('map-filter-area')?.value||'',severity=document.getElementById('map-filter-severity')?.value||''; log.forEach((entry,index)=>{ const show=(!disease||normalizeDiseaseClass(entry.label)===disease)&&(!area||mapAreaForPoint(entry.lat,entry.lng).toLowerCase().replace(' ','-')===area)&&(!severity||getSeverity(entry.label,entry.confidence)===severity); const marker=mainMarkers[mainMarkers.length-1-index]?.marker, mini=miniMarkers[miniMarkers.length-1-index]; if(marker)marker.getElement().style.display=show?'':'none'; if(mini)mini.getElement().style.display=show?'':'none'; }); renderLog(); };
+function areaFilterValue(lat, lng) {
+  return mapAreaForPoint(lat, lng).toLowerCase().replace(/\s+/g, '-');
+}
+
+function matchesMapFilters(entry, disease, area, severity) {
+  return (!disease || normalizeDiseaseClass(entry.label) === disease)
+    && (!area || areaFilterValue(entry.lat, entry.lng) === area)
+    && (!severity || getSeverity(entry.label, entry.confidence) === severity);
+}
+
+function updateFilteredHeatmap(entries) {
+  const diseaseSource = mainMap?.getSource?.('disease-source');
+  if (!diseaseSource) return;
+
+  diseaseSource.setData({
+    type: 'FeatureCollection',
+    features: entries.map(entry => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [entry.lng, entry.lat] },
+      properties: {
+        mag: (cls(entry.label, entry.confidence) === 'd' ? entry.confidence : entry.confidence * 0.6) * 100,
+        label: entry.label,
+        confidence: Math.round(entry.confidence * 100)
+      }
+    }))
+  });
+}
+
+function focusFilteredPins(entries, selectedArea) {
+  if (!mapsReady || !mainMap) return;
+
+  if (entries.length === 1) {
+    mainMap.flyTo({ center: [entries[0].lng, entries[0].lat], zoom: 18 });
+    return;
+  }
+
+  if (entries.length > 1) {
+    const bounds = entries.reduce((bounds, entry) => bounds.extend([entry.lng, entry.lat]), new maplibregl.LngLatBounds());
+    mainMap.fitBounds(bounds, { padding: 70, maxZoom: 18, duration: 500 });
+    return;
+  }
+
+  // Keep the selected area in view even when no pin matches all filters.
+  if (selectedArea) {
+    const areaIndex = Number(selectedArea.replace('area-', '')) - 1;
+    const row = Math.floor(areaIndex / 2);
+    const col = areaIndex % 2;
+    if (areaIndex >= 0 && areaIndex < 4) {
+      const midLat = (AREA_MONITORING_BOUNDS.minLat + AREA_MONITORING_BOUNDS.maxLat) / 2;
+      const midLng = (AREA_MONITORING_BOUNDS.minLng + AREA_MONITORING_BOUNDS.maxLng) / 2;
+      mainMap.fitBounds([
+        [col ? midLng : AREA_MONITORING_BOUNDS.minLng, row ? midLat : AREA_MONITORING_BOUNDS.minLat],
+        [col ? AREA_MONITORING_BOUNDS.maxLng : midLng, row ? AREA_MONITORING_BOUNDS.maxLat : midLat]
+      ], { padding: 70, duration: 500 });
+    }
+  }
+}
+
+window.applyMapFilters = function() {
+  const disease = document.getElementById('map-filter-disease')?.value || '';
+  const area = document.getElementById('map-filter-area')?.value || '';
+  const severity = document.getElementById('map-filter-severity')?.value || '';
+  const matchingEntries = log.filter(entry => matchesMapFilters(entry, disease, area, severity));
+
+  log.forEach(entry => {
+    const show = matchingEntries.includes(entry);
+    if (entry.mainMarker) entry.mainMarker.getElement().style.display = show ? '' : 'none';
+    if (entry.miniMarker) entry.miniMarker.getElement().style.display = show ? '' : 'none';
+  });
+
+  updateFilteredHeatmap(matchingEntries);
+  focusFilteredPins(matchingEntries, area);
+  renderLog();
+};
 window.viewDetection = index => flyTo(index);
 
 function addPin(lat,lng,label,confidence,source){
@@ -1265,6 +1338,7 @@ function addPin(lat,lng,label,confidence,source){
   let markerElement = null;
   let popup = null;
   let miniPopup = null;
+  let miniMarker = null;
   
   if(mapsReady){
     // Main map marker
@@ -1277,7 +1351,7 @@ function addPin(lat,lng,label,confidence,source){
     
     // Mini map marker
     const miniElement = createMarkerElement(color);
-    const miniMarker = new maplibregl.Marker({element: miniElement})
+    miniMarker = new maplibregl.Marker({element: miniElement})
       .setLngLat([lng, lat])
       .addTo(miniMap);
     
@@ -1299,7 +1373,7 @@ function addPin(lat,lng,label,confidence,source){
     }
   }
   
-  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker: markerElement, popup: popup};
+  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker: markerElement, miniMarker, popup: popup};
   log.unshift(entry);
   if (popup) popup.setHTML(popupHtml(entry, 0));
   
@@ -1330,7 +1404,8 @@ function addPin(lat,lng,label,confidence,source){
     renderLog(); // Re-render with address
   });
   
-  renderLog(); updateStats();
+  applyMapFilters();
+  updateStats();
   const pinCountEl = document.getElementById('pin-count');
   if (pinCountEl) pinCountEl.textContent = log.length + ' pins';
 }
