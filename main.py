@@ -61,8 +61,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.20
-UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.20
+# Show potentially useful leaf-disease detections from the current YOLO26 v6
+# model.  The UI always shows their confidence, so users can review lower-score
+# detections instead of receiving an unexplained empty result.
+UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.05
+UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.05
 EXPERT_RECOMMENDATIONS_PATH = Path("expert_recommendations.json")
 EXPERT_AUDIT_LOG_PATH = Path("expert_audit_log.jsonl")
 USER_NOTIFICATIONS_PATH = Path("user_notifications.json")
@@ -1262,6 +1265,12 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
         "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved - >= {UPLOAD_RECORD_CONFIDENCE_THRESHOLD:.0%} confidence)",
         "display_confidence_threshold": UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
         "record_confidence_threshold": UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
+        "model": {
+            "name": "YOLO26 v6",
+            "backend": detector.backend,
+            "weights": detector.active_model_path.name if detector.active_model_path else None,
+            "classes": detector.class_names,
+        },
         # ✅ Return GPS data so frontend pins disease at correct location
         "gps_lat": lat,
         "gps_lng": lng,

@@ -1332,8 +1332,8 @@ window.applyMapFilters = function() {
 
   log.forEach(entry => {
     const show = matchingEntries.includes(entry);
-    if (entry.mainMarker) entry.mainMarker.getElement().style.display = show ? '' : 'none';
-    if (entry.miniMarker) entry.miniMarker.getElement().style.display = show ? '' : 'none';
+    if (entry.mainMarker?.getElement) entry.mainMarker.getElement().style.display = show ? '' : 'none';
+    if (entry.miniMarker?.getElement) entry.miniMarker.getElement().style.display = show ? '' : 'none';
   });
 
   updateFilteredHeatmap(matchingEntries);
@@ -1351,6 +1351,7 @@ function addPin(lat,lng,label,confidence,source){
   let popupContent=`<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>Source: ${source}<br><span style="font-size:11px;color:#666">Loading location...</span><br>Time: ${time}`;
   
   let markerElement = null;
+  let mainMarker = null;
   let popup = null;
   let miniPopup = null;
   let miniMarker = null;
@@ -1359,7 +1360,7 @@ function addPin(lat,lng,label,confidence,source){
     // Main map marker
     markerElement = createMarkerElement(color);
     popup = new maplibregl.Popup({offset: 25});
-    const mainMarker = new maplibregl.Marker({element: markerElement})
+    mainMarker = new maplibregl.Marker({element: markerElement})
       .setLngLat([lng, lat])
       .setPopup(popup)
       .addTo(mainMap);
@@ -1388,7 +1389,9 @@ function addPin(lat,lng,label,confidence,source){
     }
   }
   
-  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker: markerElement, miniMarker, popup: popup};
+  // Keep the Marker instance, not its DOM element. Filters and map controls
+  // need Marker#getElement(), while the DOM element does not provide it.
+  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker, miniMarker, popup: popup};
   log.unshift(entry);
   if (popup) popup.setHTML(popupHtml(entry, 0));
   
@@ -1728,6 +1731,7 @@ async function detectImages(files) {
 
   let completed = 0;
   const completedResults = [];
+  const failedUploads = [];
   for (const [index, file] of files.entries()) {
     if (loadingText) loadingText.textContent = `Analyzing image ${index + 1} of ${files.length}...`;
     try {
@@ -1736,6 +1740,7 @@ async function detectImages(files) {
       completed += 1;
     } catch (err) {
       console.error(`Upload error for ${file.name}:`, err);
+      failedUploads.push({ file, message: err?.message || 'Unknown upload error' });
     }
   }
 
@@ -1743,10 +1748,22 @@ async function detectImages(files) {
   if (loadingText) loadingText.textContent = 'Analyzing leaf...';
   const fileInput = document.getElementById('fileInput');
   if (fileInput) fileInput.value = '';
-  if (completedResults.length) renderBatchUpload(completedResults);
-  showToast(completed === files.length
-    ? `${completed} image${completed === 1 ? '' : 's'} uploaded and analyzed.`
-    : `${completed} of ${files.length} images uploaded and analyzed.`);
+  if (completedResults.length) {
+    renderBatchUpload(completedResults);
+  }
+  if (failedUploads.length) {
+    // Keep failed files visible so the user can retry without selecting them again.
+    stagedUploadFiles = failedUploads.map(item => item.file);
+    renderStagedImagePreviews();
+    const confirmation = document.getElementById('upload-confirmation');
+    const fileName = document.getElementById('upload-confirmation-name');
+    if (fileName) fileName.textContent = `${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'} ready to retry`;
+    if (confirmation) confirmation.style.display = 'block';
+    const details = failedUploads.map(item => `${item.file.name}: ${item.message}`).join(' | ');
+    showToast(`Upload failed — ${details}`);
+  } else {
+    showToast(`${completed} image${completed === 1 ? '' : 's'} uploaded and analyzed.`);
+  }
 }
 
 function renderBatchUpload(items) {
@@ -1763,9 +1780,12 @@ function renderBatchUpload(items) {
     const annotatedImage = result.annotated_image_base64
       ? `<img src="data:image/jpeg;base64,${result.annotated_image_base64}" alt="Detection for ${escapeHtml(file.name)}" style="width:72px;height:72px;object-fit:cover;border-radius:7px;background:#eef6f1;">`
       : '';
-    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid rgba(11,42,31,0.1);border-radius:8px;margin-top:8px;">${annotatedImage}<div><strong>${escapeHtml(file.name)}</strong><div style="font-size:12px;color:var(--text2);margin-top:4px;">${diseases.length ? escapeHtml(diseases.join(', ')) : 'No disease detected'}</div></div></div>`;
+    const model = result.model?.name && result.model?.weights
+      ? `${result.model.name} · ${result.model.weights}`
+      : 'Model information unavailable';
+    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid rgba(11,42,31,0.1);border-radius:8px;margin-top:8px;">${annotatedImage}<div><strong>${escapeHtml(file.name)}</strong><div style="font-size:12px;color:var(--text2);margin-top:4px;">${diseases.length ? escapeHtml(diseases.join(', ')) : 'No disease detected above 15% confidence'}</div><div style="font-size:11px;color:var(--text3);margin-top:3px;">${escapeHtml(model)}</div></div></div>`;
   }).join('');
-  batchResults.innerHTML = `<div style="font-weight:600;color:var(--deep);">Results for ${items.length} uploaded image${items.length === 1 ? '' : 's'}</div>${cards}`;
+  batchResults.innerHTML = `<div style="font-weight:600;color:var(--deep);">Completed results for ${items.length} uploaded image${items.length === 1 ? '' : 's'}</div>${cards}`;
   batchResults.style.display = 'block';
 }
 
@@ -1829,7 +1849,10 @@ async function detectImage(file){
   }
   
   const res = await fetch('/detect/image', fetchOpts);
-  if (!res.ok) throw new Error('Server error ' + res.status);
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Server error ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
+  }
   const data = await res.json();
   if (data.image_metadata?.is_dji) {
     const camera = data.image_metadata.camera_model || 'DJI drone';
