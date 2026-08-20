@@ -224,6 +224,8 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   if (currentUserEmail) currentUserEmail.innerHTML = '<strong>User:</strong> ' + user.email;
   if (roleEl) roleEl.innerHTML = '<strong>Role:</strong> ' + (currentUserIsExpert ? 'Expert' : 'Farmer');
   if (expertNavLink) expertNavLink.style.display = currentUserIsExpert ? 'flex' : 'none';
+  const notificationWrap = document.querySelector('.notification-wrap');
+  if (notificationWrap) notificationWrap.style.display = currentUserIsExpert ? 'none' : '';
   setFarmerNavigationVisible(!currentUserIsExpert);
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = currentUserIsExpert ? 'block' : 'none';
@@ -246,7 +248,7 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   if (currentUserIsExpert && typeof loadExpertAuditLog === 'function') {
     setTimeout(loadExpertAuditLog, 450);
   }
-  if (typeof loadNotifications === 'function') setTimeout(loadNotifications, 500);
+  if (!currentUserIsExpert && typeof loadNotifications === 'function') setTimeout(loadNotifications, 500);
   if (typeof renderEnhancedSettings === 'function') renderEnhancedSettings();
 };
 
@@ -259,6 +261,8 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   if (expertNavLink) expertNavLink.style.display = 'none';
   const notificationCount = document.getElementById('notification-count');
   if (notificationCount) notificationCount.style.display = 'none';
+  const notificationWrap = document.querySelector('.notification-wrap');
+  if (notificationWrap) notificationWrap.style.display = '';
   setFarmerNavigationVisible(true);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
@@ -547,7 +551,7 @@ window.clearNotificationHistory = async function clearNotificationHistory() {
 function renderEnhancedSettings() {
   const root = document.getElementById('settings-enhanced-root'); if (!root) return;
   const s = getUiSettings();
-  root.innerHTML = `<div class="panels"><div class="dashboard-intro"><div><h1>Settings</h1><p>Review your account and the CoconutAI system information.</p></div></div><div class="settings-layout"><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">S</div><div><h4>System Settings</h4><p>Your account, application services, and session controls in one place.</p></div></div><div class="settings-unified-grid"><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">P</div><h5>Profile</h5></div><div class="profile-summary"><div class="profile-avatar">${(currentUser?.email || 'C').charAt(0).toUpperCase()}</div><div><strong>${currentUser?.email || 'CoconutAI user'}</strong><p>${currentUser?.email || 'Sign in to view your profile'}</p></div></div><div class="setting-row"><div><strong>Account role</strong><span>${currentUserIsExpert ? 'Expert account' : 'Farmer account'}</span></div><span class="hbadge g">Active</span></div></div><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">i</div><h5>System Information</h5></div><div class="system-list"><div><span>System</span><strong>CoconutAI</strong></div><div><span>Detection model</span><strong>YOLO11</strong></div><div><span>API service</span><strong>FastAPI</strong></div><div><span>Map engine</span><strong>MapLibre GL</strong></div><div><span>Version</span><strong>1.0.0</strong></div></div></div><div class="settings-section account-section"><div><div class="settings-section-title"><div class="settings-icon">A</div><h5>Account Management</h5></div><p style="font-size:12px;color:var(--text3);">End this session securely on this device.</p></div><div class="settings-footer"><button class="logout-btn" type="button" onclick="logout()">Logout</button></div></div></div></section></div></div>`;
+  root.innerHTML = `<div class="panels"><div class="dashboard-intro"><div><h1>Settings</h1><p>Review your account and the CoconutAI system information.</p></div></div><div class="settings-layout"><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">S</div><div><h4>System Settings</h4><p>Your account, application services, and session controls in one place.</p></div></div><div class="settings-unified-grid"><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">P</div><h5>Profile</h5></div><div class="profile-summary"><div class="profile-avatar">${(currentUser?.email || 'C').charAt(0).toUpperCase()}</div><div><strong>${currentUser?.email || 'CoconutAI user'}</strong><p>${currentUser?.email || 'Sign in to view your profile'}</p></div></div><div class="setting-row"><div><strong>Account role</strong><span>${currentUserIsExpert ? 'Expert account' : 'Farmer account'}</span></div><span class="hbadge g">Active</span></div></div><div class="settings-section"><div class="settings-section-title"><div class="settings-icon">i</div><h5>System Information</h5></div><div class="system-list"><div><span>System</span><strong>CoconutAI</strong></div><div><span>Detection model</span><strong>YOLO26 v6</strong></div><div><span>Model weights</span><strong>weights.pt (local)</strong></div><div><span>API service</span><strong>FastAPI</strong></div><div><span>Map engine</span><strong>MapLibre GL</strong></div><div><span>Version</span><strong>1.0.0</strong></div></div></div><div class="settings-section account-section"><div><div class="settings-section-title"><div class="settings-icon">A</div><h5>Account Management</h5></div><p style="font-size:12px;color:var(--text3);">End this session securely on this device.</p></div><div class="settings-footer"><button class="logout-btn" type="button" onclick="logout()">Logout</button></div></div></div></section></div></div>`;
   const legacy = document.querySelector('#panel-settings .panels'); if (legacy) legacy.style.display = 'none';
 }
 function settingToggle(id, title, description, checked) { return `<div class="setting-row"><div><strong>${title}</strong><span>${description}</span></div><label class="switch"><input id="${id}" type="checkbox" ${checked ? 'checked' : ''} onchange="saveUiSettings()"><span class="switch-slider"></span></label></div>`; }

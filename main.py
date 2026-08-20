@@ -2594,7 +2594,12 @@ async def detect_stream(websocket: WebSocket):
 # ─── Health & Info Endpoints ──────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": "YOLO11"}
+    return {
+        "status": "ok",
+        "model": "YOLO26 v6",
+        "backend": detector.backend,
+        "weights": detector.active_model_path.name if detector.active_model_path else None,
+    }
 
 @app.get("/drone/gps")
 async def get_drone_gps_position():

@@ -22,10 +22,10 @@ from openvino import Core
 
 class CoconutDiseaseDetector:
     def __init__(self):
-        """Initialize detector using weights.pt when available, with OpenVINO fallback."""
+        """Initialize the required local YOLO26 v6 weights for inference."""
         current_dir = Path(__file__).parent
         self.current_dir = current_dir
-        self.backend = "openvino"
+        self.backend = "ultralytics"
         self.active_model_path = None
 
         # Default class names from the existing dataset
@@ -39,45 +39,30 @@ class CoconutDiseaseDetector:
         }
 
         model_pt = current_dir / "weights.pt"
-        model_xml = current_dir / "best_openvino_model" / "best.xml"
-        model_bin = current_dir / "best_openvino_model" / "best.bin"
+        if not model_pt.is_file():
+            raise FileNotFoundError(
+                f"Required YOLO26 v6 model weights were not found: {model_pt}"
+            )
+        if not ULTRALYTICS_AVAILABLE:
+            raise RuntimeError(
+                "Ultralytics is required to run the local YOLO26 v6 weights.pt model. "
+                "Install the dependencies and restart the application."
+            )
 
-        if model_pt.exists() and ULTRALYTICS_AVAILABLE:
-            try:
-                print(f"[OK] Loading Ultralytics model from {model_pt}")
-                self.yolo_model = YOLO(str(model_pt))
-                self.backend = "ultralytics"
-                self.active_model_path = model_pt
-                self.model_height = 640
-                self.model_width = 640
-                self.class_names = self._normalize_class_names(getattr(self.yolo_model, "names", self.class_names))
-                print("[OK] Ultralytics model loaded successfully")
-            except Exception as e:
-                print(f"[WARNING] Could not load weights.pt, falling back to OpenVINO: {e}")
-                self.yolo_model = None
-
-        if self.backend != "ultralytics":
-            # Verify model files exist
-            if not model_xml.exists() or not model_bin.exists():
-                raise FileNotFoundError(f"Model files not found. XML: {model_xml}, BIN: {model_bin}")
-
-            print(f"[OK] Loading OpenVINO model from {model_xml}")
-
-            # Initialize OpenVINO
-            self.core = Core()
-            self.compiled_model = self.core.compile_model(str(model_xml), "CPU")
-            self.infer_request = self.compiled_model.create_infer_request()
-
-            # Get model input/output info
-            self.input_layer = self.compiled_model.input(0)
-            self.output_layer = self.compiled_model.output(0)
-
-            self.input_shape = self.input_layer.shape
-            self.model_height = int(self.input_shape[2])
-            self.model_width = int(self.input_shape[3])
-            self.active_model_path = model_xml
-
-            print(f"[OK] Model loaded successfully. Input shape: {self.input_shape}")
+        try:
+            print(f"[OK] Loading required YOLO26 v6 model from {model_pt}")
+            self.yolo_model = YOLO(str(model_pt))
+            self.active_model_path = model_pt
+            self.model_height = 640
+            self.model_width = 640
+            self.class_names = self._normalize_class_names(
+                getattr(self.yolo_model, "names", self.class_names)
+            )
+            print("[OK] YOLO26 v6 weights loaded successfully")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to load the required YOLO26 v6 weights from {model_pt}."
+            ) from exc
         
         # ──── Load ML Recommendation Models ────
         print("[OK] Loading ML recommendation classifiers...")
