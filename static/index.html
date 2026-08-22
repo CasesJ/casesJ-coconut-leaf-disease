@@ -1268,7 +1268,7 @@
     console.log('✅ Global scope setup complete');
   </script>
   <!-- Load app functions - will override stubs -->
-  <script src="static/app.js?v=yolo26-low-threshold-20260820"></script>
+  <script src="static/app.js?v=confidence-recommendations-20260822"></script>
 </head>
 <body>
 
@@ -1682,7 +1682,7 @@
         </div>
         <div class="expert-queue-toolbar" aria-label="Expert review queue filters">
           <div class="expert-quick-filters" aria-label="Quick filters">
-            <button class="expert-quick-filter active" onclick="setExpertQueueQuickFilter('all',this)">All</button><button class="expert-quick-filter" onclick="setExpertQueueQuickFilter('pending',this)">Needs Review</button><button class="expert-quick-filter" onclick="setExpertQueueQuickFilter('low',this)">Low Confidence</button>
+            <button class="expert-quick-filter active" onclick="setExpertQueueQuickFilter('all',this)">All</button><button class="expert-quick-filter" onclick="setExpertQueueQuickFilter('needs-review',this)">Needs Review</button>
           </div>
         </div>
         <div class="records-toolbar" aria-label="Detection history filters" style="display:none;">

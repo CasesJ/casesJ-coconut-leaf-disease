@@ -746,6 +746,14 @@ class ExpertRecommendationUpdate(BaseModel):
     target_record_id: str | None = None
 
 
+class FarmerRecommendationUpdate(BaseModel):
+    """A farmer's low-confidence recommendation review (not expert verification)."""
+    fertilizer: str
+    treatment: str
+    prevention: list[str]
+    note: str | None = None
+
+
 class VerificationUpdate(BaseModel):
     status: str = VERIFIED_STATUS
 
@@ -1140,6 +1148,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     encoded = base64.b64encode(buffer).decode("utf-8")
     
     # Save to Firebase only high-confidence detections (skip if offline)
+    record_id = None
     if high_confidence_detections:
         try:
             print(f"\n[SAVE] SAVING DETECTION RECORD")
@@ -1259,6 +1268,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
     return {
         "detections": all_detections,
         "recorded_count": len(high_confidence_detections),
+        "record_id": record_id,
         "total_detected": len(all_detections),
         "annotated_image_base64": encoded,
         "user_email": email,
@@ -1281,6 +1291,42 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
 
 
 # ─── CSV Export Endpoint ──────────────────────────────────────────────────────
+@app.put("/detections/my-records/{record_id}/low-confidence-recommendation")
+async def save_farmer_low_confidence_recommendation(
+    record_id: str,
+    payload: FarmerRecommendationUpdate,
+    decoded: dict = Depends(verify_firebase_token),
+):
+    """Save a farmer review for a <50% result while retaining expert verification."""
+    user_id = str(decoded.get("uid") or "").strip()
+    record = _find_record_for_user(user_id, record_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+    disease, confidence = _extract_primary_disease(record)
+    if not disease:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to determine record disease")
+    if confidence >= 0.5:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only recommendations below 50% confidence can be edited by the farmer")
+
+    snapshot = {
+        "disease": disease, "confidence_percent": round(confidence * 100, 2),
+        "model_used": "Farmer reviewed",
+        "recommendations": {"fertilizer": payload.fertilizer, "treatment": payload.treatment, "prevention": payload.prevention},
+        "note": payload.note or "", "source": "farmer_review", "recommendation_scope": "record",
+    }
+    updated = _update_record_status_everywhere(user_id, record_id, {
+        "recommendation_snapshot": snapshot,
+        "recommendation_source": "farmer_review",
+        "farmer_recommendation_confirmed": True,
+        "farmer_recommendation_confirmed_at": datetime.now(timezone.utc).isoformat(),
+        # Farmer confirmation never replaces the expert's verification.
+        "verification_status": PENDING_VERIFICATION_STATUS,
+    })
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+    return {"message": "Farmer recommendation saved and sent for expert verification", "recommendation_snapshot": snapshot}
+
+
 @app.get("/api/export-csv")
 async def export_detections_csv(request: Request):
     """
@@ -2291,6 +2337,7 @@ async def verify_expert_record(
             "verification_status": desired_status,
         },
     )
+
 
     return {
         "message": "Record updated successfully",

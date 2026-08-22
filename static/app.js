@@ -1904,9 +1904,15 @@ function renderUpload(data){
     sStatus.style.color = bad ? 'var(--red)' : 'var(--accent)';
   }
   
-  if (n > 0) {
-    // Recommendations are now shown only after verification from the record cards.
-    // Keep the upload result focused on detection output.
+  const recsArea = document.getElementById('recommendations-area');
+  if (recsArea) { recsArea.style.display = 'none'; recsArea.innerHTML = ''; }
+  if (!primary) return;
+
+  const confidence = Number(primary.confidence || 0);
+  if (confidence >= 0.5) {
+    // Show high-confidence guidance directly below the disease detection.
+    // The record remains available for expert verification.
+    fetchRecommendation(primary.class, confidence);
   }
 }
 
@@ -2026,6 +2032,62 @@ async function fetchRecommendation(disease, confidence){
   }
 }
 
+async function showLowConfidenceRecommendationEditor(recordId, disease, confidence) {
+  const recArea = document.getElementById('recommendations-area');
+  if (!recArea) return;
+  recArea.innerHTML = '<div class="no-records">Loading editable recommendation...</div>';
+  recArea.style.display = 'block';
+  try {
+    const response = await fetch('/recommendations/fertilizer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {}) },
+      body: JSON.stringify({ disease, confidence })
+    });
+    if (!response.ok) throw new Error('Unable to load recommendation');
+    const data = await response.json();
+    const advice = data.recommendations || {};
+    const canSave = Boolean(recordId && currentToken);
+    recArea.innerHTML = `
+      <div class="rec-card" style="margin-top:10px;">
+        <div class="rec-title">Low-confidence recommendation — ${escapeHtml(disease)} (${(confidence * 100).toFixed(2)}%)</div>
+        <p style="margin-top:6px;font-size:12px;color:var(--text3);line-height:1.45;">This is below 50%. You can edit and confirm this guidance for an expert to review. Expert verification is still required.</p>
+        <div class="rec-label">Fertilizer</div><textarea id="farmer-rec-fertilizer" rows="3" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;">${escapeHtml(advice.fertilizer || '')}</textarea>
+        <div class="rec-label">Treatment</div><textarea id="farmer-rec-treatment" rows="4" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;">${escapeHtml(advice.treatment || '')}</textarea>
+        <div class="rec-label">Prevention (one item per line)</div><textarea id="farmer-rec-prevention" rows="4" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;">${escapeHtml(Array.isArray(advice.prevention) ? advice.prevention.join('\n') : advice.prevention || '')}</textarea>
+        <div class="rec-label">Note for expert (optional)</div><textarea id="farmer-rec-note" rows="2" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;"></textarea>
+        <button class="btn btn-p" ${canSave ? '' : 'disabled'} onclick="saveFarmerLowConfidenceRecommendation(${JSON.stringify(recordId)})" style="margin-top:12px;">Confirm for expert review</button>
+        ${canSave ? '' : '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Sign in and save the detection to submit your review.</div>'}
+      </div>`;
+  } catch (error) {
+    recArea.innerHTML = '<div class="no-records">Could not load the recommendation. Please try again.</div>';
+  }
+}
+
+window.saveFarmerLowConfidenceRecommendation = async function saveFarmerLowConfidenceRecommendation(recordId) {
+  if (!recordId || !currentToken) return;
+  const payload = {
+    fertilizer: document.getElementById('farmer-rec-fertilizer')?.value || '',
+    treatment: document.getElementById('farmer-rec-treatment')?.value || '',
+    prevention: (document.getElementById('farmer-rec-prevention')?.value || '').split('\n').map(item => item.trim()).filter(Boolean),
+    note: document.getElementById('farmer-rec-note')?.value || ''
+  };
+  try {
+    const response = await fetch(`/detections/my-records/${encodeURIComponent(recordId)}/low-confidence-recommendation`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` }, body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not save recommendation');
+    const recArea = document.getElementById('recommendations-area');
+    if (recArea) {
+      recArea.innerHTML = '';
+      recArea.style.display = 'none';
+    }
+    showToast('Recommendation confirmed and sent to an expert for verification.');
+  } catch (error) {
+    showToast(`Could not save recommendation: ${error.message}`);
+  }
+};
+
 function displayRecommendation(rec){
   const recArea=document.getElementById('recommendations-area');
   
@@ -2082,7 +2144,11 @@ function renderRecommendationCardHtml(rec) {
   const preventionText = Array.isArray(recommendation.prevention)
     ? recommendation.prevention.join(' • ')
     : recommendation.prevention;
-  const sourceLabel = rec?.source === 'expert_override' ? 'Expert edited recommendation' : 'Default recommendation';
+  const sourceLabel = rec?.source === 'expert_override'
+    ? 'Expert edited recommendation'
+    : rec?.source === 'farmer_review'
+      ? 'Farmer-confirmed recommendation — awaiting expert verification'
+      : 'Default recommendation';
 
   return `
     <div class="rec-card" style="margin-top:10px;">
@@ -2669,7 +2735,7 @@ window.filterExpertQueue = function filterExpertQueue() {
     const haystack = `${record.filename || ''} ${record.email || ''} ${record.user_id || ''} ${info.primary.class || ''} ${info.location}`.toLowerCase();
     const confidenceMatch = !confidenceFilter || (confidenceFilter === 'high' && info.confidence >= .75) || (confidenceFilter === 'moderate' && info.confidence >= .5 && info.confidence < .75) || (confidenceFilter === 'low' && info.confidence < .5);
     const statusMatch = !statusFilter || (statusFilter === 'pending' && info.status !== 'verified') || (statusFilter === 'verified' && info.status === 'verified') || (statusFilter === 'corrected' && info.corrected);
-    const quickMatch = currentExpertQueueQuickFilter === 'all' || (currentExpertQueueQuickFilter === 'pending' && info.status !== 'verified') || (currentExpertQueueQuickFilter === 'low' && info.confidence < .5) || (currentExpertQueueQuickFilter === 'multiple' && info.detections.length > 1) || (currentExpertQueueQuickFilter === 'verified' && info.status === 'verified') || (currentExpertQueueQuickFilter === 'corrected' && info.corrected);
+    const quickMatch = currentExpertQueueQuickFilter === 'all' || (currentExpertQueueQuickFilter === 'needs-review' && info.confidence < .5) || (currentExpertQueueQuickFilter === 'multiple' && info.detections.length > 1) || (currentExpertQueueQuickFilter === 'verified' && info.status === 'verified') || (currentExpertQueueQuickFilter === 'corrected' && info.corrected);
     return (!search || haystack.includes(search)) && (!disease || info.detections.some(item => formatDiseaseClass(item.class).toLowerCase() === disease)) && confidenceMatch && statusMatch && (!date || String(record.timestamp || '').slice(0, 10) === date) && (!farmer || `${record.email || ''} ${record.user_id || ''}`.toLowerCase().includes(farmer)) && (!area || info.location.includes(area)) && quickMatch;
   });
   const queue = document.getElementById('expert-pending-list');
