@@ -2432,7 +2432,15 @@ let verifiedHistoryRecords = [];
 window.filterVerifiedHistory = function filterVerifiedHistory() {
   const list = document.getElementById('verified-history-list');
   const matches = verifiedHistoryRecords;
-  if (list) list.innerHTML = matches.length ? matches.map(record => { const ds = record.detections || []; const loc = record.location || record.area || (record.lat ? `${Number(record.lat).toFixed(5)}, ${Number(record.lng).toFixed(5)}` : 'Location unavailable'); return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0)*100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T',' ').slice(0,16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div><div class="history-actions"><button class="btn btn-o" onclick="openRecordImageModal('${encodeURIComponent(record.image_url || record.annotated_image_url || '')}','${encodeURIComponent(record.filename || 'Record')}')">View Record</button>${record.lat ? `<button class="btn btn-o" onclick="switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${record.lat},${record.lng})">View on Map</button>` : ''}</div></div>`; }).join('') : '<div class="no-records">No verified disease records available.</div>';
+  if (list) list.innerHTML = matches.length ? matches.map(record => {
+    const ds = record.detections || [];
+    const imageUrl = record.image_url || record.annotated_image_url || '';
+    const imageLabel = record.filename || record.image_path || 'Detection image';
+    const actions = imageUrl
+      ? `<div class="history-actions"><button class="btn btn-o" type="button" onclick="openRecordImageModal('${encodeURIComponent(imageUrl)}', '${encodeURIComponent(imageLabel)}')">View image</button></div>`
+      : '';
+    return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
+  }).join('') : '<div class="no-records">No verified disease records available.</div>';
 };
 
 // Verified history is deliberately separate from the general records list: an
@@ -2617,14 +2625,11 @@ function renderRecordCard(record, idx, options = {}) {
 }
 
 function getExpertFilterLabel(filterName) {
-  const value = String(filterName || 'all').toLowerCase();
-  if (value === 'all') return 'all records';
-  if (value === 'verified') return 'verified records';
   return 'pending uploads';
 }
 
 window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
-  currentExpertFilter = ['all', 'pending', 'verified'].includes(filterName) ? filterName : 'pending';
+  currentExpertFilter = 'pending';
   loadExpertReview();
 };
 
@@ -3081,7 +3086,9 @@ window.reviewExpertPriority = function reviewExpertPriority(userId, recordId) {
 window.loadExpertReview = async function loadExpertReview() {
   if (!currentToken || !currentUserIsExpert) return;
 
-  currentExpertFilter = 'all';
+  // Verified records are intentionally excluded from the review queue; each
+  // verification is recorded in the Expert Audit Log by the server.
+  currentExpertFilter = 'pending';
   ['all', 'pending', 'verified'].forEach(filter => {
     const button = document.getElementById(`expert-filter-${filter}`);
     if (!button) return;
