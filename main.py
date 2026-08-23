@@ -565,12 +565,17 @@ def _serialize_detection_payload(record_id: str, user_id: str, email: str, detec
     }
 
 
-def _save_upload_image_assets(record_id: str, original_image: np.ndarray, annotated_image: np.ndarray | None = None) -> dict:
-    """Persist the uploaded image so expert review can display it later."""
+def _save_upload_image_assets(record_id: str, original_bytes: bytes, annotated_image: np.ndarray | None = None) -> dict:
+    """Persist the exact uploaded file plus the generated annotated preview.
+
+    The source image is deliberately written from its upload bytes, rather than
+    decoded and re-encoded with OpenCV.  Re-encoding drops EXIF/XMP, including
+    DJI flight and GPS metadata.
+    """
     image_urls: dict[str, str] = {}
     try:
         original_path = UPLOAD_IMAGE_DIR / f"{record_id}.jpg"
-        cv2.imwrite(str(original_path), original_image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        original_path.write_bytes(original_bytes)
         image_urls["image_url"] = f"/static/uploads/{record_id}.jpg"
     except Exception as error:
         logger.warning(f"Could not save original upload image for {record_id}: {error}")
@@ -1178,7 +1183,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                 source="upload",
                 image_metadata=image_metadata,
             )
-            detection_record.update(_save_upload_image_assets(record_id, image, result["image"]))
+            detection_record.update(_save_upload_image_assets(record_id, contents, result["image"]))
             
             saved = False
             

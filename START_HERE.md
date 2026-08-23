@@ -5,47 +5,49 @@
 1. Create and activate a Python virtual environment.
 2. Run `pip install -r requirements.txt`.
 3. Configure Firebase credentials and `.env` when remote services are required.
-4. Start the application: `uvicorn main:app --reload`.
+4. Run `uvicorn main:app --reload`.
 5. Open `http://127.0.0.1:8000`.
 
 ## Current workflow
 
 1. A farmer uploads a coconut-leaf image.
-2. YOLO11 produces detections, confidence values, and an annotated image.
-3. The system saves a Detection Record locally and synchronizes with Firebase when available.
-4. The record begins as **Pending**.
-5. An expert verifies it or saves an expert recommendation.
-6. The farmer receives a verification alert in the notification bell and the record becomes **Verified**.
+2. YOLO26 v6 returns detections, confidence scores, and an annotated image.
+3. Reviewable detections (currently `>= 5%`) are stored locally first and synchronized to Firebase when available.
+4. Every upload record starts as `pending_verification`.
+5. A recommendation is shown below the upload result only when the primary disease confidence is **50% or higher**.
+6. Results below 50% have no upload-screen recommendation and appear under the expert **Needs Review** filter.
+7. An expert can verify a record or save an expert recommendation; either action marks the selected record verified and notifies its farmer.
 
-## System screens
+## Screens
 
-- **Dashboard:** Total Detections, Diseased Trees, Healthy Trees, Mapped Locations, and Disease Prevalence.
-- **Disease Detection:** upload, annotated output, confidence, and recommendations.
-- **Disease Map:** MapLibre GL locations, severity, areas, and heatmap.
-- **Detection Records:** saved uploads, status, location, recommendations, and PDF report.
-- **Expert Review:** All, Pending, and Verified filters with verification controls.
-- **Settings:** profile, YOLO11/FastAPI/MapLibre GL information, and logout.
+- **Dashboard:** farm detection and health totals.
+- **Disease Detection:** image upload, annotated image, primary confidence, and high-confidence recommendation.
+- **Disease Map:** MapLibre locations, severity, areas, and heatmap.
+- **Detection Records:** saved uploads, verification status, location, expert guidance, and PDF report.
+- **Expert Review:** `All` records and `Needs Review` (below 50% confidence) records.
+- **Settings:** account details and logout.
 
 ## Main services
 
 | Service | Purpose |
 |---|---|
-| FastAPI | UI, REST API, and WebSocket stream |
-| YOLO11 / OpenVINO assets | Coconut disease inference |
-| Firebase Auth | Email/password sign-in |
-| Firebase RTDB / Firestore | Remote synchronization when configured |
-| SQLite (`hybrid_storage.db`) | Local-first Detection Records |
-| MapLibre GL | Disease map |
+| FastAPI | Web UI and REST API |
+| YOLO26 v6 | Coconut disease inference |
+| Firebase Auth | Email/password sign-in and role identity |
+| Firebase RTDB / Firestore | Optional remote synchronization |
+| SQLite (`hybrid_storage.db`) | Local-first detection storage |
+| MapLibre GL | Disease location map |
 
 ## Important endpoints
 
 - `POST /detect/image`
-- `GET /records?user_id=<uid>`
+- `POST /recommendations/fertilizer`
+- `GET /detections/my-records`
 - `GET /expert/records?status=all|pending|verified`
 - `POST /expert/records/{user_id}/{record_id}/verify`
+- `PUT /expert/recommendations/{disease}`
 - `GET /notifications`
-- `POST /notifications/mark-read`
-- `POST /notifications/clear`
+- `GET /reports/my-records.pdf`
 - `GET /health`
 
 See `DATA_DICTIONARY.md` for fields and `TROUBLESHOOTING.md` for common problems.

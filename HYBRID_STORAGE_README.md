@@ -1,20 +1,14 @@
 # Hybrid Storage
 
-CoconutAI is local-first. Detection Records are written to SQLite through `hybrid_storage/`, then optionally synchronized with Firebase services when connectivity and credentials are available.
+CoconutAI is local-first. Detection records are written to SQLite through `hybrid_storage/` and may be synchronized to Firebase when credentials and connectivity are available.
 
 ## Components
 
-- `hybrid_storage/local_storage.py` — SQLite records and local JSON backup support.
+- `hybrid_storage/local_storage.py` — SQLite record access and local backup support.
 - `hybrid_storage/sync_manager.py` — synchronization workflow.
 - `hybrid_storage/firebase_sync.py` — Firebase integration.
-- `hybrid_storage/connectivity.py` — connection checks.
+- `hybrid_storage/connectivity.py` — connectivity checks.
 
-## Stored data
+`hybrid_storage.db` holds inference data, GPS details, verification state, and recommendation snapshots. Images are stored in `static/uploads/` and `static/annotated_uploads/`.
 
-`hybrid_storage.db` stores Detection Records, including inference data, GPS, verification fields, and recommendation snapshots. Image assets are in `static/uploads/` and `static/annotated_uploads/`.
-
-## Verification data
-
-Experts update `verification_status`, verifier fields, and optional record-level recommendations. These updates are written through every available backend. Farmers receive a persisted in-app verification notification.
-
-Run the normal application with `uvicorn main:app --reload`; no separate hybrid-storage server is required.
+Expert actions update verification and recommendation fields across available stores. Run the application normally with `uvicorn main:app --reload`; no separate storage service is required.

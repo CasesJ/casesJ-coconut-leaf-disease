@@ -192,6 +192,36 @@ class DroneGPS:
             captured_at = exif_values.get("DateTimeOriginal") or exif_values.get("DateTime")
             metadata["captured_at"] = captured_at.decode(errors="replace") if isinstance(captured_at, bytes) else captured_at
             metadata["metadata_available"] = bool(exif_values)
+
+            # Pillow keeps GPS in a nested IFD rather than in ``exif.items()``.
+            # Read it separately so the structured metadata response and the
+            # detection record expose the same coordinates used by the GPS flow.
+            gps_ifd = exif.get_ifd(34853)  # EXIF GPSInfo tag
+            if gps_ifd:
+                def _rational_to_float(value):
+                    # Pillow exposes some GPS values as IFDRational (float-like)
+                    # and others as numerator/denominator tuples.
+                    if isinstance(value, (tuple, list)):
+                        return float(value[0]) / float(value[1]) if value[1] else 0.0
+                    return float(value)
+
+                def _degrees(value):
+                    return (_rational_to_float(value[0])
+                            + _rational_to_float(value[1]) / 60.0
+                            + _rational_to_float(value[2]) / 3600.0)
+
+                latitude = _degrees(gps_ifd[2]) if gps_ifd.get(2) else None
+                longitude = _degrees(gps_ifd[4]) if gps_ifd.get(4) else None
+                lat_ref = gps_ifd.get(1, "N")
+                lon_ref = gps_ifd.get(3, "E")
+                lat_ref = lat_ref.decode(errors="replace") if isinstance(lat_ref, bytes) else str(lat_ref)
+                lon_ref = lon_ref.decode(errors="replace") if isinstance(lon_ref, bytes) else str(lon_ref)
+                if latitude is not None and lat_ref.upper() == "S":
+                    latitude = -latitude
+                if longitude is not None and lon_ref.upper() == "W":
+                    longitude = -longitude
+                if latitude is not None and longitude is not None:
+                    metadata["gps"] = {"latitude": latitude, "longitude": longitude}
         except Exception:
             # OpenCV will produce the validation/inference error for non-images.
             pass

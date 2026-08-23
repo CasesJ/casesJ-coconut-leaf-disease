@@ -1,12 +1,13 @@
 # Model Runtime Status
 
-CoconutAI uses its configured YOLO11 detection workflow with model assets in `best_openvino_model/` and `weights.pt`. OpenVINO assets are retained for supported runtime/export paths; FastAPI remains the application entry point.
+CoconutAI identifies its active upload model as **YOLO26 v6**. Model assets include `weights.pt` and the retained OpenVINO export in `best_openvino_model/`. FastAPI is the application entry point.
 
 ## Verify runtime
 
 1. Install dependencies from `requirements.txt`.
 2. Start `uvicorn main:app --reload`.
-3. Open the web UI and submit a coconut-leaf image.
-4. Confirm an annotated image, detection labels, confidence scores, and a Detection Record are returned.
+3. Upload a coconut-leaf image.
+4. Confirm the annotated image, labels, confidence scores, and a Detection Record are returned.
+5. Confirm a recommendation appears only when the primary confidence is at least 50%.
 
-Do not rely on historical YOLO26 performance statements in older documentation; the system UI and metadata identify the current model as **YOLO11**.
+OpenVINO assets support configured runtime/export paths. The active model metadata returned by `POST /detect/image` is the authoritative runtime label.

@@ -142,7 +142,8 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       // Show success and switch to login mode
       showSuccess('✅ Account created! Now please login.');
       form.reset();
-      authMode = 'login';
+      // switchAuthMode toggles the current mode; keep signup so it lands on login.
+      authMode = 'signup';
       switchAuthMode();
     }
   } catch (error) {
@@ -701,7 +702,7 @@ window.addEventListener('load', () => {
   };
   
   // ✅ Ensure your target center coordinate is defined
-  const farmCenter = [125.64135, 7.35218];
+  const farmCenter = [125.6659531, 7.3137591];
   
   // Initialize main disease map with 3D support
   mainMap = new maplibregl.Map({
@@ -726,11 +727,11 @@ window.addEventListener('load', () => {
     
     // ✅ Precise bounding coordinates mapped exclusively around the inner tree block
     const farmBoundaryCoordinates = [
-        [125.64055, 7.35295], // Top-Left corner of the tree grid
-        [125.64215, 7.35295], // Top-Right corner
-        [125.64215, 7.35140], // Bottom-Right corner
-        [125.64055, 7.35140], // Bottom-Left corner
-        [125.64055, 7.35295]  // Closes the loop cleanly at the start point
+        [125.6651531, 7.3145291], // Top-left corner of the mapped area
+        [125.6667531, 7.3145291], // Top-right corner
+        [125.6667531, 7.3129791], // Bottom-right corner
+        [125.6651531, 7.3129791], // Bottom-left corner
+        [125.6651531, 7.3145291]  // Closes the loop cleanly at the start point
     ];
 
     // Add the custom GeoJSON Data Source
@@ -1152,14 +1153,14 @@ async function reverseGeocode(lat, lng) {
   const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   if(geoCache[key]) return geoCache[key];
   
-  // ✅ OVERRIDE: Force correct location name for TADECO farm area
-  const farmLongMin = 125.64055;
-  const farmLongMax = 125.64215;
-  const farmLatMin = 7.35140;
-  const farmLatMax = 7.35295;
+  // Use the configured New Visayas map area name for points inside its boundary.
+  const farmLongMin = 125.6651531;
+  const farmLongMax = 125.6667531;
+  const farmLatMin = 7.3129791;
+  const farmLatMax = 7.3145291;
   
   if (lng >= farmLongMin && lng <= farmLongMax && lat >= farmLatMin && lat <= farmLatMax) {
-    const customLocation = "TADECO Coconut Belt, Panabo";
+    const customLocation = "8 New Visayas St., Panabo, Davao del Norte";
     geoCache[key] = customLocation;
     return customLocation;
   }
@@ -1473,7 +1474,7 @@ function showRecordLocationOnMap(lat, lng) {
 }
 
 // ── Area-based GIS monitoring ──
-const AREA_MONITORING_BOUNDS = { minLat: 7.35140, maxLat: 7.35295, minLng: 125.64055, maxLng: 125.64215 };
+const AREA_MONITORING_BOUNDS = { minLat: 7.3129791, maxLat: 7.3145291, minLng: 125.6651531, maxLng: 125.6667531 };
 let areaMonitoringLoaded = false;
 
 function getRecordCoordinates(record) {
