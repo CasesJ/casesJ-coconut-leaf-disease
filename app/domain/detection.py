@@ -11,6 +11,7 @@ from typing import Optional
 
 from app.core.config import (
     ANNOTATED_IMAGE_DIR,
+    AUTO_VERIFICATION_CONFIDENCE_THRESHOLD,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_IMAGE_DIR,
     VERIFIED_STATUS,
@@ -82,9 +83,18 @@ def deduplicate_records(records: list[dict]) -> list[dict]:
 def normalize_verification_status(record: dict) -> str:
     """Normalise verification state for records returned to the client."""
     status_value = str(record.get("verification_status") or "").strip().lower()
+    source = str(record.get("source") or "upload").lower()
+
+    # Correct records written before automatic verification was introduced (or
+    # by an older running server). A high-confidence upload must never remain
+    # in the expert's pending queue merely because it carries an old status.
+    if source == "upload" and upload_verification_status(
+        record.get("detections") or record.get("inference_results") or [], source
+    ) == VERIFIED_STATUS:
+        return VERIFIED_STATUS
+
     if status_value in {PENDING_VERIFICATION_STATUS, VERIFIED_STATUS}:
         return status_value
-    source = str(record.get("source") or "upload").lower()
     if source == "upload":
         return PENDING_VERIFICATION_STATUS
     return VERIFIED_STATUS
@@ -192,6 +202,26 @@ def _extract_primary_disease(record: dict) -> tuple[str, float]:
     return primary.get("class", ""), float(primary.get("confidence", 0) or 0)
 
 
+def upload_verification_status(detections: list[dict], source: str) -> str:
+    """Return the initial status for a record based on its primary confidence."""
+    if str(source or "").lower() != "upload":
+        return VERIFIED_STATUS
+
+    primary_confidence = max(
+        (
+            float(detection.get("confidence") or 0)
+            for detection in detections
+            if isinstance(detection, dict)
+        ),
+        default=0.0,
+    )
+    return (
+        VERIFIED_STATUS
+        if primary_confidence > AUTO_VERIFICATION_CONFIDENCE_THRESHOLD
+        else PENDING_VERIFICATION_STATUS
+    )
+
+
 def _serialize_detection_payload(
     record_id: str,
     user_id: str,
@@ -216,7 +246,7 @@ def _serialize_detection_payload(
         "image_metadata": image_metadata or {},
         "image_url": f"/static/uploads/{record_id}.jpg",
         "annotated_image_url": f"/static/annotated_uploads/{record_id}.jpg",
-        "verification_status": PENDING_VERIFICATION_STATUS if source == "upload" else VERIFIED_STATUS,
+        "verification_status": upload_verification_status(detections, source),
         "verified_by": None,
         "verified_by_uid": None,
         "verified_at": None,

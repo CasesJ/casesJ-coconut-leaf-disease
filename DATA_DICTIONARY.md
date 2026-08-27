@@ -20,8 +20,8 @@
 
 - Upload detections are displayed and recorded at the current 5% review threshold.
 - The primary detection’s confidence determines recommendation visibility.
-- **50% and above:** recommendation is displayed below the upload result.
-- **Below 50%:** no upload-screen recommendation; Expert Review lists the record under **Needs Review**.
+- **Above 50%:** the upload is automatically marked `verified`; no expert review is needed.
+- **50% and below:** the upload remains `pending_verification` and appears under **Needs Review**.
 
 ## Notification
 

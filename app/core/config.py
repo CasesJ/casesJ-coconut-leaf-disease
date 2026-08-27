@@ -11,6 +11,9 @@ from pathlib import Path
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05
 UPLOAD_RECORD_CONFIDENCE_THRESHOLD: float = 0.05
+# Uploads whose primary detection is strictly above this value are automatically
+# verified and do not need to enter the expert-review queue.
+AUTO_VERIFICATION_CONFIDENCE_THRESHOLD: float = 0.50
 
 # ── Verification status labels ─────────────────────────────────────────────────
 PENDING_VERIFICATION_STATUS = "pending_verification"

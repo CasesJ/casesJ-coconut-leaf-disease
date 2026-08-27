@@ -13,9 +13,9 @@
 1. A farmer uploads a coconut-leaf image.
 2. YOLO26 v6 returns detections, confidence scores, and an annotated image.
 3. Reviewable detections (currently `>= 5%`) are stored locally first and synchronized to Firebase when available.
-4. Every upload record starts as `pending_verification`.
+4. Upload records above 50% primary confidence are automatically marked `verified`; all others start as `pending_verification`.
 5. A recommendation is shown below the upload result only when the primary disease confidence is **50% or higher**.
-6. Results below 50% have no upload-screen recommendation and appear under the expert **Needs Review** filter.
+6. Results at 50% or below appear under the expert **Needs Review** filter.
 7. An expert can verify a record or save an expert recommendation; either action marks the selected record verified and notifies its farmer.
 
 ## Screens

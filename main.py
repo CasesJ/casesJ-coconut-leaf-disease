@@ -66,6 +66,7 @@ import matplotlib.pyplot as plt
 # detections instead of receiving an unexplained empty result.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD = 0.05
 UPLOAD_RECORD_CONFIDENCE_THRESHOLD = 0.05
+AUTO_VERIFICATION_CONFIDENCE_THRESHOLD = 0.50
 EXPERT_RECOMMENDATIONS_PATH = Path("expert_recommendations.json")
 EXPERT_AUDIT_LOG_PATH = Path("expert_audit_log.jsonl")
 USER_NOTIFICATIONS_PATH = Path("user_notifications.json")
@@ -164,13 +165,41 @@ def deduplicate_records(records: list[dict]) -> list[dict]:
 def normalize_verification_status(record: dict) -> str:
     """Normalize verification state for records returned to the client."""
     status_value = str(record.get("verification_status") or "").strip().lower()
+    source = str(record.get("source") or "upload").lower()
+
+    if source == "upload" and upload_verification_status(
+        record.get("detections") or record.get("inference_results") or [], source
+    ) == VERIFIED_STATUS:
+        return VERIFIED_STATUS
+
     if status_value in {PENDING_VERIFICATION_STATUS, VERIFIED_STATUS}:
         return status_value
 
-    source = str(record.get("source") or "upload").lower()
     if source == "upload":
         return PENDING_VERIFICATION_STATUS
     return VERIFIED_STATUS
+
+
+def upload_verification_status(detections, source: str = "upload") -> str:
+    """Automatically verify uploaded records whose primary confidence exceeds 50%."""
+    if str(source or "").lower() != "upload":
+        return VERIFIED_STATUS
+    if isinstance(detections, str):
+        try:
+            detections = json.loads(detections)
+        except (TypeError, ValueError):
+            detections = []
+    if not isinstance(detections, list):
+        detections = []
+    primary_confidence = max(
+        (
+            float(detection.get("confidence") or 0)
+            for detection in detections
+            if isinstance(detection, dict)
+        ),
+        default=0.0,
+    )
+    return VERIFIED_STATUS if primary_confidence > AUTO_VERIFICATION_CONFIDENCE_THRESHOLD else PENDING_VERIFICATION_STATUS
 
 
 def is_expert_identity(decoded: dict | None) -> bool:
@@ -558,7 +587,7 @@ def _serialize_detection_payload(record_id: str, user_id: str, email: str, detec
         "image_metadata": image_metadata or {},
         "image_url": f"/static/uploads/{record_id}.jpg",
         "annotated_image_url": f"/static/annotated_uploads/{record_id}.jpg",
-        "verification_status": PENDING_VERIFICATION_STATUS if source == "upload" else VERIFIED_STATUS,
+        "verification_status": upload_verification_status(detections, source),
         "verified_by": None,
         "verified_by_uid": None,
         "verified_at": None,
@@ -622,6 +651,62 @@ def _update_record_status_everywhere(user_id: str, record_id: str, updates: dict
         logger.warning(f"Local storage update failed for {record_id}: {error}")
 
     return updated
+
+
+def reconcile_all_high_confidence_uploads() -> int:
+    """Migrate every stored upload above 50% to verified across all backends."""
+    corrected = 0
+
+    try:
+        storage = get_local_storage()
+        for record in storage.get_all_detections(limit=100000):
+            if (
+                normalize_verification_status(record) == VERIFIED_STATUS
+                and record.get("verification_status") != VERIFIED_STATUS
+                and storage.update_detection_fields(record["id"], verification_status=VERIFIED_STATUS)
+            ):
+                corrected += 1
+    except Exception as error:
+        logger.warning("Local automatic-verification migration failed: %s", error)
+
+    try:
+        users = db.reference("users").get() or {}
+        for user_id, user_data in users.items():
+            uploads = user_data.get("uploads") if isinstance(user_data, dict) else None
+            if not isinstance(uploads, dict):
+                continue
+            for record_id, record in uploads.items():
+                if not isinstance(record, dict):
+                    continue
+                record.setdefault("source", "upload")
+                if (
+                    normalize_verification_status(record) == VERIFIED_STATUS
+                    and record.get("verification_status") != VERIFIED_STATUS
+                ):
+                    db.reference(f"users/{user_id}/uploads/{record_id}").update(
+                        {"verification_status": VERIFIED_STATUS}
+                    )
+                    corrected += 1
+    except Exception as error:
+        logger.warning("RTDB automatic-verification migration failed: %s", error)
+
+    if FIRESTORE_AVAILABLE:
+        try:
+            for user_doc in fs.collection("users").stream():
+                for collection_name in ("detections", "uploads"):
+                    for document in user_doc.reference.collection(collection_name).stream():
+                        record = document.to_dict() or {}
+                        record.setdefault("source", "upload")
+                        if (
+                            normalize_verification_status(record) == VERIFIED_STATUS
+                            and record.get("verification_status") != VERIFIED_STATUS
+                        ):
+                            document.reference.update({"verification_status": VERIFIED_STATUS})
+                            corrected += 1
+        except Exception as error:
+            logger.warning("Firestore automatic-verification migration failed: %s", error)
+
+    return corrected
 
 
 def _get_all_user_records(limit: int = 2000) -> list[dict]:
@@ -694,7 +779,7 @@ def save_detection(
     gps_data: dict = None,
     filename: str = None,
     record_id: str = None,
-    verification_status: str = PENDING_VERIFICATION_STATUS,
+    verification_status: str | None = None,
 ) -> bool:
     """Save detection to local storage - compatibility wrapper"""
     try:
@@ -707,7 +792,7 @@ def save_detection(
             gps_data=gps_data,
             image_path=filename or "",  # ✅ Store filename for deduplication matching
             timestamp=datetime.now(timezone.utc).isoformat(),
-            verification_status=verification_status,
+            verification_status=verification_status or upload_verification_status(inference_results),
         )
         storage.save_detection(record)
         return True
@@ -815,7 +900,16 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Application startup complete")
     logger.info("=" * 70)
 
+    async def reconcile_in_background():
+        corrected_records = await asyncio.to_thread(reconcile_all_high_confidence_uploads)
+        if corrected_records:
+            logger.info("Automatically verified %s existing high-confidence upload(s)", corrected_records)
+
+    reconciliation_task = asyncio.create_task(reconcile_in_background())
+
     yield
+
+    reconciliation_task.cancel()
 
     # Shutdown
     logger.info("🛑 Shutting down...")
@@ -1216,7 +1310,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                                 gps_data=gps_data,
                                 image_path=file.filename,
                                 is_synced=True,
-                                verification_status=PENDING_VERIFICATION_STATUS,
+                                verification_status=upload_verification_status(high_confidence_detections),
                             )
                         )
                     except:
@@ -1246,7 +1340,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), lat: floa
                                         gps_data=gps_data,
                                         image_path=file.filename,
                                         is_synced=True,
-                                        verification_status=PENDING_VERIFICATION_STATUS,
+                                        verification_status=upload_verification_status(high_confidence_detections),
                                     )
                                 )
                             except:

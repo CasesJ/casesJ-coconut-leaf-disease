@@ -10,11 +10,11 @@ from typing import Optional
 
 import numpy as np
 
-from app.core.config import PENDING_VERIFICATION_STATUS
 from app.domain.detection import (
     _serialize_detection_payload,
     apply_record_defaults,
     deduplicate_records,
+    upload_verification_status,
 )
 from app.infrastructure.imaging.image_utils import save_upload_image_assets
 from app.infrastructure.storage import DetectionRecord, get_local_storage
@@ -332,7 +332,7 @@ def _save_to_local(
                 gps_data=gps_data,
                 image_path=filename or "",
                 is_synced=is_synced,
-                verification_status=PENDING_VERIFICATION_STATUS,
+                verification_status=upload_verification_status(detections, "upload"),
             )
         )
         return True

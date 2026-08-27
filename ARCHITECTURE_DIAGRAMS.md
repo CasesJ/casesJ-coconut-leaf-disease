@@ -14,10 +14,10 @@ Browser UI (static/index.html + static/app.js)
 ```
 
 ```text
-Farmer upload -> inference -> pending Detection Record
+Farmer upload -> inference -> Detection Record
                    |
-                   +-> confidence >= 50%: show recommendation below the detection
-                   `-> confidence < 50%: no upload-screen recommendation; Needs Review queue
+                   +-> confidence > 50%: auto-verified; show recommendation below the detection
+                   `-> confidence <= 50%: no upload-screen recommendation; Needs Review queue
 
 Expert verification or expert recommendation -> verified record + audit event
                                                 -> farmer notification
