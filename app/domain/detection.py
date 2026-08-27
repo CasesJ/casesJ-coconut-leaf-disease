@@ -68,16 +68,31 @@ def _build_record_signature(record: dict) -> str:
 
 
 def deduplicate_records(records: list[dict]) -> list[dict]:
-    """Remove duplicate upload records that appear in multiple storage backends."""
-    seen: set[str] = set()
-    deduped: list[dict] = []
+    """Remove backend copies without collapsing separate uploads.
+
+    Every persisted upload has an ID.  Using its image/detection data as the
+    primary key incorrectly merges different uploads when a farmer submits the
+    same filename or scans the same tree more than once.
+    """
+    deduped: dict[str, dict] = {}
     for record in records or []:
-        signature = _build_record_signature(record)
-        if signature in seen:
+        record_id = str(record.get("id") or record.get("record_id") or "").strip()
+        user_id = str(record.get("user_id") or "").strip()
+        key = f"id:{user_id}:{record_id}" if record_id else f"signature:{_build_record_signature(record)}"
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = record
             continue
-        seen.add(signature)
-        deduped.append(record)
-    return deduped
+
+        # Prefer the copy containing the expert's verification result.  When
+        # both have the same state, retain the most recently updated record.
+        existing_verified = normalize_verification_status(existing) == VERIFIED_STATUS
+        candidate_verified = normalize_verification_status(record) == VERIFIED_STATUS
+        if candidate_verified and not existing_verified:
+            deduped[key] = record
+        elif candidate_verified == existing_verified and str(record.get("verified_at") or record.get("timestamp") or "") > str(existing.get("verified_at") or existing.get("timestamp") or ""):
+            deduped[key] = record
+    return list(deduped.values())
 
 
 def normalize_verification_status(record: dict) -> str:

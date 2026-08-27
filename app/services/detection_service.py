@@ -132,14 +132,10 @@ def get_all_user_records(limit: int = 2000) -> list[dict]:
     except Exception as error:
         logger.warning("Local all-record fetch failed: %s", error)
 
-    # Local DB already has every upload the app knows about; skip remote reads
-    # to keep expert review fast when Firebase is slow or offline.
-    if all_records:
-        for record in all_records:
-            apply_record_defaults(record)
-        all_records = deduplicate_records(all_records)
-        all_records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        return all_records
+    # Local storage is a cache/offline fallback, not the complete system of
+    # record.  The expert dashboard must also read the shared Firebase stores
+    # so verified uploads from every user are included.  Results are
+    # deduplicated after all backends have been collected below.
 
     try:
         users_root = _get_db().reference("users").get() or {}
@@ -216,7 +212,9 @@ def get_user_records(user_id: str) -> list[dict]:
             logger.warning("RTDB %s fetch failed for user %s: %s", bucket_name, user_id, error)
 
     fs, available = _get_firestore()
-    if available and len(all_records) < 5:
+    # Do not treat the local cache as complete. A user can have older or
+    # newly-synced records in Firestore even when SQLite already has entries.
+    if available:
         try:
             docs = (
                 fs.collection("users")

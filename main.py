@@ -1852,20 +1852,35 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         figure.patch.set_facecolor("#FFFFFF")
         if kind == "trend":
             months = sorted(monthly_disease_counts) or ["No data"]
-            labels = [datetime.strptime(month, "%Y-%m").strftime("%b") if month != "No data" else month for month in months]
+            labels = [datetime.strptime(month, "%Y-%m").strftime("%b %Y") if month != "No data" else month for month in months]
             leading = sorted(disease_stats, key=lambda item: disease_stats[item]["count"], reverse=True)[:3] or ["No detections"]
-            # Use the dashboard's detection colours; distinct shapes keep
-            # series identifiable when the report is printed in grayscale.
-            line_markers = ["o", "s", "^"]
-            totals = [sum(monthly_disease_counts[month].values()) for month in months]
+            # A line suggests a continuous trend, but most farmer reports only
+            # have one or a few months of records.  Grouped bars show the
+            # useful answer directly: how many samples showed each condition.
+            positions = list(range(len(months)))
+            bar_width = min(0.24, 0.72 / max(1, len(leading)))
+            offset_start = -bar_width * (len(leading) - 1) / 2
+            maximum = 0
             for index, disease in enumerate(leading):
-                values = [(monthly_disease_counts[month].get(disease, 0) / total * 100) if total else 0 for month, total in zip(months, totals)]
-                axis.plot(labels, values, marker=line_markers[index], markersize=5.8, linewidth=2.35,
-                          markeredgecolor="#1F2937", markeredgewidth=0.65,
-                          color=detection_color(disease), label=disease)
-            axis.set_ylabel("Share of classified findings (%)", fontsize=8, color="#64748B")
-            axis.set_ylim(bottom=0)
-            axis.legend(loc="upper left", frameon=False, ncol=min(3, len(leading)), fontsize=7.3, bbox_to_anchor=(0, 1.18))
+                values = [monthly_disease_counts[month].get(disease, 0) for month in months]
+                maximum = max(maximum, max(values, default=0))
+                bars = axis.bar(
+                    [position + offset_start + index * bar_width for position in positions], values,
+                    width=bar_width, color=detection_color(disease), label=disease,
+                    edgecolor="#FFFFFF", linewidth=0.8,
+                )
+                for bar, value in zip(bars, values):
+                    if value:
+                        axis.text(bar.get_x() + bar.get_width() / 2, value + max(0.12, maximum * 0.018),
+                                  str(value), ha="center", va="bottom", fontsize=7.5,
+                                  fontweight="bold", color="#293138")
+            axis.set_title("How many samples showed each condition", loc="left", fontsize=10,
+                           fontweight="bold", color="#1D4938", pad=20)
+            axis.set_xticks(positions, labels)
+            axis.set_ylabel("Number of classified findings", fontsize=8, color="#64748B")
+            axis.set_ylim(0, max(1, maximum * 1.25))
+            axis.legend(loc="upper left", frameon=False, ncol=min(3, len(leading)), fontsize=7.3,
+                        bbox_to_anchor=(0, 1.14))
         elif kind == "severity":
             labels = ["Mild", "Moderate", "Severe", "Critical"]
             area_names = list(area_stats)
@@ -1949,7 +1964,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=39 * mm, bottomMargin=22 * mm, title="Coconut Leaf Disease Analytics Report")
     card_column_width = (page_width - 32 * mm) / 4
     card_width = card_column_width - 3 * mm
-    cards = Table([[_MetricCard(str(len(records)), "Records Scanned", "Uploaded detection records", card_width), _MetricCard(f"{disease_incidence:.1f}%", "Disease Incidence", f"Of {total_detections} classified findings", card_width, note_color="#C44A1D"), _MetricCard(f"{average_top_confidence:.1f}%", "Model Confidence", "Average top result", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Verified Records", "Expert-reviewed cases", card_width)]], colWidths=[card_column_width] * 4)
+    cards = Table([[_MetricCard(str(len(records)), "Verified Records", "Same records shown in dashboard analytics", card_width), _MetricCard(f"{disease_incidence:.1f}%", "Disease Incidence", f"Of {total_detections} classified findings", card_width, note_color="#C44A1D"), _MetricCard(f"{average_top_confidence:.1f}%", "Model Confidence", "Average top result", card_width), _MetricCard(f"{verified_records} / {len(records)}", "Data Checked", "Expert-reviewed records only", card_width)]], colWidths=[card_column_width] * 4)
     cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 1.5 * mm), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
 
     distribution_rows = [[Paragraph("Disease", table_header), Paragraph("Detections", table_header), Paragraph("Avg. confidence", table_header)]]
@@ -1961,12 +1976,17 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     distribution_table = Table(distribution_rows, colWidths=[45 * mm, 27 * mm, 35 * mm], rowHeights=[11 * mm] + [12 * mm] * (len(distribution_rows) - 1), repeatRows=1)
     distribution_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9)]))
 
-    summary_text = (f"This report summarizes {len(records):,} detection record{'s' if len(records) != 1 else ''} containing {total_detections:,} classified finding{'s' if total_detections != 1 else ''} for {email or 'the authenticated user'}. "
-                    f"The leading detected condition is {primary_disease}, while {disease_incidence:.1f}% of classified findings indicate a disease condition. "
-                    f"Average top-result confidence is {average_top_confidence:.1f}%.")
-    key_text = (f"<b>Key insight:</b> {primary_disease} is the most frequently detected condition, accounting for "
-                f"{(disease_stats.get(primary_disease, {}).get('count', 0) / total_detections * 100) if total_detections else 0:.1f}% of all classified findings. "
-                "Use verified records to prioritize field inspection and treatment follow-up.")
+    if total_detections:
+        summary_text = (f"This report summarizes {len(records):,} expert-verified detection record{'s' if len(records) != 1 else ''} containing {total_detections:,} classified finding{'s' if total_detections != 1 else ''} for {email or 'the authenticated user'}. "
+                        f"The leading detected condition is {primary_disease}, while {disease_incidence:.1f}% of classified findings indicate a disease condition. "
+                        f"Average top-result confidence is {average_top_confidence:.1f}%.")
+        key_text = (f"<b>Key insight:</b> {primary_disease} is the most frequently detected condition, accounting for "
+                    f"{(disease_stats.get(primary_disease, {}).get('count', 0) / total_detections * 100):.1f}% of all classified findings. "
+                    "Use these verified records to prioritize field inspection and treatment follow-up.")
+    else:
+        summary_text = (f"No expert-verified classified findings are available for {email or 'the authenticated user'} yet. "
+                        "This report contains no estimated or sample results; it will update when verified records are available in the dashboard.")
+        key_text = "<b>Next step:</b> Wait for expert verification or upload additional leaf images, then download a new report."
     chart_box = Table([[Image(chart_image("distribution"), width=169 * mm, height=83 * mm)]], colWidths=[175 * mm], style=[("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor("#E0E7E3")), ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm), ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm), ("TOPPADDING", (0, 0), (-1, -1), 3 * mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm)])
     insight_box = Table([[Paragraph(key_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F6F3")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#E1E9E4")), ("ROUNDEDCORNERS", [3 * mm])])
     story = [Paragraph("Executive Summary", heading), Spacer(1, 1 * mm), Paragraph(summary_text, normal), Spacer(1, 5 * mm), cards, Spacer(1, 18 * mm), Paragraph("Disease Distribution Across Classified Findings", heading), Spacer(1, 3 * mm), chart_box, Spacer(1, 7 * mm), insight_box]
@@ -1992,8 +2012,10 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
                      f"This area has the highest treatment priority based on its severe and critical findings.")
     severity_table = Table(severity_rows, colWidths=[39 * mm, 17 * mm, 22 * mm, 18 * mm, 19 * mm, 47 * mm], repeatRows=1)
     severity_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
-    trend_narrative = (f"The monthly mix highlights the leading classified conditions across the available reporting period. "
-                       f"{primary_disease} remains the most frequent result, with disease conditions representing {disease_incidence:.1f}% of all classified findings.")
+    trend_narrative = (f"Each bar is a count from the expert-verified records shown in the dashboard. "
+                       f"{primary_disease} is the most frequent result, with disease conditions representing {disease_incidence:.1f}% of all classified findings."
+                       if total_detections else
+                       "No expert-verified classified findings are available yet, so no trend is shown.")
     priority_box = Table([[Paragraph(priority_text, insight)]], colWidths=[175 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF7ED")), ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#F5D6B3")), ("ROUNDEDCORNERS", [3 * mm])])
     story += [PageBreak(), Paragraph("Monthly Detection Trend", heading), Spacer(1, 6 * mm), Image(chart_image("trend"), width=171 * mm, height=83 * mm), Spacer(1, 7 * mm), Paragraph(trend_narrative, normal), PageBreak(), Paragraph("Severity by Map Area", heading), Spacer(1, 3 * mm), Image(chart_image("severity"), width=171 * mm, height=55 * mm), Spacer(1, 4 * mm), severity_table, Spacer(1, 5 * mm), priority_box, PageBreak(), Paragraph("Disease distribution", heading), Spacer(1, 7 * mm), distribution_table]
     document.build(story, onFirstPage=first_page, onLaterPages=later_pages, canvasmaker=_NumberedReportCanvas)
@@ -2002,9 +2024,15 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
 
 @app.get("/reports/my-records.pdf")
 async def download_my_records_pdf(decoded: dict = Depends(verify_firebase_token)):
-    """Return an authenticated user's detection analytics as a downloadable PDF."""
+    """Return a PDF built from the same verified records shown in dashboard analytics."""
     payload = await get_user_detections_endpoint(decoded)
-    pdf_bytes = build_executive_user_records_pdf(payload.get("records", []), payload.get("email", "User"))
+    # The dashboard intentionally excludes records that have not yet been
+    # verified by an expert. Keep the export on the exact same dataset.
+    analytics_records = [
+        record for record in payload.get("records", [])
+        if normalize_verification_status(record) == "verified"
+    ]
+    pdf_bytes = build_executive_user_records_pdf(analytics_records, payload.get("email", "User"))
     return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers={
         "Content-Disposition": "attachment; filename=coconut-leaf-disease-analytics-report.pdf"
     })

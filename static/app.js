@@ -293,7 +293,7 @@ window.loadDashboardStats = async function loadDashboardStats() {
       return;
     }
 
-    const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
     const response = await fetch(endpoint, {
       headers: { 'Authorization': 'Bearer ' + currentToken }
     });
@@ -890,14 +890,18 @@ let healthDistributionChart = null;
 window.refreshAnalyticsCharts = async function refreshAnalyticsCharts() {
   if (!currentUser?.uid) return;
   try {
-    const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
     const res = await fetch(endpoint, {
       headers: { 'Authorization': 'Bearer ' + currentToken }
     });
     if (!res.ok) return;
     const payload = await res.json();
     const records = Array.isArray(payload) ? payload : (payload.records || []);
-    renderAnalyticsCharts((records || []).map(normalizeRecordForDashboard));
+    const normalized = records.map(normalizeRecordForDashboard);
+    const analyticsRecords = currentUserIsExpert
+      ? normalized
+      : normalized.filter(record => formatVerificationStatus(record.verification_status).cls === 'verified');
+    renderAnalyticsCharts(analyticsRecords);
   } catch (error) {
     console.error('Error refreshing analytics:', error);
   }
@@ -2704,7 +2708,7 @@ window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
 
 let expertAuditEvents = [];
 let expertQueueRecords = [];
-let currentExpertQueueQuickFilter = 'all';
+let currentExpertQueueQuickFilter = 'needs-review';
 
 function getExpertQueueDetails(record) {
   const primary = getPrimaryDetection(record);
