@@ -1825,10 +1825,9 @@ async function detectImage(file){
     showToast('Session expired, please refresh');
     return;
   }
-  // ✅ CRITICAL FIX: Use the explicit farm coordinates instead of laptop geolocation
-  const farmCenter = [125.64135, 7.35218];
-  const gps_lng = farmCenter[0];
-  const gps_lat = farmCenter[1];
+  // Use the same location as the disease map's configured farm center.
+  const gps_lng = baseLng;
+  const gps_lat = baseLat;
   const gps_accuracy = 5; // Farm boundary accuracy in meters
   
   const fd=new FormData();
@@ -2544,6 +2543,9 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
       return diseases.length > 0;
     });
     const verifiedHistoryDiseases = ['bud root', 'cercospora', 'leaf rot', 'pestalotiopsis'];
+    // A single verified upload can contain more than one disease detection.
+    // Keep the overall total on the same basis as the disease cards.
+    const totalVerifiedDiseases = Object.values(diseaseCounts).reduce((total, count) => total + count, 0);
     const diseaseCards = verifiedHistoryDiseases
       .map((disease) => {
         const count = diseaseCounts[disease] || 0;
@@ -2552,11 +2554,11 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
         return `<div class="stat-box disease" style="--stat-accent:${color};"><h4>${escapeHtml(label)}</h4><div class="stat-value">${count}</div><div class="stat-subtext">Verified disease record${count === 1 ? '' : 's'}</div></div>`;
       });
     const cards = [
-      `<div class="stat-box total"><h4>Total Verified History Results</h4><div class="stat-value">${diseaseRecords.length}</div><div class="stat-subtext">Verified disease record${diseaseRecords.length === 1 ? '' : 's'}</div></div>`,
+      `<div class="stat-box total"><h4>Total Verified History Results</h4><div class="stat-value">${totalVerifiedDiseases}</div><div class="stat-subtext">Verified disease record${totalVerifiedDiseases === 1 ? '' : 's'}</div></div>`,
       ...diseaseCards,
     ];
     summaryEl.innerHTML = cards.join('');
-    if (countEl) countEl.textContent = `${diseaseRecords.length} verified record${diseaseRecords.length === 1 ? '' : 's'}`;
+    if (countEl) countEl.textContent = `${totalVerifiedDiseases} verified disease record${totalVerifiedDiseases === 1 ? '' : 's'}`;
 
     if (!diseaseRecords.length) {
       listEl.innerHTML = '<div class="no-records">No verified disease records yet. Records will appear here after verification.</div>';

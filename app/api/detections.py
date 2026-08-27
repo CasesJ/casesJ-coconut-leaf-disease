@@ -16,6 +16,9 @@ from cv2 import IMREAD_COLOR, imdecode, imencode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 
 from app.core.config import (
+    DEFAULT_FARM_GPS_ACCURACY_METERS,
+    DEFAULT_FARM_LATITUDE,
+    DEFAULT_FARM_LONGITUDE,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
     UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
@@ -85,17 +88,17 @@ async def detect_image(
             gps_source = "browser_geolocation"
             gps_accuracy = accuracy or 15.0
         else:
-            lat, lng = 7.0731, 125.6123
-            gps_source = "davao_default_fallback"
-            gps_accuracy = 50000.0
+            lat, lng = DEFAULT_FARM_LATITUDE, DEFAULT_FARM_LONGITUDE
+            gps_source = "farm_map_default"
+            gps_accuracy = DEFAULT_FARM_GPS_ACCURACY_METERS
     else:
         if lat is not None and lng is not None:
             gps_source = "browser_geolocation"
             gps_accuracy = accuracy or 15.0
         else:
-            lat, lng = 7.0731, 125.6123
-            gps_source = "davao_default_fallback"
-            gps_accuracy = 50000.0
+            lat, lng = DEFAULT_FARM_LATITUDE, DEFAULT_FARM_LONGITUDE
+            gps_source = "farm_map_default"
+            gps_accuracy = DEFAULT_FARM_GPS_ACCURACY_METERS
 
     # --- Inference ---
     np_arr = np.frombuffer(contents, np.uint8)

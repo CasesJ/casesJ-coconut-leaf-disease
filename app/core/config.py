@@ -15,6 +15,13 @@ UPLOAD_RECORD_CONFIDENCE_THRESHOLD: float = 0.05
 # verified and do not need to enter the expert-review queue.
 AUTO_VERIFICATION_CONFIDENCE_THRESHOLD: float = 0.50
 
+# Default farm location shown at the center of the disease map (Panabo, Davao
+# del Norte).  Uploads without usable GPS metadata are recorded here so they
+# appear on the farm map instead of at a separate generic fallback location.
+DEFAULT_FARM_LATITUDE: float = 7.3137591
+DEFAULT_FARM_LONGITUDE: float = 125.6659531
+DEFAULT_FARM_GPS_ACCURACY_METERS: float = 5.0
+
 # ── Verification status labels ─────────────────────────────────────────────────
 PENDING_VERIFICATION_STATUS = "pending_verification"
 VERIFIED_STATUS = "verified"
