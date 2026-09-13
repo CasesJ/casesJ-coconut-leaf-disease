@@ -1098,6 +1098,23 @@
     @media(max-width:1100px) { .dashboard-stats {grid-template-columns:repeat(2,minmax(0,1fr));} #records-stats {grid-template-columns:repeat(2,minmax(0,1fr));} .dashboard-lower{grid-template-columns:1fr;} }
     @media(max-width:600px) { .dashboard-intro{align-items:flex-start;flex-direction:column}.dashboard-stats,#records-stats{grid-template-columns:1fr}.dashboard-date{display:none} }
 
+    /* Farm-first dashboard hero; uses the existing local imagery only. */
+    .dashboard-hero {
+      position:relative; overflow:hidden; align-items:center; min-height:158px; margin:0 0 18px; padding:26px 28px;
+      border:1px solid rgba(255,255,255,.36); border-radius:16px;
+      background:linear-gradient(90deg,rgba(6,38,27,.94) 0%,rgba(8,53,35,.82) 42%,rgba(8,53,35,.18) 100%), url('/static/coco-farm.jpg') center 46% / cover;
+      box-shadow:0 12px 28px rgba(8,38,28,.15);
+    }
+    .dashboard-hero::after { content:''; position:absolute; width:250px; height:250px; right:-90px; bottom:-160px; border:1px solid rgba(255,255,255,.18); border-radius:50%; box-shadow:0 0 0 36px rgba(255,255,255,.05),0 0 0 72px rgba(255,255,255,.035); }
+    .dashboard-hero > div:first-child { position:relative; z-index:1; max-width:540px; }
+    .dashboard-hero h1 { color:#fff; font-family:'DM Serif Display',serif; font-size:clamp(26px,3vw,36px); letter-spacing:-.7px; }
+    .dashboard-hero p { color:rgba(255,255,255,.78); font-size:14px; line-height:1.45; }
+    .dashboard-hero .dashboard-date { position:relative; z-index:1; color:#effbf3; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.22); backdrop-filter:blur(6px); }
+    .dashboard-hero-actions { position:relative; z-index:1; display:flex; gap:9px; margin-top:16px; }
+    .dashboard-hero-actions .quick-action { color:#fff; background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.24); }
+    .dashboard-hero-actions .quick-action:hover { color:#fff; background:rgba(67,201,120,.28); border-color:rgba(255,255,255,.42); }
+    @media(max-width:600px) { .dashboard-hero { min-height:195px; padding:23px 20px; background-position:61% center; }.dashboard-hero .dashboard-date{display:inline-flex}.dashboard-hero-actions{flex-wrap:wrap}.dashboard-hero-actions .quick-action{padding:9px 10px;} }
+
     /* DETECTION WORKFLOW */
     .detection-workflow { display:flex; align-items:center; margin:0 0 18px; overflow:auto; }
     .workflow-step { display:flex; align-items:center; gap:8px; color:var(--text3); font-size:12px; font-weight:700; white-space:nowrap; }
@@ -1390,8 +1407,8 @@
 <!-- DASHBOARD PANEL WITH STATS -->
 <div id="panel-dashboard" class="panel active">
   <div class="panels">
-    <div class="dashboard-intro">
-      <div><h1>Farm health overview</h1><p>Monitor coconut tree health and act early on disease risks.</p></div>
+    <div class="dashboard-intro dashboard-hero">
+      <div><h1>Welcome to your farm dashboard</h1><p>Monitor coconut tree health, find disease risks early, and keep every growing area in view.</p><div class="dashboard-hero-actions"><button class="quick-action" type="button" onclick="switchTab('upload',document.getElementById('nav-upload-link'))"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Run detection</button><button class="quick-action" type="button" onclick="switchTab('records',document.getElementById('nav-records-link'));loadUserRecords()"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5zM8 8h8M8 12h8"/></svg>View records</button></div></div>
       <div class="dashboard-date" id="dashboard-date">Today</div>
     </div>
     <div class="dashboard-stats">
