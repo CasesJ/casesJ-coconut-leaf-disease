@@ -182,6 +182,28 @@ function setFarmerNavigationVisible(visible) {
   if (historyNav) historyNav.style.display = visible ? '' : 'none';
 }
 
+function updateDashboardPrimaryAction() {
+  const title = document.getElementById('dashboard-primary-action-title');
+  const description = document.getElementById('dashboard-primary-action-description');
+  if (!title || !description) return;
+
+  if (currentUserIsExpert) {
+    title.textContent = 'All Verified Diseases';
+    description.textContent = 'View verified disease uploads from all users.';
+  } else {
+    title.textContent = 'Scan Coconut Leaf';
+    description.textContent = 'Upload an image to detect coconut diseases.';
+  }
+}
+
+window.openDashboardPrimaryAction = function openDashboardPrimaryAction() {
+  if (currentUserIsExpert) {
+    switchTab('history', document.getElementById('nav-history-link'));
+    return;
+  }
+  switchTab('upload', document.getElementById('nav-upload-link'));
+};
+
 function setExpertRecommendationDisease(diseaseName) {
   const input = document.getElementById('expert-disease-name');
   if (!input) return;
@@ -215,6 +237,7 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   const currentUserEmail = document.getElementById('current-user-email');
   const roleEl = document.getElementById('current-user-role');
   const expertNavLink = document.getElementById('expert-nav-link');
+  const welcomeHeading = document.getElementById('welcome-heading');
 
   currentUserRole = accountInfo.role || (accountInfo.is_expert ? 'expert' : 'farmer') || 'farmer';
   currentUserIsExpert = Boolean(accountInfo.is_expert || currentUserRole === 'expert');
@@ -222,12 +245,18 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   if (loginBtn) loginBtn.style.display = 'none';
   if (userBadge) userBadge.style.display = 'flex';
   if (userEmail) userEmail.textContent = user.email;
+  if (welcomeHeading) {
+    const emailName = String(user.email || '').split('@')[0].replace(/[._-]+/g, ' ').trim();
+    const name = user.displayName || accountInfo.name || emailName || 'there';
+    welcomeHeading.textContent = `Welcome back, ${name}!`;
+  }
   if (currentUserEmail) currentUserEmail.innerHTML = '<strong>User:</strong> ' + user.email;
   if (roleEl) roleEl.innerHTML = '<strong>Role:</strong> ' + (currentUserIsExpert ? 'Expert' : 'Farmer');
   if (expertNavLink) expertNavLink.style.display = currentUserIsExpert ? 'flex' : 'none';
   const notificationWrap = document.querySelector('.notification-wrap');
   if (notificationWrap) notificationWrap.style.display = currentUserIsExpert ? 'none' : '';
   setFarmerNavigationVisible(!currentUserIsExpert);
+  updateDashboardPrimaryAction();
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = currentUserIsExpert ? 'block' : 'none';
   const detectionHistoryContainer = document.getElementById('detection-history-container');
@@ -267,6 +296,7 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   setFarmerNavigationVisible(true);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
+  updateDashboardPrimaryAction();
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = 'none';
   const detectionHistoryContainer = document.getElementById('detection-history-container');
@@ -2511,6 +2541,23 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
       : '';
     return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
   }).join('') : '<div class="no-records">No verified disease records available.</div>';
+  if (list) {
+    list.querySelectorAll('.history-record').forEach((row, index) => {
+      const record = matches[index];
+      const imageUrl = record?.image_url || record?.annotated_image_url || '';
+      const badge = row.querySelector('.record-status.verified');
+      if (!badge) return;
+      const thumbnail = document.createElement(imageUrl ? 'img' : 'div');
+      thumbnail.className = `history-thumbnail${imageUrl ? '' : ' history-thumbnail-empty'}`;
+      if (imageUrl) {
+        thumbnail.src = imageUrl;
+        thumbnail.alt = record?.filename || 'Detection image';
+      } else {
+        thumbnail.textContent = 'Image unavailable';
+      }
+      badge.replaceWith(thumbnail);
+    });
+  }
 };
 
 // Verified history is deliberately separate from the general records list: an
@@ -2524,11 +2571,18 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
   const summaryEl = document.getElementById('verified-disease-summary');
   const listEl = document.getElementById('verified-history-list');
   const countEl = document.getElementById('verified-history-count');
+  const titleEl = document.getElementById('verified-history-title');
+  const descriptionEl = document.getElementById('verified-history-description');
   if (!summaryEl || !listEl) return;
+  if (titleEl) titleEl.textContent = currentUserIsExpert ? 'All Verified Diseases' : 'Verified Disease History';
+  if (descriptionEl) descriptionEl.textContent = currentUserIsExpert
+    ? 'Verified disease uploads from all users are included in these totals and records.'
+    : 'Only diagnoses verified by an expert are included in these totals and records.';
   listEl.innerHTML = '<div class="no-records">Loading verified history...</div>';
 
   try {
-    const response = await fetch('/detections/my-records', {
+    const endpoint = currentUserIsExpert ? '/expert/records?status=verified' : '/detections/my-records';
+    const response = await fetch(endpoint, {
       headers: { 'Authorization': `Bearer ${currentToken}` }
     });
     if (!response.ok) throw new Error('Failed to load verified history');
@@ -3029,15 +3083,26 @@ async function loadUserRecords() {
       ? formatDiseaseClass(Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0])
       : '—';
     
+    const healthyDetections = allDetections.filter((detection) => isHealthyClass(detection.class)).length;
+    const commonDiseases = new Set(
+      allDetections
+        .filter((detection) => isDiseaseClass(detection.class))
+        .map((detection) => normalizeDiseaseClass(detection.class))
+    ).size;
+
     // Update statistics display
     const totalDiseasesEl = document.getElementById('total-diseases-found');
     const totalRecordsEl = document.getElementById('total-records-count');
     const mostCommonEl = document.getElementById('most-common-disease');
+    const healthyCountEl = document.getElementById('records-healthy-count');
+    const commonDiseasesEl = document.getElementById('records-common-diseases');
     const statsEl = document.getElementById('records-stats');
     
     if (totalDiseasesEl) totalDiseasesEl.textContent = totalDiseases;
     if (totalRecordsEl) totalRecordsEl.textContent = totalRecords;
     if (mostCommonEl) mostCommonEl.textContent = mostCommonDisease;
+    if (healthyCountEl) healthyCountEl.textContent = healthyDetections;
+    if (commonDiseasesEl) commonDiseasesEl.textContent = commonDiseases;
     if (statsEl) statsEl.style.display = totalRecords > 0 ? 'grid' : 'none';
     
     

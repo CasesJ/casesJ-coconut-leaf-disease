@@ -1126,6 +1126,40 @@
     .notification-menu { position:absolute; top:46px; right:0; width:min(360px,calc(100vw - 28px)); padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:var(--shm); display:none; z-index:350; }
     .notification-menu.open { display:block; animation:fadeUp .18s ease both; }.notification-head { display:flex; justify-content:space-between; align-items:center; padding:4px 5px 9px; }.notification-head strong{font-size:13px}.notification-head span{color:var(--text3);font-size:11px}.notice-item{display:flex;gap:9px;padding:10px 6px;border-top:1px solid var(--line)}.notice-icon{display:grid;place-items:center;width:27px;height:27px;border-radius:8px;background:#edf8f1;color:var(--bright);font-size:13px}.notice-item strong{display:block;font-size:12px}.notice-item p{margin-top:2px;color:var(--text3);font-size:11px;line-height:1.35}
     .settings-layout { display:block; }.settings-stack { display:grid; gap:18px; }.settings-card { padding:0; overflow:hidden; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--sh); }.settings-card-head { display:flex; align-items:flex-start; gap:11px; padding:17px 18px 13px; border-bottom:1px solid var(--line); }.settings-card-head h4{font-size:15px;color:var(--deep)}.settings-card-head p{margin-top:3px;color:var(--text3);font-size:12px;line-height:1.4}.settings-icon{display:grid;place-items:center;flex:0 0 33px;width:33px;height:33px;border-radius:9px;background:#e7f5ed;color:var(--bright)}.settings-body{padding:4px 18px 14px}.setting-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 0;border-bottom:1px solid rgba(15,63,43,.08)}.setting-row:last-child{border-bottom:0}.setting-row strong{display:block;font-size:13px;color:var(--text)}.setting-row span{display:block;margin-top:3px;color:var(--text3);font-size:11px;line-height:1.4}.profile-summary{display:flex;align-items:center;gap:11px;padding:14px 0}.profile-avatar{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--deep);color:#fff;font:18px 'DM Serif Display',serif}.profile-summary p{font-size:12px;color:var(--text3);margin-top:3px}.system-list div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid rgba(15,63,43,.08);font-size:12px}.system-list div:last-child{border-bottom:0}.system-list span{color:var(--text3)}.system-list strong{color:var(--mid)}.settings-danger .settings-icon{background:var(--red-bg);color:var(--red)}.settings-footer{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}.settings-unified-grid{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(270px,1.15fr);gap:0}.settings-section{padding:18px}.settings-section + .settings-section{border-left:1px solid var(--line)}.settings-section.account-section{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:18px}.settings-section-title{display:flex;align-items:center;gap:9px;margin-bottom:8px}.settings-section-title h5{font-size:13px;color:var(--deep)}.settings-section-title .settings-icon{width:28px;height:28px;flex-basis:28px;font-size:12px}#panel-expert .records-toolbar{display:none}#settings-enhanced-root{display:none}#panel-settings.active~#settings-enhanced-root{display:block}#panel-settings.active{background:transparent;border-radius:0;box-shadow:none;margin:0;padding:0}.hide-confidence .ltag{display:none}.toast{display:flex;align-items:center;gap:8px}.toast.show{animation:fadeUp .25s ease both}@media(max-width:700px){.settings-unified-grid{grid-template-columns:1fr}.settings-section + .settings-section{border-left:0;border-top:1px solid var(--line)}.settings-section.account-section{grid-column:auto;align-items:flex-start;flex-direction:column}.settings-footer{margin-top:0}}@media(max-width:560px){.notification-menu{right:-8px}.header-right{gap:8px}}
+    /* Reference-inspired dashboard presentation (layout and styling only). */
+    :root { --sidebar-width:247px; --surface:#fff; --line:rgba(7,69,41,.10); }
+    body { background:#f4f7f8; }
+    .sidebar { padding:14px 15px; background:linear-gradient(180deg,#073e2b,#062f24); }
+    .sidebar-logo { padding:10px 4px 24px; margin:0 0 13px; }
+    .sidebar-logo::before { content:''; width:44px; height:44px; flex-basis:44px; border-radius:50%; background-color:transparent; border:2px solid rgba(255,255,255,.88); box-shadow:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M24 39V22'/%3E%3Cpath d='M24 24c-5-8-12-8-15-5 6 1 10 4 15 8'/%3E%3Cpath d='M24 24c5-8 12-8 15-5-6 1-10 4-15 8'/%3E%3Cpath d='M24 21c-1-8-7-11-11-10 4 4 7 7 11 13'/%3E%3Cpath d='M24 21c1-8 7-11 11-10-4 4-7 7-11 13'/%3E%3Cpath d='M17 39h14'/%3E%3C/svg%3E"); background-size:31px 31px; background-position:center; background-repeat:no-repeat; }
+    .sidebar-logo h3 { font-size:17px; line-height:1.2; }.sidebar-logo p,.sidebar-section,.sidebar-collapse { display:none; }
+    .sidebar-nav a { min-height:53px; margin:7px 0; padding:13px 15px; gap:15px; border:0; border-radius:8px; font-size:15px; color:rgba(255,255,255,.88); }
+    .sidebar-nav a:hover,.sidebar-nav a.active { border:0; background:#277846; box-shadow:none; }.sidebar-nav a.active { box-shadow:none; }
+    header { min-height:58px; padding:10px 28px; background:linear-gradient(90deg,#0b5d2a,#07503b); border:0; box-shadow:none; }
+    .logo-name { color:#fff; font-family:'DM Sans',sans-serif; font-size:20px; font-weight:700; }.logo-sub { display:none; }.notification-button { background:transparent; border-color:rgba(255,255,255,.25); color:#fff; }
+    .panels { padding:22px 16px 0; }.panel { background:transparent; box-shadow:none; padding:0; }
+    #panel-dashboard .dashboard-intro { min-height:280px; align-items:flex-start; padding:23px 28px; margin:0 0 16px; border-radius:11px; background-image:linear-gradient(90deg,rgba(5,54,35,.66),rgba(5,54,35,.36),rgba(5,54,35,.03)),url('/static/coco-farm.jpg'); background-position:center, center 68%; background-size:cover, 118% auto; background-repeat:no-repeat; box-shadow:0 4px 14px rgba(7,58,36,.12); }
+    #panel-dashboard .dashboard-intro h1 { color:#fff; font-size:29px; margin:0; } #panel-dashboard .dashboard-intro p { max-width:340px; color:rgba(255,255,255,.88); line-height:1.6; } #panel-dashboard .dashboard-date { color:#fff; background:rgba(255,255,255,.15); }
+    #panel-dashboard .dashboard-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:16px; }.stat-box { min-height:122px; padding:16px; border:0; border-radius:10px; box-shadow:0 2px 8px rgba(10,53,34,.06); }.stat-box h4 { font-size:12px; text-transform:none; letter-spacing:0; }.stat-box .stat-value { font-size:26px; }
+    .dashboard-reference-grid { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; }.dashboard-main-column,.dashboard-aside { display:grid; gap:16px; align-content:start; }.dashboard-white-card,.dashboard-reference-grid .records-container { background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 2px 8px rgba(10,53,34,.05); overflow:hidden; }.dashboard-card-heading,.dashboard-reference-grid .records-head { display:flex; align-items:center; justify-content:space-between; padding:15px 18px; border-bottom:1px solid var(--line); }.dashboard-card-heading h4,.dashboard-reference-grid .records-head h4 { color:var(--deep); font-size:16px; }.dashboard-card-heading span { color:#187145; font-size:12px; font-weight:600; }.dashboard-action-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:14px; }.dashboard-action { position:relative; min-height:132px; padding:15px; border:0; border-radius:8px; text-align:left; cursor:pointer; font-family:'DM Sans',sans-serif; color:#124c32; background:#edf9ef; }.dashboard-action.history{background:#edf6ff;color:#286da6}.dashboard-action.guide{background:#f4f1ff;color:#6944bb}.dashboard-action.reports{background:#ecf9fb;color:#187c82}.dashboard-action .action-symbol { display:grid;place-items:center;width:42px;height:42px;border-radius:50%;margin-bottom:12px;background:currentColor;color:#fff;font-size:23px;line-height:1; }.dashboard-action strong,.dashboard-action small { display:block; }.dashboard-action strong { font-size:13px; }.dashboard-action small { margin-top:7px; font-size:11px; font-weight:400; line-height:1.35; color:inherit; opacity:.8; }.dashboard-action b { position:absolute;right:14px;bottom:13px;font-size:18px;font-weight:400; }.dashboard-reference-grid #analytics-section { margin:0; }.dashboard-reference-grid .analytics-grid { padding:14px; }.dashboard-reference-grid .class-key-card { margin:0 14px 14px; }.empty-result { display:flex; gap:11px; align-items:center; padding:18px; }.empty-leaf { display:grid; place-items:center; width:54px; height:54px; border-radius:10px; background:#eaf6ed; color:#17804a; font-size:28px; }.empty-result strong { font-size:13px; color:var(--deep); }.empty-result p { margin-top:4px; font-size:11px; line-height:1.45; color:var(--text3); }.overview-list { padding:7px 16px; }.overview-list div { position:relative; padding:11px 0 11px 17px; border-bottom:1px solid var(--line); }.overview-list div:last-child { border:0; }.overview-list i { position:absolute;left:0;top:16px;width:8px;height:8px;border-radius:50%;background:#1d9b54; }.overview-list b,.overview-list small { display:block; }.overview-list b { font-size:12px; color:var(--deep); }.overview-list small { margin-top:3px; font-size:10px; color:var(--text3); }.summary-placeholder { display:flex;align-items:center;gap:22px;padding:15px 18px; }.summary-circle { display:grid;place-content:center;width:105px;height:105px;border-radius:50%;background:conic-gradient(#16954b 0 75%,#ed4545 75% 100%);position:relative;text-align:center; }.summary-circle::before {content:'';position:absolute;inset:14px;background:#fff;border-radius:50%;}.summary-circle b,.summary-circle small { z-index:1; }.summary-circle b { font-size:20px;color:var(--deep); }.summary-circle small { font-size:9px;color:var(--text3); }.summary-placeholder p { display:flex;gap:7px;align-items:center;min-width:125px;margin:10px 0;color:var(--text2);font-size:11px; }.summary-placeholder p b { margin-left:auto;color:var(--deep); }.summary-placeholder i { width:9px;height:9px;border-radius:50%; }.green-dot{background:#16954b}.red-dot{background:#ed4545}
+    @media(max-width:1100px){.dashboard-reference-grid{grid-template-columns:1fr}.dashboard-action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){#panel-dashboard .dashboard-stats{grid-template-columns:repeat(2,1fr)}.dashboard-action-grid{grid-template-columns:1fr}.dashboard-reference-grid .analytics-grid{grid-template-columns:1fr}.dashboard-intro{padding:20px}.dashboard-intro h1{font-size:24px}}
+    /* Quick-action icons and single-column dashboard after removing the side panels. */
+    .dashboard-reference-grid { grid-template-columns:minmax(0,1fr); }
+    .dashboard-action .action-symbol { color:#fff; }
+    .dashboard-action.scan .action-symbol { background:#159447; }.dashboard-action.history .action-symbol { background:#2584c7; }.dashboard-action.guide .action-symbol { background:#7150d6; }.dashboard-action.reports .action-symbol { background:#168e98; }
+    .dashboard-action .action-symbol svg { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+    .history-thumbnail { display:block; width:64px; height:64px; border-radius:8px; object-fit:cover; background:#edf6ef; border:1px solid rgba(7,69,41,.10); }
+    .history-thumbnail-empty { display:grid; place-items:center; padding:5px; color:var(--text3); font-size:9px; line-height:1.25; text-align:center; }
+    @media(max-width:650px){.history-thumbnail{width:48px;height:48px}}
+    .sidebar-footer-art { position:absolute; left:0; right:0; bottom:0; height:310px; pointer-events:none; overflow:hidden; background:linear-gradient(0deg,rgba(3,42,29,.88),rgba(3,62,42,.24)),url('/static/coco-farm.jpg') center bottom/auto 175%; opacity:.96; }
+    .sidebar-footer-art::before { content:''; position:absolute; inset:0; background:linear-gradient(180deg,#063624 0%,transparent 35%,rgba(2,39,26,.35) 100%); }
+    .sidebar-footer-copy { position:absolute; z-index:1; left:37px; bottom:29px; display:flex; align-items:center; gap:9px; color:rgba(255,255,255,.88); font-size:12px; line-height:1.35; font-style:italic; }
+    .sidebar-footer-copy svg { width:23px; height:23px; flex:0 0 23px; fill:none; stroke:#e6f6ea; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .sidebar-nav { position:relative; z-index:2; }.sidebar-logo { position:relative; z-index:2; }
+    #records-stats { grid-template-columns:repeat(5,minmax(0,1fr)); }
+    @media(max-width:1200px){#records-stats{grid-template-columns:repeat(3,minmax(0,1fr));}}
+    @media(max-width:650px){#records-stats{grid-template-columns:1fr;}}
+    @media(max-width:1023px){.sidebar-footer-art{display:none}}
   </style>
   <script>
     // ── GLOBAL SCOPE SETUP - All variables and stubs defined FIRST ──
@@ -1328,7 +1362,7 @@
     </a>
     <a href="#upload" class="nav-link" id="nav-upload-link" onclick="switchTab('upload',this);return false;">
       <svg viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-      <span>Disease Detection</span>
+      <span>Scan / Detect</span>
     </a>
     <a href="#map" class="nav-link" id="nav-map-link" onclick="switchTab('map',this);return false;">
       <svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
@@ -1337,7 +1371,7 @@
     <div class="sidebar-section">Management</div>
     <a href="#records" class="nav-link" id="nav-records-link" onclick="switchTab('records',this);loadUserRecords();return false;">
       <svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg>
-      <span>Detection Records</span>
+      <span>Detection History</span>
     </a>
     <a href="#history" class="nav-link" id="nav-history-link" onclick="switchTab('history',this);return false;">
       <svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
@@ -1353,6 +1387,9 @@
       <span>Settings</span>
     </a>
   </nav>
+  <div class="sidebar-footer-art" aria-hidden="true">
+    <div class="sidebar-footer-copy"><svg viewBox="0 0 24 24"><path d="M5 19c6-1 10-5 14-14-9 4-13 8-14 14Z"/><path d="M5 19c4-4 7-7 11-10"/></svg><span>Healthy Coconut<br>Brighter Future</span></div>
+  </div>
 </div>
 
 <!-- MAIN CONTENT WRAPPER -->
@@ -1363,7 +1400,7 @@
   <div style="display:flex;align-items:center;gap:12px;">
     <button id="menu-toggle" aria-label="Toggle navigation">☰</button>
     <div class="logo ui-shell-title">
-      <div class="logo-name">Disease Detection</div>
+      <div class="logo-name">Coconut Disease Detection System</div>
       <div class="logo-sub">Coconut Farm Monitoring</div>
     </div>
   </div>
@@ -1391,36 +1428,20 @@
 <div id="panel-dashboard" class="panel active">
   <div class="panels">
     <div class="dashboard-intro">
-      <div><h1>Farm health overview</h1><p>Monitor coconut tree health and act early on disease risks.</p></div>
+      <div><h1 id="welcome-heading">Welcome back!</h1><p>Coconut Disease Detection System<br>Healthy coconuts, higher yield, stronger communities.</p></div>
       <div class="dashboard-date" id="dashboard-date">Today</div>
     </div>
-    <div class="dashboard-stats">
-      <div class="stat-box total">
-        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></svg></div>
-        <h4>Total Detections</h4>
-        <div class="stat-value" id="total-detections">0</div>
-        <div class="stat-subtext">All logged detections</div>
-      </div>
-      <div class="stat-box disease">
-        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 3v10M12 21v.01M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg></div>
-        <h4>Diseased Trees</h4>
-        <div class="stat-value" id="disease-count">0</div>
-        <div class="stat-subtext">Active detections</div>
-      </div>
-      <div class="stat-box healthy">
-        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M12 21c5-3 8-7.1 8-12V4l-5 2-3-3-3 3-5-2v5c0 4.9 3 9 8 12Z"/><path d="m9 12 2 2 4-4"/></svg></div>
-        <h4>Healthy Trees</h4>
-        <div class="stat-value" id="healthy-count">0</div>
-        <div class="stat-subtext">No disease detected</div>
-      </div>
-      <div class="stat-box mapped">
-        <div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg></div>
-        <h4>Mapped Locations</h4>
-        <div class="stat-value" id="mapped-locations">0</div>
-        <div class="stat-subtext">Locations with detections</div>
-      </div>
-    </div>
-
+    <div class="dashboard-reference-grid">
+      <div class="dashboard-main-column">
+        <section class="dashboard-white-card dashboard-quick-card">
+          <div class="dashboard-card-heading"><h4>Quick Actions</h4></div>
+          <div class="dashboard-action-grid">
+            <button id="dashboard-primary-action" class="dashboard-action scan" type="button" onclick="openDashboardPrimaryAction()"><span class="action-symbol"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M8 6l1-2h6l1 2"/></svg></span><strong id="dashboard-primary-action-title">Scan Coconut Leaf</strong><small id="dashboard-primary-action-description">Upload an image to detect coconut diseases.</small><b>→</b></button>
+            <button class="dashboard-action history" type="button" onclick="switchTab('records',document.getElementById('nav-records-link'));loadUserRecords()"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg></span><strong>View History</strong><small>Check previous scans and results.</small><b>→</b></button>
+            <button class="dashboard-action guide" type="button" onclick="switchTab('history',document.getElementById('nav-history-link'))"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M4 5h7a3 3 0 0 1 3 3v12a3 3 0 0 0-3-3H4z"/><path d="M20 5h-7a3 3 0 0 0-3 3v12a3 3 0 0 1 3-3h7z"/></svg></span><strong>Verified Disease History</strong><small>Review verified disease information.</small><b>→</b></button>
+            <button class="dashboard-action reports" type="button" onclick="switchTab('map',document.getElementById('nav-map-link'))"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></svg></span><strong>View Reports</strong><small>Explore farm health activity.</small><b>→</b></button>
+          </div>
+        </section>
     <!-- Health Analytics & Trends Dashboard -->
     <div class="records-container" id="analytics-section">
       <div class="records-head">
@@ -1451,6 +1472,8 @@
           <span>Colors match the graphs and map pins</span>
         </div>
         <div id="detection-color-key" class="class-key-table"></div>
+      </div>
+    </div>
       </div>
     </div>
   </div>
@@ -1591,6 +1614,16 @@
           <div class="stat-value" id="most-common-disease">—</div>
           <div class="stat-subtext">Detected on farm</div>
         </div>
+        <div class="stat-box healthy">
+          <h4>Healthy</h4>
+          <div class="stat-value" id="records-healthy-count">0</div>
+          <div class="stat-subtext">No disease detected</div>
+        </div>
+        <div class="stat-box mapped">
+          <h4>Common Diseases</h4>
+          <div class="stat-value" id="records-common-diseases">0</div>
+          <div class="stat-subtext">Disease types detected</div>
+        </div>
       </div>
 
       <div class="records-container" id="detection-history-container">
@@ -1628,7 +1661,7 @@
   <div id="panel-history" class="panel">
     <div class="panels">
       <div class="dashboard-intro">
-        <div><h1>Verified Disease History</h1><p>Only diagnoses verified by an expert are included in these totals and records.</p></div>
+        <div><h1 id="verified-history-title">Verified Disease History</h1><p id="verified-history-description">Only diagnoses verified by an expert are included in these totals and records.</p></div>
         <button class="btn btn-o" type="button" onclick="loadVerifiedDiseaseHistory()" style="padding:6px 12px;font-size:12px;">Refresh</button>
       </div>
       <div class="dashboard-stats" id="verified-disease-summary" style="margin-bottom:20px;">
