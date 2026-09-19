@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.logging import configure_logging
+from app.core.config import CORS_ALLOWED_ORIGINS
 from app.api import auth, detections, drone, expert, health, notifications, records, recommendations, reports
 
 configure_logging()
@@ -82,7 +83,7 @@ def create_app() -> FastAPI:
     # CORS
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=CORS_ALLOWED_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

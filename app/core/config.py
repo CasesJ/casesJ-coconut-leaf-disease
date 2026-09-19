@@ -7,6 +7,33 @@ No other module should call os.getenv() or declare path constants directly.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+
+# Load local development settings before reading configuration.  Hosted
+# environments provide the same values through their secret manager.
+load_dotenv()
+
+
+def _required_env(name: str) -> str:
+    """Return a required configuration value or stop startup with a clear error."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+# Browser origins allowed to call the API. Keep local URLs for development;
+# add the deployed frontend URL with CORS_ALLOWED_ORIGINS as a comma-separated
+# environment variable, for example: https://app.example.com.
+_DEFAULT_CORS_ORIGINS = ("http://localhost:8000", "http://127.0.0.1:8000")
+_configured_cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+CORS_ALLOWED_ORIGINS: list[str] = [
+    origin.strip().rstrip("/")
+    for origin in _configured_cors_origins.split(",")
+    if origin.strip()
+] or list(_DEFAULT_CORS_ORIGINS)
+
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05
@@ -27,8 +54,8 @@ PENDING_VERIFICATION_STATUS = "pending_verification"
 VERIFIED_STATUS = "verified"
 
 # ── Expert account credentials (from environment / .env) ──────────────────────
-EXPERT_ACCOUNT_EMAIL: str = os.getenv("EXPERT_ACCOUNT_EMAIL", "expert2@gmail.com").strip().lower()
-EXPERT_ACCOUNT_PASSWORD: str = os.getenv("EXPERT_ACCOUNT_PASSWORD", "adminexpert12345")
+EXPERT_ACCOUNT_EMAIL: str = _required_env("EXPERT_ACCOUNT_EMAIL").lower()
+EXPERT_ACCOUNT_PASSWORD: str = _required_env("EXPERT_ACCOUNT_PASSWORD")
 EXPERT_ACCOUNT_UID: str = os.getenv("EXPERT_ACCOUNT_UID", "").strip()
 
 EXPERT_ACCOUNT_EMAILS: set[str] = {

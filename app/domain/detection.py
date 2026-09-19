@@ -135,9 +135,9 @@ def apply_record_defaults(record: dict) -> dict:
     if record_id:
         original_image = UPLOAD_IMAGE_DIR / f"{record_id}.jpg"
         annotated_image = ANNOTATED_IMAGE_DIR / f"{record_id}.jpg"
-        if original_image.exists():
+        if original_image.exists() and not record.get("image_url"):
             record["image_url"] = f"/static/uploads/{record_id}.jpg"
-        if annotated_image.exists():
+        if annotated_image.exists() and not record.get("annotated_image_url"):
             record["annotated_image_url"] = f"/static/annotated_uploads/{record_id}.jpg"
         if not record.get("image_url") and record.get("annotated_image_url"):
             record["image_url"] = record["annotated_image_url"]

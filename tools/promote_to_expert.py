@@ -19,8 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--email",
-        default=os.getenv("EXPERT_ACCOUNT_EMAIL", "expert2@gmail.com"),
-        help="Firebase user email to promote (default: expert2@gmail.com or EXPERT_ACCOUNT_EMAIL).",
+        default=os.getenv("EXPERT_ACCOUNT_EMAIL", ""),
+        help="Firebase user email to promote (defaults to EXPERT_ACCOUNT_EMAIL).",
     )
     parser.add_argument(
         "--password",

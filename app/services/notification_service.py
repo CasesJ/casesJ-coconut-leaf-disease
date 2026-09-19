@@ -18,8 +18,28 @@ def _get_db():
     return db
 
 
+def _get_firestore():
+    try:
+        from firebase_admin import firestore  # noqa: PLC0415
+        return firestore.client()
+    except Exception as error:
+        logger.warning("Firestore notification store unavailable: %s", error)
+        return None
+
+
 def clear_notifications(user_id: str) -> None:
     """Delete all notifications for a user from RTDB and local file."""
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            batch = firestore_client.batch()
+            docs = firestore_client.collection("users").document(user_id).collection("notifications").stream()
+            for doc in docs:
+                batch.delete(doc.reference)
+            batch.commit()
+            return
+        except Exception as error:
+            logger.warning("Firestore notification clear failed: %s", error)
     try:
         _get_db().reference(f"users/{user_id}/notifications").delete()
     except Exception as error:
@@ -41,6 +61,18 @@ def mark_notifications_read(user_id: str) -> None:
     notices = get_user_notifications(user_id)
     for notice in notices:
         notice["read"] = True
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            batch = firestore_client.batch()
+            collection = firestore_client.collection("users").document(user_id).collection("notifications")
+            for notice in notices:
+                if notice.get("id"):
+                    batch.set(collection.document(str(notice["id"])), notice)
+            batch.commit()
+            return
+        except Exception as error:
+            logger.warning("Firestore notification mark-read failed: %s", error)
     try:
         _get_db().reference(f"users/{user_id}/notifications").set(
             {notice["id"]: notice for notice in notices if notice.get("id")}

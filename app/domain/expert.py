@@ -18,6 +18,15 @@ from app.core.config import (
 logger = logging.getLogger(__name__)
 
 
+def _get_firestore():
+    try:
+        from firebase_admin import firestore  # noqa: PLC0415
+        return firestore.client()
+    except Exception as error:
+        logger.warning("Firestore audit store unavailable: %s", error)
+        return None
+
+
 def is_expert_identity(decoded: dict | None) -> bool:
     """Return True when the Firebase identity has expert privileges."""
     if not decoded:
@@ -58,6 +67,13 @@ def append_expert_audit_event(
         "target": target or {},
         "details": details or {},
     }
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            firestore_client.collection("expert_audit_events").add(entry)
+            return
+        except Exception as error:
+            logger.warning("Could not write Firestore audit event: %s", error)
     try:
         with open(EXPERT_AUDIT_LOG_PATH, "a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=True) + "\n")
@@ -66,7 +82,16 @@ def append_expert_audit_event(
 
 
 def read_expert_audit_events(limit: int = 100) -> list[dict]:
-    """Return the latest expert actions from the local JSONL audit log."""
+    """Return the latest expert actions from Firestore or the offline cache."""
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            docs = firestore_client.collection("expert_audit_events").order_by(
+                "timestamp", direction="DESCENDING"
+            ).limit(limit).stream()
+            return [doc.to_dict() or {} for doc in docs]
+        except Exception as error:
+            logger.warning("Could not read Firestore audit events: %s", error)
     if not EXPERT_AUDIT_LOG_PATH.exists():
         return []
     events: list[dict] = []

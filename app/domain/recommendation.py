@@ -14,8 +14,27 @@ from app.core.config import EXPERT_RECOMMENDATIONS_PATH
 logger = logging.getLogger(__name__)
 
 
+def _get_firestore():
+    try:
+        from firebase_admin import firestore  # noqa: PLC0415
+        return firestore.client()
+    except Exception as error:
+        logger.warning("Firestore recommendation store unavailable: %s", error)
+        return None
+
+
 def load_expert_recommendations() -> dict:
-    """Load expert-edited recommendation overrides from disk."""
+    """Load expert-edited overrides from Firestore, then the offline cache."""
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            snapshot = firestore_client.collection("app_settings").document("expert_recommendations").get()
+            if snapshot.exists:
+                data = (snapshot.to_dict() or {}).get("overrides", {})
+                if isinstance(data, dict):
+                    return data
+        except Exception as error:
+            logger.warning("Could not load Firestore recommendations: %s", error)
     if not EXPERT_RECOMMENDATIONS_PATH.exists():
         return {}
     try:
@@ -28,7 +47,14 @@ def load_expert_recommendations() -> dict:
 
 
 def save_expert_recommendations(data: dict) -> None:
-    """Persist expert-edited recommendation overrides to disk."""
+    """Persist overrides to Firestore; use the local file only offline."""
+    firestore_client = _get_firestore()
+    if firestore_client:
+        try:
+            firestore_client.collection("app_settings").document("expert_recommendations").set({"overrides": data})
+            return
+        except Exception as error:
+            logger.warning("Could not save Firestore recommendations: %s", error)
     with open(EXPERT_RECOMMENDATIONS_PATH, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=2, ensure_ascii=True)
 

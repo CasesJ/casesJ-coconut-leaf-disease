@@ -20,9 +20,13 @@ FIREBASE_CONFIG = {
     "measurementId": "G-4NNZLME6MB"
 }
 
+FIREBASE_STORAGE_BUCKET = os.getenv(
+    "FIREBASE_STORAGE_BUCKET", FIREBASE_CONFIG["storageBucket"]
+).strip()
+
 ALLOW_UNVERIFIED_FIREBASE_TOKENS = os.getenv(
     "ALLOW_UNVERIFIED_FIREBASE_TOKENS",
-    "true",
+    "false",
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 # Initialize Firebase Admin SDK
@@ -44,7 +48,8 @@ try:
             print(f"[OK] Service account found: {cred_path}")
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {
-                'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com'
+                'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
+                'storageBucket': FIREBASE_STORAGE_BUCKET,
             })
             print("[OK] Firebase initialized with service account")
         else:
@@ -52,7 +57,8 @@ try:
             print(f"[WARN] Service account not found at {cred_path}, using project ID only")
             options = {
                 'projectId': FIREBASE_CONFIG['projectId'],
-                'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com'
+                'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
+                'storageBucket': FIREBASE_STORAGE_BUCKET,
             }
             firebase_admin.initialize_app(options=options)
             print("[WARN] Firebase initialized with project ID (read-only mode)")

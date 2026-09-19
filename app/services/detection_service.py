@@ -274,18 +274,10 @@ def save_detection_record(
         logger.info("[OFFLINE] Saving to local storage only...")
         saved = _save_to_local(user_id, email, record_id, detections, gps_data, filename, is_synced=False)
     else:
-        # Try RTDB first.
-        try:
-            _get_db().reference(f"users/{user_id}/uploads/{record_id}").set(detection_record)
-            logger.info("[OK] Saved to Realtime Database: users/%s/uploads/%s", user_id, record_id)
-            _save_to_local(user_id, email, record_id, detections, gps_data, filename, is_synced=True)
-            saved = True
-        except Exception as rtdb_error:
-            logger.warning("[WARN] RTDB failed: %s", type(rtdb_error).__name__)
-
-        # Fallback to Firestore.
+        # Firestore is the durable system of record. SQLite is only an offline
+        # queue/cache; RTDB remains a compatibility fallback for old installs.
         fs, available = _get_firestore()
-        if available and not saved:
+        if available:
             try:
                 (
                     fs.collection("users")
@@ -299,6 +291,15 @@ def save_detection_record(
                 saved = True
             except Exception as fs_error:
                 logger.warning("[WARN] Firestore failed: %s", type(fs_error).__name__)
+
+        if not saved:
+            try:
+                _get_db().reference(f"users/{user_id}/uploads/{record_id}").set(detection_record)
+                logger.info("[OK] Saved to Realtime Database compatibility store: users/%s/uploads/%s", user_id, record_id)
+                _save_to_local(user_id, email, record_id, detections, gps_data, filename, is_synced=True)
+                saved = True
+            except Exception as rtdb_error:
+                logger.warning("[WARN] RTDB fallback failed: %s", type(rtdb_error).__name__)
 
         # Final fallback: local-only.
         if not saved:

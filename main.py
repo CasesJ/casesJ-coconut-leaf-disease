@@ -33,6 +33,7 @@ from cv2 import imdecode, imencode, IMREAD_COLOR
 
 from model import detector
 from firebase_config import verify_token, ensure_user_account
+from app.core.config import CORS_ALLOWED_ORIGINS
 from firebase_admin import db
 try:
     from firebase_admin import firestore
@@ -72,8 +73,8 @@ EXPERT_AUDIT_LOG_PATH = Path("expert_audit_log.jsonl")
 USER_NOTIFICATIONS_PATH = Path("user_notifications.json")
 UPLOAD_IMAGE_DIR = Path("static/uploads")
 ANNOTATED_IMAGE_DIR = Path("static/annotated_uploads")
-EXPERT_ACCOUNT_EMAIL = os.getenv("EXPERT_ACCOUNT_EMAIL", "expert2@gmail.com").strip().lower()
-EXPERT_ACCOUNT_PASSWORD = os.getenv("EXPERT_ACCOUNT_PASSWORD", "adminexpert12345")
+EXPERT_ACCOUNT_EMAIL = os.environ["EXPERT_ACCOUNT_EMAIL"].strip().lower()
+EXPERT_ACCOUNT_PASSWORD = os.environ["EXPERT_ACCOUNT_PASSWORD"]
 EXPERT_ACCOUNT_UID = os.getenv("EXPERT_ACCOUNT_UID", "").strip()
 EXPERT_ACCOUNT_EMAILS = {
     email.strip().lower()
@@ -934,7 +935,7 @@ app = FastAPI(
 # ✅ Add CORS middleware to allow frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (adjust for production)
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
