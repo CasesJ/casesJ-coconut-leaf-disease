@@ -628,8 +628,8 @@ function renderDashboardHighlights(records) {
 function getTreatmentRecommendation(diseaseName) {
   const normalized = String(diseaseName).toLowerCase();
   if (normalized.includes('cercospora')) return 'Apply a copper-based fungicide and prune affected leaves immediately to prevent spread.';
-  if (normalized.includes('bud') || normalized.includes('root')) return 'Isolate the affected palm, remove infected tissue, and use a targeted fungicide treatment.';
-  if (normalized.includes('pestalotiopsis')) return 'Remove infected fronds and treat with a broad-spectrum fungicide as soon as possible.';
+  if (normalized.includes('bud') || normalized.includes('root')) return 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.';
+  if (normalized.includes('pestalotiopsis')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
   if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
   return 'Inspect the field closely, isolate the affected trees, and consult a local agronomist for treatment guidance.';
 }
@@ -2194,7 +2194,7 @@ function renderRecommendationCardHtml(rec) {
       </div>
       <div class="rec-item">
         <div class="rec-label">Treatment</div>
-        <div class="rec-text">${escapeHtml(recommendation.treatment || '')}</div>
+        <div class="rec-text">${escapeHtml(recommendation.treatment || '').replace(/\n/g, '<br>')}</div>
       </div>
       <div class="rec-item">
         <div class="rec-label">Prevention</div>

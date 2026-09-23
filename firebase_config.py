@@ -115,7 +115,9 @@ def verify_token(token: str):
     Returns user data if valid, raises exception otherwise
     """
     try:
-        decoded_token = firebase_auth.verify_id_token(token)
+        # Firebase tokens can be minted a few seconds ahead of the local clock.
+        # Keep a small tolerance while retaining all signature and expiry checks.
+        decoded_token = firebase_auth.verify_id_token(token, clock_skew_seconds=60)
         return decoded_token
     except Exception as e:
         if ALLOW_UNVERIFIED_FIREBASE_TOKENS:

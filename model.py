@@ -574,7 +574,7 @@ class CoconutDiseaseDetector:
         recommendations = {
             'bud root': {
                 'fertilizer': 'Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.',
-                'treatment': 'Treat as urgent Phytophthora bud rot: contact the Philippine Coconut Authority or local agricultural office. Remove and safely destroy badly rotted tissue as directed. A trained applicator may use a locally registered phosphonate, metalaxyl, or copper hydroxide product directed to leaf axils/cankers strictly at the product label rate.',
+                'treatment': 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.',
                 'prevention': 'Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown.'
             },
             'caterpillars': {
@@ -604,7 +604,7 @@ class CoconutDiseaseDetector:
             },
             'pestalotiopsis': {
                 'fertilizer': 'Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.',
-                'treatment': 'Practice clean culture: prune and remove severely infected leaves and debris. After confirmation, apply only a fungicide registered locally for coconut fungal leaf spot, following its label exactly. Seek local extension advice before treating tall palms or widespread disease.',
+                'treatment': 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.',
                 'prevention': 'Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather.'
             }
         }
