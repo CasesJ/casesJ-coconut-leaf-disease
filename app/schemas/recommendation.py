@@ -11,7 +11,7 @@ class RecommendationRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "disease": "Cercospora",
+                "disease": "Stem Bleeding",
                 "confidence": 0.95,
             }
         }

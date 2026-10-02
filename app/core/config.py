@@ -74,11 +74,11 @@ EXPERT_ACCOUNT_UIDS: set[str] = {
 # ── Disease catalogue ──────────────────────────────────────────────────────────
 EXPERT_DISEASE_OPTIONS: list[str] = [
     "Caterpillars",
-    "Cercospora",
     "Drying of Leaflets",
     "Healthy",
     "Pestalotiopsis",
-    "Bud Root",
+    "Bud Rot",
+    "Stem Bleeding",
 ]
 
 # ── Filesystem paths ───────────────────────────────────────────────────────────

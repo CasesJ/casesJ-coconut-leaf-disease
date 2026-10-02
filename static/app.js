@@ -213,21 +213,50 @@ function setExpertRecommendationDisease(diseaseName) {
   input.value = normalized;
 }
 
-function scrollToExpertRecommendationEditor() {
-  const editor = document.getElementById('expert-recommendation-editor');
-  if (editor && typeof editor.scrollIntoView === 'function') {
-    editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-}
-
 function openExpertRecommendationEditor() {
   const editor = document.getElementById('expert-recommendation-editor');
   if (editor) editor.classList.remove('hidden');
+  document.body.classList.add('expert-recommendation-open');
 }
+
+function setExpertRecommendationPreview(imageUrl, imageLabel) {
+  const image = document.getElementById('expert-recommendation-image');
+  const empty = document.getElementById('expert-recommendation-image-empty');
+  const url = String(imageUrl || '').trim();
+  if (!image || !empty) return;
+  if (url) {
+    image.src = url;
+    image.alt = imageLabel ? `Uploaded image: ${imageLabel}` : 'Selected uploaded image';
+    image.classList.remove('hidden');
+    empty.classList.add('hidden');
+  } else {
+    image.removeAttribute('src');
+    image.classList.add('hidden');
+    empty.classList.remove('hidden');
+  }
+}
+
+window.openExpertRecommendationImage = function openExpertRecommendationImage() {
+  const sourceImage = document.getElementById('expert-recommendation-image');
+  if (!sourceImage?.src) return;
+
+  const lightbox = document.createElement('div');
+  lightbox.className = 'expert-image-lightbox';
+  lightbox.setAttribute('role', 'dialog');
+  lightbox.setAttribute('aria-modal', 'true');
+  lightbox.setAttribute('aria-label', 'Enlarged uploaded image');
+  lightbox.innerHTML = '<button type="button" class="expert-image-lightbox-close" aria-label="Close enlarged image">✕</button><img alt="Enlarged uploaded image">';
+  lightbox.querySelector('img').src = sourceImage.src;
+  const close = () => lightbox.remove();
+  lightbox.querySelector('button').addEventListener('click', close);
+  lightbox.addEventListener('click', event => { if (event.target === lightbox) close(); });
+  document.body.appendChild(lightbox);
+};
 
 function hideExpertRecommendationEditor() {
   const editor = document.getElementById('expert-recommendation-editor');
   if (editor) editor.classList.add('hidden');
+  document.body.classList.remove('expert-recommendation-open');
 }
 
 window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
@@ -367,16 +396,16 @@ window.loadDashboardStats = async function loadDashboardStats() {
 };
 
 function normalizeDiseaseClass(label) {
-  return String(label || '').toLowerCase().trim().replace(/_/g, ' ');
+  const normalized = String(label || '').toLowerCase().trim().replace(/_/g, ' ');
+  return normalized === 'bud root' ? 'bud rot' : normalized;
 }
 
 function formatDiseaseClass(label) {
   const normalized = normalizeDiseaseClass(label);
-  if (normalized === 'bud root') return 'Bud Rot';
   return normalized.replace(/\b\w/g, c => c.toUpperCase());
 }
 
-const HIDDEN_ANALYTICS_CLASSES = new Set(['caterpillars', 'drying of leaflets']);
+const HIDDEN_ANALYTICS_CLASSES = new Set(['caterpillars', 'drying of leaflets', 'cercospora', 'leaf rot']);
 
 function isAnalyticsClassVisible(label) {
   return !HIDDEN_ANALYTICS_CLASSES.has(normalizeDiseaseClass(label));
@@ -394,11 +423,10 @@ function isDiseaseClass(label) {
 const DETECTION_CLASS_COLORS = {
   healthy: '#22c55e',
   'caterpillars': '#f97316',
-  'cercospora': '#9333ea',
+  'stem bleeding': '#dc2626',
   'drying of leaflets': '#2563eb',
-  'leaf rot': '#2563eb',
   'pestalotiopsis': '#06b6d4',
-  'bud root': '#eab308',
+  'bud rot': '#eab308',
   unknown: '#64748b'
 };
 
@@ -627,7 +655,7 @@ function renderDashboardHighlights(records) {
 
 function getTreatmentRecommendation(diseaseName) {
   const normalized = String(diseaseName).toLowerCase();
-  if (normalized.includes('cercospora')) return 'Apply a copper-based fungicide and prune affected leaves immediately to prevent spread.';
+  if (normalized.includes('stem bleeding')) return 'Promptly inspect the trunk for bleeding lesions, improve drainage, avoid bark wounds, and have an agricultural specialist confirm the diagnosis and recommend a locally registered treatment.';
   if (normalized.includes('bud') || normalized.includes('root')) return 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.';
   if (normalized.includes('pestalotiopsis')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
   if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
@@ -1036,7 +1064,7 @@ function aggregateClassDistribution(records) {
     });
   });
 
-  const preferredOrder = ['healthy', 'caterpillars', 'cercospora', 'drying of leaflets', 'pestalotiopsis', 'bud root'];
+  const preferredOrder = ['healthy', 'caterpillars', 'drying of leaflets', 'pestalotiopsis', 'bud rot', 'stem bleeding'];
   const labels = preferredOrder.filter(label => counts[label]).concat(
     Object.keys(counts).filter(label => !preferredOrder.includes(label))
   );
@@ -1136,7 +1164,7 @@ function renderDetectionColorKey(distribution) {
   const container = document.getElementById('detection-color-key');
   if (!container) return;
 
-  const labels = ['healthy', 'cercospora', 'leaf rot', 'pestalotiopsis', 'bud root'];
+  const labels = ['healthy', 'pestalotiopsis', 'bud rot', 'stem bleeding'];
   const present = new Set((distribution?.labels || []).map(normalizeDiseaseClass));
   const rows = labels.map(label => {
     const color = getDetectionClassColor(label);
@@ -1859,18 +1887,8 @@ async function detectImage(file){
     showToast('Session expired, please refresh');
     return;
   }
-  // Use the same location as the disease map's configured farm center.
-  const gps_lng = baseLng;
-  const gps_lat = baseLat;
-  const gps_accuracy = 5; // Farm boundary accuracy in meters
-  
   const fd=new FormData();
   fd.append('file',file);
-  fd.append('lat', gps_lat);  // ✅ Send farm center coordinates to backend
-  fd.append('lng', gps_lng);
-  fd.append('accuracy', gps_accuracy);
-  
-  console.log(`🌾 Farm Coordinates: ${gps_lat.toFixed(6)}, ${gps_lng.toFixed(6)} (accuracy: ${gps_accuracy}m)`);
   
   const fetchOpts={
     method:'POST',
@@ -1893,11 +1911,9 @@ async function detectImage(file){
     showToast(`DJI metadata read from ${camera}.`);
   }
   const detections = Array.isArray(data.detections) ? data.detections : [];
-  if (detections.length) {
+  if (detections.length && Number.isFinite(data.gps_lat) && Number.isFinite(data.gps_lng)) {
     const primary = [...detections].sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
-    const pinLat = Number.isFinite(data.gps_lat) ? data.gps_lat : gps_lat;
-    const pinLng = Number.isFinite(data.gps_lng) ? data.gps_lng : gps_lng;
-    addPin(pinLat, pinLng, primary.class, primary.confidence, data.image_metadata?.is_dji ? 'DJI Upload' : 'Upload');
+    addPin(data.gps_lat, data.gps_lng, primary.class, primary.confidence, data.image_metadata?.is_dji ? 'DJI Upload' : 'Upload');
   }
   return data;
 }
@@ -2600,7 +2616,7 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
       });
       return diseases.length > 0;
     });
-    const verifiedHistoryDiseases = ['bud root', 'cercospora', 'leaf rot', 'pestalotiopsis'];
+    const verifiedHistoryDiseases = ['bud rot', 'stem bleeding', 'pestalotiopsis'];
     // A single verified upload can contain more than one disease detection.
     // Keep the overall total on the same basis as the disease cards.
     const totalVerifiedDiseases = Object.values(diseaseCounts).reduce((total, count) => total + count, 0);
@@ -2863,7 +2879,7 @@ function renderExpertRecordsTable(records) {
       ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
-      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}')">Recommendation</button></div>`
+      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')">Recommendation</button></div>`
       : '<span class="expert-table-muted">Verified</span>';
 
     return `<tr>
@@ -3343,7 +3359,6 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
     if (preventionInput) preventionInput.value = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : '';
     if (noteInput) noteInput.value = data.note || '';
     if (statusEl) statusEl.textContent = data.source === 'expert_override' ? 'Loaded expert-edited recommendation data.' : 'Loaded default recommendation data.';
-    scrollToExpertRecommendationEditor();
     if (diseaseInput) diseaseInput.focus();
   } catch (error) {
     console.error('Error loading expert recommendation:', error);
@@ -3351,11 +3366,14 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   }
 };
 
-window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId) {
+window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId, encodedImageUrl = '', encodedImageLabel = '') {
   if (!currentToken || !currentUserIsExpert) return;
   openExpertRecommendationEditor();
+  const selectedRecord = expertQueueRecords.find(record => String(record.user_id || '') === String(userId || '') && String(record.id || '') === String(recordId || ''));
+  const imageUrl = decodeURIComponent(encodedImageUrl || '') || selectedRecord?.image_url || selectedRecord?.annotated_image_url || '';
+  const imageLabel = decodeURIComponent(encodedImageLabel || '') || selectedRecord?.filename || selectedRecord?.image_path || '';
+  setExpertRecommendationPreview(imageUrl, imageLabel);
   await loadExpertRecommendation(diseaseName, confidence, { userId, recordId });
-  scrollToExpertRecommendationEditor();
 };
 
 window.saveExpertRecommendation = async function saveExpertRecommendation() {

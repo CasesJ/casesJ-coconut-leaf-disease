@@ -16,9 +16,6 @@ from cv2 import IMREAD_COLOR, imdecode, imencode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 
 from app.core.config import (
-    DEFAULT_FARM_GPS_ACCURACY_METERS,
-    DEFAULT_FARM_LATITUDE,
-    DEFAULT_FARM_LONGITUDE,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
     UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
@@ -76,29 +73,16 @@ async def detect_image(
     drone_gps = get_drone_gps()
     gps_source = "none"
     gps_accuracy = None
-    fallback_coords = {"lat": lat, "lng": lng, "accuracy": accuracy or 10.0} if lat is not None and lng is not None else None
-
     if drone_gps:
-        exif_gps = drone_gps.extract_gps_from_image(contents, file.filename, fallback_coords)
+        exif_gps = drone_gps.extract_gps_from_image(contents, file.filename)
         if exif_gps:
             lat, lng = exif_gps.latitude, exif_gps.longitude
             gps_source = exif_gps.source
             gps_accuracy = exif_gps.accuracy if exif_gps.accuracy is not None else 10.0
-        elif lat is not None and lng is not None:
-            gps_source = "browser_geolocation"
-            gps_accuracy = accuracy or 15.0
         else:
-            lat, lng = DEFAULT_FARM_LATITUDE, DEFAULT_FARM_LONGITUDE
-            gps_source = "farm_map_default"
-            gps_accuracy = DEFAULT_FARM_GPS_ACCURACY_METERS
+            lat, lng = None, None
     else:
-        if lat is not None and lng is not None:
-            gps_source = "browser_geolocation"
-            gps_accuracy = accuracy or 15.0
-        else:
-            lat, lng = DEFAULT_FARM_LATITUDE, DEFAULT_FARM_LONGITUDE
-            gps_source = "farm_map_default"
-            gps_accuracy = DEFAULT_FARM_GPS_ACCURACY_METERS
+        lat, lng = None, None
 
     # --- Inference ---
     np_arr = np.frombuffer(contents, np.uint8)

@@ -20,6 +20,11 @@ except Exception:
 
 from openvino import Core
 
+# These labels belong to older model datasets and must not be returned by the
+# current application.  A model trained with Stem Bleeding examples is required
+# before the detector itself can produce that class.
+RETIRED_DETECTION_CLASSES = frozenset({"cercospora", "leaf rot"})
+
 class CoconutDiseaseDetector:
     def __init__(self):
         """Initialize the required local YOLO26 v6 weights for inference."""
@@ -35,7 +40,7 @@ class CoconutDiseaseDetector:
             2: "Drying of Leaflets",
             3: "Healthy",
             4: "Pestalotiopsis",
-            5: "bud root",
+            5: "bud rot",
         }
 
         model_pt = current_dir / "weights.pt"
@@ -229,6 +234,11 @@ class CoconutDiseaseDetector:
         original_height, original_width = image.shape[:2]
         image_total_area = original_width * original_height
         annotated_image = image.copy()
+        annotation_size = max(original_width, original_height)
+        box_thickness = max(12, int(round(annotation_size / 220)))
+        font_scale = max(2.0, annotation_size / 1200)
+        text_thickness = max(4, int(round(box_thickness * 0.6)))
+        text_padding = max(12, box_thickness)
 
         results = self.yolo_model.predict(source=image, imgsz=640, conf=confidence_threshold, verbose=False)
         result = results[0] if results else None
@@ -255,11 +265,14 @@ class CoconutDiseaseDetector:
                     if x2 <= x1 or y2 <= y1:
                         continue
 
+                    class_name = self.class_names.get(class_id, "unknown")
+                    if class_name.lower().strip().replace('_', ' ') in RETIRED_DETECTION_CLASSES:
+                        continue
+
                     if class_id != 3:
                         total_disease_bbox_area += (x2 - x1) * (y2 - y1)
                         primary_class_id = class_id
 
-                    class_name = self.class_names.get(class_id, "unknown")
                     raw_detections.append({
                         "class": class_name,
                         "class_id": class_id,
@@ -281,24 +294,22 @@ class CoconutDiseaseDetector:
             print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
 
             color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
-            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 3)
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, box_thickness)
 
             text = f"{class_name} {confidence:.2%}"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7
-            thickness = 2
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_size = cv2.getTextSize(text, font, font_scale, text_thickness)[0]
 
             text_x = x1
-            text_y = max(30, y1 - 10)
+            text_y = max(text_size[1] + text_padding, y1 - text_padding)
             cv2.rectangle(
                 annotated_image,
-                (text_x - 3, text_y - text_size[1] - 6),
-                (text_x + text_size[0] + 3, text_y + 3),
+                (text_x - text_padding, text_y - text_size[1] - text_padding),
+                (text_x + text_size[0] + text_padding, text_y + text_padding),
                 color,
                 -1
             )
-            cv2.putText(annotated_image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+            cv2.putText(annotated_image, text, (text_x, text_y), font, font_scale, (255, 255, 255), text_thickness)
 
         output_detections = [{
             "class": d['class'],
@@ -318,6 +329,12 @@ class CoconutDiseaseDetector:
         print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
         # Normalize confidence to 0-1 range if needed
         confidence_threshold = conf / 100.0 if conf > 1 else conf
+        image_height, image_width = image.shape[:2]
+        annotation_size = max(image_width, image_height)
+        box_thickness = max(12, int(round(annotation_size / 220)))
+        font_scale = max(2.0, annotation_size / 1200)
+        text_thickness = max(4, int(round(box_thickness * 0.6)))
+        text_padding = max(12, box_thickness)
 
         # Store original image dimensions
         original_height, original_width = image.shape[:2]
@@ -385,8 +402,9 @@ class CoconutDiseaseDetector:
                     if x2 <= x1 or y2 <= y1:
                         continue
 
-                    # Get class name
                     class_name = self.class_names.get(class_id, 'unknown')
+                    if class_name.lower().strip().replace('_', ' ') in RETIRED_DETECTION_CLASSES:
+                        continue
 
                     raw_detections.append({
                         "class": class_name,
@@ -414,20 +432,18 @@ class CoconutDiseaseDetector:
 
             # Draw bounding box (Green for Healthy, Red for diseases)
             color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
-            cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, box_thickness)
 
             # Draw text with background
             text = f"{class_name} {confidence:.2%}"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7
-            thickness = 2
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_size = cv2.getTextSize(text, font, font_scale, text_thickness)[0]
 
             text_x = x1
-            text_y = max(30, y1 - 10)
-            cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 6),
-                          (text_x + text_size[0] + 3, text_y + 3), color, -1)
-            cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+            text_y = max(text_size[1] + text_padding, y1 - text_padding)
+            cv2.rectangle(image, (text_x - text_padding, text_y - text_size[1] - text_padding),
+                          (text_x + text_size[0] + text_padding, text_y + text_padding), color, -1)
+            cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), text_thickness)
 
         # Format output detections
         output_detections = [{
@@ -572,7 +588,7 @@ class CoconutDiseaseDetector:
         print(f"[FALLBACK] Using hardcoded recommendations")
         
         recommendations = {
-            'bud root': {
+            'bud rot': {
                 'fertilizer': 'Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.',
                 'treatment': 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.',
                 'prevention': 'Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown.'
@@ -582,20 +598,15 @@ class CoconutDiseaseDetector:
                 'treatment': 'PRIMARY: Spray Bacillus thuringiensis (Bt) at 1.5-2g per liter every 7 days for 3-4 weeks (organic option). ALTERNATIVE: Spinosad (0.5%) every 5-7 days or Phosphine (0.05%) for severe infestations. MANUAL: Handpick affected leaves in early morning when caterpillars are most active.',
                 'prevention': 'Monitor leaves regularly for egg clusters and caterpillar droppings. Remove heavily infested fronds. Encourage natural predators like birds and parasitic wasps. Maintain tree vigor.'
             },
-            'cercospora': {
-                'fertilizer': 'Fertilize from a soil or leaf analysis. Maintain adequate potassium and chloride nutrition—PCA notes that KCl can increase coconut resistance to leaf-spot diseases. Do not apply fertilizer to replace sanitation or fungicide treatment.',
-                'treatment': 'Prune only heavily affected fronds and remove them from the farm. Have the diagnosis confirmed, then use only a fungicide registered locally for coconut leaf spot, following the label for product, rate, interval, protective equipment, and pre-harvest restrictions.',
-                'prevention': 'Maintain clean culture: remove diseased fallen leaves, improve spacing and airflow, avoid prolonged leaf wetness where possible, keep drainage working, and disinfect pruning tools between palms.'
-            },
             'drying of leaflets': {
                 'fertilizer': 'Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.',
-                'treatment': 'Confirm whether the symptom is leaf rot, nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.',
+                'treatment': 'Confirm whether the symptom is nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.',
                 'prevention': 'Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early.'
             },
-            'leaf rot': {
-                'fertilizer': 'Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.',
-                'treatment': 'Confirm whether the symptom is leaf rot, nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.',
-                'prevention': 'Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early.'
+            'stem bleeding': {
+                'fertilizer': 'Use a soil-test-based fertilizer program to maintain palm vigor. Do not treat stem bleeding with fertilizer alone.',
+                'treatment': 'Have the diagnosis confirmed promptly. Remove diseased bark only when advised by a qualified agricultural specialist, protect exposed tissue as recommended locally, and improve drainage around affected palms.',
+                'prevention': 'Avoid trunk wounds, disinfect tools between palms, maintain drainage, remove severely affected palms when advised, and inspect nearby trees regularly for fresh bleeding lesions.'
             },
             'healthy': {
                 'fertilizer': 'Apply balanced NPK 12:12:12 every 3 months. Use phosphate rich during flowering season.',
@@ -651,11 +662,11 @@ class CoconutDiseaseDetector:
         # Map disease to numeric code
         disease_map = {
             'caterpillars': 0,
-            'cercospora': 1,
+            'stem bleeding': 1,
             'drying of leaflets': 2,
             'healthy': 3,
             'pestalotiopsis': 4,
-            'bud root': 5
+            'bud rot': 5
         }
         disease_code = disease_map.get(disease_name.lower().strip().replace('_', ' '), 3)
         

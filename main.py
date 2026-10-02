@@ -33,7 +33,7 @@ from cv2 import imdecode, imencode, IMREAD_COLOR
 
 from model import detector
 from firebase_config import verify_token, ensure_user_account
-from app.core.config import CORS_ALLOWED_ORIGINS
+from app.core.config import CORS_ALLOWED_ORIGINS, EXPERT_DISEASE_OPTIONS
 from firebase_admin import db
 try:
     from firebase_admin import firestore
@@ -91,11 +91,11 @@ PENDING_VERIFICATION_STATUS = "pending_verification"
 VERIFIED_STATUS = "verified"
 EXPERT_DISEASE_OPTIONS = [
     "Caterpillars",
-    "Cercospora",
     "Drying of Leaflets",
     "Healthy",
     "Pestalotiopsis",
-    "Bud Root",
+    "Bud Rot",
+    "Stem Bleeding",
 ]
 
 UPLOAD_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -856,7 +856,7 @@ class RecommendationRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra = {
             "example": {
-                "disease": "Cercospora",
+                "disease": "Stem Bleeding",
                 "confidence": 0.95
             }
         }
@@ -1748,11 +1748,10 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     detection_colors = {
         "healthy": "#22C55E",
         "caterpillars": "#F97316",
-        "cercospora": "#EC4899",
+        "stem bleeding": "#DC2626",
         "drying of leaflets": "#2563EB",
-        "leaf rot": "#2563EB",
         "pestalotiopsis": "#06B6D4",
-        "bud root": "#D4D800",
+        "bud rot": "#D4D800",
         "bud rot": "#D4D800",
     }
 
@@ -1777,7 +1776,7 @@ def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
 
     def severity_for_disease(disease: str) -> str:
         normalized_disease = disease.lower()
-        if any(name in normalized_disease for name in ("lethal", "bud rot", "bud root")):
+        if any(name in normalized_disease for name in ("lethal", "bud rot")):
             return "Critical"
         if any(name in normalized_disease for name in ("blight", "pestalotiopsis")):
             return "Severe"
@@ -2823,7 +2822,9 @@ async def get_drone_gps_history(last_n: int = 100):
 
 @app.get("/classes")
 def get_classes():
-    return {"classes": detector.class_names}
+    # Keep the public class catalogue aligned with the active application
+    # options, rather than exposing retired labels embedded in old weights.
+    return {"classes": dict(enumerate(EXPERT_DISEASE_OPTIONS))}
 
 @app.get("/")
 def root():
