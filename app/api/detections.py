@@ -16,10 +16,17 @@ from cv2 import IMREAD_COLOR, imdecode, imencode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 
 from app.core.config import (
+    IMAGE_INFERENCE_DAILY_LIMIT,
+    IMAGE_INFERENCE_PER_MINUTE,
+    MAX_IMAGE_UPLOAD_BYTES,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
     UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
+    WS_CONNECTIONS_PER_USER,
+    WS_FRAMES_PER_SECOND,
+    WS_MAX_FRAME_BYTES,
 )
+from app.core.rate_limit import limiter
 from app.core.security import verify_firebase_token
 from app.domain.detection import _extract_primary_disease, apply_record_defaults
 from app.domain.recommendation import build_recommendation_response
@@ -48,24 +55,32 @@ async def detect_image(
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
     # --- Auth (optional — supports offline mode) ---
-    decoded = None
-    is_offline = False
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        try:
-            decoded = verify_token(auth_header.split(" ", 1)[1])
-        except Exception:
-            decoded = None
-    else:
-        is_offline = True
-
-    user_id = decoded.get("uid") if decoded else "offline_user"
-    email = decoded.get("email") if decoded else "offline@local"
-    if decoded is None:
-        is_offline = True
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication is required for image inference")
+    try:
+        decoded = verify_token(auth_header.split(" ", 1)[1])
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
+    user_id = str(decoded.get("uid") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token does not contain a user identity")
+    email = decoded.get("email", "unknown")
+    is_offline = False
 
     # --- Read upload ---
-    contents = await file.read()
+    declared_size = request.headers.get("content-length")
+    # Content-Length includes multipart boundaries and form fields, hence the
+    # small allowance; the actual file bytes are still capped exactly below.
+    if declared_size:
+        try:
+            if int(declared_size) > MAX_IMAGE_UPLOAD_BYTES + 1_000_000:
+                raise HTTPException(status_code=413, detail="Image upload is too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+    contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image upload is too large")
     metadata_reader = get_drone_gps() or init_drone_gps()
     image_metadata = metadata_reader.extract_image_metadata(contents, file.filename)
 
@@ -87,6 +102,10 @@ async def detect_image(
     # --- Inference ---
     np_arr = np.frombuffer(contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(status_code=400, detail="Upload must be a valid image")
+    await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
+    await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     result = detector.predict(image, conf=UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
     all_detections = result["detections"]
 
@@ -190,20 +209,27 @@ async def detect_stream(websocket: WebSocket):
     from firebase_admin import db  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
-    await websocket.accept()
     token = websocket.query_params.get("token")
-    user_id = None
-    user_email = "anonymous"
+    if not token:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+    try:
+        decoded = verify_token(token)
+        user_id = str(decoded.get("uid") or "").strip()
+        if not user_id:
+            raise ValueError("Token does not contain a user identity")
+        user_email = decoded.get("email", "unknown")
+    except Exception:
+        await websocket.close(code=1008, reason="Invalid authentication token")
+        return
 
-    if token:
-        try:
-            decoded = verify_token(token)
-            user_id = decoded.get("uid")
-            user_email = decoded.get("email", "unknown")
-        except Exception as exc:
-            await websocket.send_json({"error": f"Auth failed: {exc}"})
-            await websocket.close()
-            return
+    connection_key = f"stream:{user_id}"
+    try:
+        await limiter.acquire_connection(connection_key, WS_CONNECTIONS_PER_USER)
+    except HTTPException:
+        await websocket.close(code=1013, reason="Too many streaming connections")
+        return
+    await websocket.accept()
 
     frame_buffer = deque(maxlen=2)
     frame_count = 0
@@ -234,13 +260,26 @@ async def detect_stream(websocket: WebSocket):
                 skip_count += 1
                 continue
 
+            if len(data) > WS_MAX_FRAME_BYTES * 2:  # base64 expands image bytes.
+                await websocket.send_json({"error": "Frame is too large"})
+                await websocket.close(code=1009, reason="Frame too large")
+                break
+            try:
+                await limiter.rolling(f"stream-frame:{user_id}", WS_FRAMES_PER_SECOND, 1)
+            except HTTPException:
+                await websocket.send_json({"error": "Frame rate limit exceeded"})
+                continue
+
             frame_count += 1
             if frame_count % 2 != 0:
                 skip_count += 1
                 continue
 
             try:
-                img_bytes = base64.b64decode(data.split(",")[-1])
+                img_bytes = base64.b64decode(data.split(",")[-1], validate=True)
+                if len(img_bytes) > WS_MAX_FRAME_BYTES:
+                    await websocket.send_json({"error": "Frame is too large"})
+                    continue
                 np_arr = np.frombuffer(img_bytes, np.uint8)
                 image = imdecode(np_arr, IMREAD_COLOR)
                 if image is None:
@@ -292,6 +331,9 @@ async def detect_stream(websocket: WebSocket):
             except Exception:
                 continue
     except WebSocketDisconnect:
-        saver_task.cancel()
+        pass
     except Exception:
+        logger.exception("Streaming detection failed")
+    finally:
         saver_task.cancel()
+        await limiter.release_connection(connection_key)

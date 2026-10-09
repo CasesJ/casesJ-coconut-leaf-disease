@@ -590,7 +590,7 @@ class CoconutDiseaseDetector:
         recommendations = {
             'bud rot': {
                 'fertilizer': 'Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.',
-                'treatment': 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.',
+                'treatment': 'Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.',
                 'prevention': 'Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown.'
             },
             'caterpillars': {
@@ -620,8 +620,11 @@ class CoconutDiseaseDetector:
             }
         }
         
-        # Normalize disease name for lookup
+        # Normalize model labels for lookup. Some model versions emit the
+        # misspelling "bud root" although the supported disease is bud rot.
         disease_lower = disease_name.lower().strip().replace('_', ' ')
+        if disease_lower == 'bud root':
+            disease_lower = 'bud rot'
         rec = recommendations.get(disease_lower, recommendations['healthy'])
         
         # Log the lookup for debugging

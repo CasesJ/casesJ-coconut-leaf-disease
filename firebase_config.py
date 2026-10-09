@@ -4,6 +4,8 @@ from firebase_admin import auth as firebase_auth
 import os
 import base64
 import json
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -56,9 +58,7 @@ try:
             # If relative path, make it absolute
             if cred_path and not os.path.isabs(cred_path):
                 cred_path = os.path.join(os.path.dirname(__file__), cred_path)
-                print(f"[CONFIG] Using service account: {cred_path}")
             if cred_path and os.path.exists(cred_path):
-                print(f"[OK] Service account found: {cred_path}")
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred, {
                     'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
@@ -66,8 +66,17 @@ try:
                 })
                 print("[OK] Firebase initialized with service account")
             else:
+                # Token verification only needs the project ID and Google's public
+                # signing certificates.  Do not leave an invalid credentials path
+                # in the process environment: the Admin SDK would otherwise try
+                # to load it later and turn a valid ID token into a FileNotFoundError.
+                if cred_path:
+                    os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+                    print(
+                        "[WARN] Configured Firebase service-account file was not found; "
+                        "starting in token-verification mode"
+                    )
                 # Fallback - initialize with project ID only (limited functionality)
-                print(f"[WARN] Service account not found at {cred_path}, using project ID only")
                 options = {
                     'projectId': FIREBASE_CONFIG['projectId'],
                     'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
@@ -122,6 +131,43 @@ def _decode_unverified_jwt(token: str) -> dict:
     except Exception as e:
         raise Exception(f"Offline token decode failed: {str(e)}")
 
+
+def _verify_token_with_firebase_auth_api(token: str) -> dict:
+    """Verify an ID token through Firebase Auth when Admin credentials are absent.
+
+    Firebase validates the submitted ID token server-side. The API key only
+    identifies the Firebase project and is already used by the web client.
+    """
+    payload = json.dumps({"idToken": token}).encode("utf-8")
+    endpoint = (
+        "https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="
+        f"{FIREBASE_CONFIG['apiKey']}"
+    )
+    request = urlrequest.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        raise Exception("Firebase rejected the ID token") from exc
+    except urlerror.URLError as exc:
+        raise Exception("Could not reach Firebase Auth to verify the ID token") from exc
+
+    users = body.get("users") or []
+    if not users or not users[0].get("localId"):
+        raise Exception("Firebase did not return an identity for this token")
+    user = users[0]
+    return {
+        "uid": user["localId"],
+        "email": user.get("email"),
+        "email_verified": user.get("emailVerified", False),
+        "firebase": {"sign_in_provider": "firebase-auth-rest"},
+    }
+
 def verify_token(token: str):
     """
     Verify Firebase ID token
@@ -133,6 +179,17 @@ def verify_token(token: str):
         decoded_token = firebase_auth.verify_id_token(token, clock_skew_seconds=60)
         return decoded_token
     except Exception as e:
+        # Local development commonly has no Admin service account. Firebase's
+        # lookup endpoint still validates the ID token server-side.
+        if "default credentials were not found" in str(e).lower():
+            try:
+                decoded_token = _verify_token_with_firebase_auth_api(token)
+                print("[INFO] Firebase ID token verified through Firebase Auth API")
+                return decoded_token
+            except Exception as fallback_error:
+                raise Exception(
+                    f"Invalid token: Firebase Auth verification failed: {fallback_error}"
+                ) from e
         if ALLOW_UNVERIFIED_FIREBASE_TOKENS:
             try:
                 decoded_token = _decode_unverified_jwt(token)

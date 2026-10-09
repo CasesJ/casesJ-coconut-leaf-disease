@@ -1032,7 +1032,7 @@ async def verify_user_token(request: LoginRequest):
         print(f"{'='*60}\n")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}"
+            detail="Could not verify your sign-in. Please sign out and sign in again."
         )
 
 @app.get("/auth/user")

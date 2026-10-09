@@ -5,7 +5,7 @@
 1. Create and activate a Python virtual environment.
 2. Run `pip install -r requirements.txt`.
 3. Configure Firebase credentials and `.env` when remote services are required.
-4. Run `uvicorn main:app --reload`.
+4. Run `uvicorn app.main:app --reload`.
 5. Open `http://127.0.0.1:8000`.
 
 ## Current workflow

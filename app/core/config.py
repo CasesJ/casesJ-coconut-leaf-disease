@@ -34,6 +34,34 @@ CORS_ALLOWED_ORIGINS: list[str] = [
     if origin.strip()
 ] or list(_DEFAULT_CORS_ORIGINS)
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    value = os.getenv(name, str(default)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive integer") from exc
+    if parsed < 1:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return parsed
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Abuse controls. Image quotas use a user-specific 24-hour window starting at
+# their first upload, evaluated in Philippine time (Asia/Manila).
+IMAGE_INFERENCE_DAILY_LIMIT = _positive_int_env("IMAGE_INFERENCE_DAILY_LIMIT", 100)
+IMAGE_INFERENCE_PER_MINUTE = _positive_int_env("IMAGE_INFERENCE_PER_MINUTE", 10)
+EXPORTS_PER_MINUTE = _positive_int_env("EXPORTS_PER_MINUTE", 5)
+AUTH_TOKEN_CHECKS_PER_MINUTE = _positive_int_env("AUTH_TOKEN_CHECKS_PER_MINUTE", 10)
+WS_CONNECTIONS_PER_USER = _positive_int_env("WS_CONNECTIONS_PER_USER", 2)
+WS_FRAMES_PER_SECOND = _positive_int_env("WS_FRAMES_PER_SECOND", 10)
+WS_MAX_FRAME_BYTES = _positive_int_env("WS_MAX_FRAME_BYTES", 3_000_000)
+MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 10_000_000)
+TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
+
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05

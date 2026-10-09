@@ -3,12 +3,15 @@ app/api/records.py — Public and authenticated record retrieval and CSV export.
 """
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.domain.detection import apply_record_defaults
 from app.services.detection_service import get_user_records
 from app.services.export_service import generate_detections_csv
+from app.core.config import EXPORTS_PER_MINUTE
+from app.core.rate_limit import limiter
+from app.core.security import verify_firebase_token
 
 router = APIRouter(tags=["records"])
 logger = logging.getLogger(__name__)
@@ -32,17 +35,11 @@ async def get_records(user_id: str = None):
 
 
 @router.get("/api/export-csv")
-async def export_detections_csv(request: Request):
+async def export_detections_csv(decoded: dict = Depends(verify_firebase_token)):
     """Export all disease detections as CSV with inventory summary."""
+    user_id = str(decoded.get("uid") or "")
+    await limiter.rolling(f"export:{user_id}", EXPORTS_PER_MINUTE, 60)
     try:
-        from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            try:
-                verify_token(auth_header.split(" ", 1)[1])
-            except Exception:
-                pass
-
         csv_content = generate_detections_csv()
         return StreamingResponse(
             iter([csv_content]),

@@ -56,7 +56,43 @@ window.switchAuthMode = function switchAuthMode() {
     btnText.textContent = 'Sign Up';
     toggleText.innerHTML = 'Already have an account? <a onclick="switchAuthMode()">Login</a>';
   }
+
+  const passwordInput = document.getElementById('password');
+  const passwordMeter = document.getElementById('password-meter');
+  if (passwordMeter) passwordMeter.classList.toggle('visible', authMode === 'signup');
+  if (passwordInput) {
+    passwordInput.value = '';
+    updatePasswordStrength('');
+  }
 };
+
+window.updatePasswordStrength = function updatePasswordStrength(password) {
+  const meter = document.getElementById('password-meter');
+  const label = document.getElementById('password-meter-label');
+  if (!meter || !label) return;
+
+  let score = 0;
+  if (password.length >= 8) score++;
+  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+  if (/\d/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+
+  const levels = [
+    ['', 'Use 8+ characters with a mix of letters, numbers, and symbols.'],
+    ['weak', 'Weak password'],
+    ['fair', 'Fair password'],
+    ['good', 'Good password'],
+    ['strong', 'Strong password']
+  ];
+  const [strength, text] = levels[score];
+  meter.dataset.strength = strength;
+  label.textContent = text;
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  const passwordInput = document.getElementById('password');
+  if (passwordInput) passwordInput.addEventListener('input', () => updatePasswordStrength(passwordInput.value));
+});
 
 window.handleAuthSubmit = async function handleAuthSubmit(event) {
   event.preventDefault();
@@ -656,7 +692,7 @@ function renderDashboardHighlights(records) {
 function getTreatmentRecommendation(diseaseName) {
   const normalized = String(diseaseName).toLowerCase();
   if (normalized.includes('stem bleeding')) return 'Promptly inspect the trunk for bleeding lesions, improve drainage, avoid bark wounds, and have an agricultural specialist confirm the diagnosis and recommend a locally registered treatment.';
-  if (normalized.includes('bud') || normalized.includes('root')) return 'Mechanical Method: Cut and burn infected palms as soon as the disease is detected to avoid further spread.\nCultural Method: Adopt proper spacing and avoid high-density planting.';
+  if (normalized.includes('bud') || normalized.includes('root')) return 'Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.';
   if (normalized.includes('pestalotiopsis')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
   if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
   return 'Inspect the field closely, isolate the affected trees, and consult a local agronomist for treatment guidance.';

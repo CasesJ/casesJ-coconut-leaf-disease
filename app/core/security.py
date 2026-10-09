@@ -22,9 +22,10 @@ async def verify_firebase_token(credentials: Any = Depends(_security)) -> dict:
     try:
         return verify_token(token)
     except Exception as exc:
+        logger.warning("Firebase bearer-token verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
+            detail="Could not verify your sign-in. Please sign out and sign in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

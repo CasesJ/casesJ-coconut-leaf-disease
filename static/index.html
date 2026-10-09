@@ -104,6 +104,8 @@
       display:flex; 
       align-items:center; 
       justify-content:center;
+      padding:1.5rem;
+      overflow-y:auto;
       background-image: url('/static/coco-farm.jpg');
       background-size: cover;
       background-position: center;
@@ -119,8 +121,8 @@
       pointer-events:none;
     }
     .auth-screen.hidden { display:none; }
-    .auth-container { width:90%; max-width:420px; position:relative; z-index:2; }
-    .auth-header { text-align:center; margin-bottom:clamp(2rem, 6vw, 2.5rem); padding:clamp(1rem, 3vw, 1.5rem); }
+    .auth-container { width:min(100%, 420px); position:relative; z-index:2; transform:translateY(clamp(-4rem, -7vh, -2rem)); }
+    .auth-header { text-align:center; margin-bottom:clamp(1rem, 3vw, 1.5rem); padding:clamp(0.5rem, 2vw, 1rem); }
     .auth-header .logo-icon { width:clamp(2.75rem, 8vw, 3.5rem); height:clamp(2.75rem, 8vw, 3.5rem); background: linear-gradient(135deg, var(--accent) 0%, var(--bright) 100%); border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 auto clamp(1rem, 3vw, 1.25rem); box-shadow: 0 8px 32px rgba(62, 201, 122, 0.3); }
     .auth-header .logo-icon svg { width:clamp(1.2rem, 4vw, 1.5rem); height:clamp(1.2rem, 4vw, 1.5rem); stroke:#ffffff; fill:none; stroke-width:1.8; stroke-linecap:round; }
     .auth-header h1 { font-family:'DM Serif Display',serif; font-size:clamp(2rem, 8vw, 2.5rem); font-weight:700; color:#ffffff; margin-bottom:0.5rem; text-shadow: 0 3px 12px rgba(11, 42, 31, 0.5); letter-spacing:-0.5px; }
@@ -145,6 +147,19 @@
     .form-footer { text-align:center; margin-top:clamp(1rem, 2vw, 1.25rem); font-size:var(--text-sm); color:var(--text3); }
     .form-footer a { color:var(--bright); cursor:pointer; text-decoration:none; font-weight:600; }
     .form-footer a:hover { text-decoration:underline; }
+    .password-meter { display:none; margin-top:0.65rem; }
+    .password-meter.visible { display:block; }
+    .password-meter-track { display:flex; gap:0.3rem; }
+    .password-meter-bar { height:0.3rem; flex:1; border-radius:999px; background:#e2e8e4; transition:background-color .2s; }
+    .password-meter-label { display:block; margin-top:0.4rem; color:var(--text3); font-size:var(--text-xs); }
+    .password-meter[data-strength="weak"] .password-meter-bar:nth-child(1) { background:var(--red); }
+    .password-meter[data-strength="fair"] .password-meter-bar:nth-child(-n+2) { background:var(--yellow); }
+    .password-meter[data-strength="good"] .password-meter-bar:nth-child(-n+3),
+    .password-meter[data-strength="strong"] .password-meter-bar { background:var(--bright); }
+    @media (max-height:760px) {
+      .auth-container { transform:none; }
+      .auth-header { margin-bottom:0.75rem; padding:0; }
+    }
 
     /* MAIN APP (hidden until logged in) */
     .app-screen { display:none; width:100%; max-width:none; min-width:0; }
@@ -1343,6 +1358,10 @@
         <div class="form-group">
           <label for="password">Password</label>
           <input type="password" id="password" required placeholder="••••••••" />
+        </div>
+        <div class="password-meter" id="password-meter" aria-live="polite" aria-label="Password strength">
+          <div class="password-meter-track" aria-hidden="true"><span class="password-meter-bar"></span><span class="password-meter-bar"></span><span class="password-meter-bar"></span><span class="password-meter-bar"></span></div>
+          <span class="password-meter-label" id="password-meter-label">Use 8+ characters with a mix of letters, numbers, and symbols.</span>
         </div>
         <button type="submit" class="btn-submit" id="submit-btn">
           <span class="loading-spinner" id="spinner"></span>
