@@ -31,37 +31,50 @@ ALLOW_UNVERIFIED_FIREBASE_TOKENS = os.getenv(
 
 # Initialize Firebase Admin SDK
 # For local testing without service account, we'll use basic setup
-# In production, you should download service account key from Firebase Console
-# and set GOOGLE_APPLICATION_CREDENTIALS environment variable
+# In deployment, prefer the FIREBASE_SERVICE_ACCOUNT_JSON secret.  For local
+# development, GOOGLE_APPLICATION_CREDENTIALS may point to an ignored file.
 
 try:
     if not firebase_admin._apps:
-        # Try to initialize with service account if available
+        # Prefer the deployment secret so no credential file is required.
+        service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
         cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-        
-        # If relative path, make it absolute
-        if cred_path and not os.path.isabs(cred_path):
-            cred_path = os.path.join(os.path.dirname(__file__), cred_path)
-            print(f"[CONFIG] Using service account: {cred_path}")
-        
-        if cred_path and os.path.exists(cred_path):
-            print(f"[OK] Service account found: {cred_path}")
-            cred = credentials.Certificate(cred_path)
+        if service_account_json:
+            try:
+                service_account_info = json.loads(service_account_json)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "FIREBASE_SERVICE_ACCOUNT_JSON must contain valid service-account JSON"
+                ) from exc
+            cred = credentials.Certificate(service_account_info)
             firebase_admin.initialize_app(cred, {
                 'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
                 'storageBucket': FIREBASE_STORAGE_BUCKET,
             })
-            print("[OK] Firebase initialized with service account")
+            print("[OK] Firebase initialized with deployment secret")
         else:
-            # Fallback - initialize with project ID only (limited functionality)
-            print(f"[WARN] Service account not found at {cred_path}, using project ID only")
-            options = {
-                'projectId': FIREBASE_CONFIG['projectId'],
-                'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
-                'storageBucket': FIREBASE_STORAGE_BUCKET,
-            }
-            firebase_admin.initialize_app(options=options)
-            print("[WARN] Firebase initialized with project ID (read-only mode)")
+            # If relative path, make it absolute
+            if cred_path and not os.path.isabs(cred_path):
+                cred_path = os.path.join(os.path.dirname(__file__), cred_path)
+                print(f"[CONFIG] Using service account: {cred_path}")
+            if cred_path and os.path.exists(cred_path):
+                print(f"[OK] Service account found: {cred_path}")
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
+                    'storageBucket': FIREBASE_STORAGE_BUCKET,
+                })
+                print("[OK] Firebase initialized with service account")
+            else:
+                # Fallback - initialize with project ID only (limited functionality)
+                print(f"[WARN] Service account not found at {cred_path}, using project ID only")
+                options = {
+                    'projectId': FIREBASE_CONFIG['projectId'],
+                    'databaseURL': 'https://coconut-leaf-disease-dcf9a-default-rtdb.firebaseio.com',
+                    'storageBucket': FIREBASE_STORAGE_BUCKET,
+                }
+                firebase_admin.initialize_app(options=options)
+                print("[WARN] Firebase initialized with project ID (read-only mode)")
 except ValueError as e:
     # App already initialized
     print(f"[INFO] Firebase already initialized: {e}")
