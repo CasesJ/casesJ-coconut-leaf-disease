@@ -5,7 +5,7 @@ Start the server with:
     python run.py
     uvicorn app.main:app --reload
 
-The original main.py is preserved for reference and backward compatibility.
+The application is implemented in ``app.main``.
 """
 import os
 import socket

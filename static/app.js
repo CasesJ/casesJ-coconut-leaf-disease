@@ -333,6 +333,7 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   
   // ✅ Load saved map pins from Firebase when user logs in
   loadSavedMapPins(user.uid);
+  loadFarmLocation();
   // ✅ Load dashboard stats
   if (typeof loadDashboardStats === 'function') {
     setTimeout(loadDashboardStats, 300);
@@ -796,7 +797,7 @@ window.addEventListener('load', () => {
   };
   
   // ✅ Ensure your target center coordinate is defined
-  const farmCenter = [125.6659531, 7.3137591];
+  const farmCenter = [farmLocation.longitude, farmLocation.latitude];
   
   // Initialize main disease map with 3D support
   mainMap = new maplibregl.Map({
@@ -820,13 +821,7 @@ window.addEventListener('load', () => {
     mainMap.setTerrain({ source: 'dem-src', exaggeration: 1.5 });
     
     // ✅ Precise bounding coordinates mapped exclusively around the inner tree block
-    const farmBoundaryCoordinates = [
-        [125.6651531, 7.3145291], // Top-left corner of the mapped area
-        [125.6667531, 7.3145291], // Top-right corner
-        [125.6667531, 7.3129791], // Bottom-right corner
-        [125.6651531, 7.3129791], // Bottom-left corner
-        [125.6651531, 7.3145291]  // Closes the loop cleanly at the start point
-    ];
+    const farmBoundaryCoordinates = farmBoundaryCoordinatesFor(farmLocation);
 
     // Add the custom GeoJSON Data Source
     mainMap.addSource('lanticse-farm-src', {
@@ -1251,14 +1246,14 @@ async function reverseGeocode(lat, lng) {
   const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   if(geoCache[key]) return geoCache[key];
   
-  // Use the configured New Visayas map area name for points inside its boundary.
-  const farmLongMin = 125.6651531;
-  const farmLongMax = 125.6667531;
-  const farmLatMin = 7.3129791;
-  const farmLatMax = 7.3145291;
+  // Use the configured Catipunan map area name for points inside its boundary.
+  const farmLongMin = 125.63019;
+  const farmLongMax = 125.63179;
+  const farmLatMin = 7.30081;
+  const farmLatMax = 7.30235;
   
   if (lng >= farmLongMin && lng <= farmLongMax && lat >= farmLatMin && lat <= farmLatMax) {
-    const customLocation = "8 New Visayas St., Panabo, Davao del Norte";
+    const customLocation = "Catipunan, Panabo City, Davao del Norte";
     geoCache[key] = customLocation;
     return customLocation;
   }
@@ -1335,7 +1330,7 @@ async function loadSavedMapPins(userId) {
       // Restore each pin
       for (const pinId in pinsData) {
         const pin = pinsData[pinId];
-        if (pin.lat && pin.lng) {
+        if (pin.lat && pin.lng && pin.source !== 'farm_default') {
           addPin(pin.lat, pin.lng, pin.label, pin.confidence, pin.source);
         }
       }
@@ -1572,14 +1567,51 @@ function showRecordLocationOnMap(lat, lng) {
 }
 
 // ── Area-based GIS monitoring ──
-const AREA_MONITORING_BOUNDS = { minLat: 7.3129791, maxLat: 7.3145291, minLng: 125.6651531, maxLng: 125.6667531 };
+const DEFAULT_FARM_LOCATION = { latitude: 7.30158, longitude: 125.63099 };
+let farmLocation = { ...DEFAULT_FARM_LOCATION };
+let AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
 let areaMonitoringLoaded = false;
+
+function farmBoundsFor(center) {
+  return { minLat: center.latitude - 0.00077, maxLat: center.latitude + 0.00077,
+    minLng: center.longitude - 0.00080, maxLng: center.longitude + 0.00080 };
+}
+function farmBoundaryCoordinatesFor(center) {
+  const bounds = farmBoundsFor(center);
+  return [[bounds.minLng, bounds.maxLat], [bounds.maxLng, bounds.maxLat],
+    [bounds.maxLng, bounds.minLat], [bounds.minLng, bounds.minLat], [bounds.minLng, bounds.maxLat]];
+}
+function applyFarmLocation(center) {
+  const latitude = Number(center?.latitude), longitude = Number(center?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  farmLocation = { latitude, longitude };
+  AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
+  const source = mainMap?.getSource?.('lanticse-farm-src');
+  if (source) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
+  if (mapsReady && mainMap) mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
+  if (mapsReady && miniMap) miniMap.flyTo({ center: [longitude, latitude], zoom: 13.5 });
+  return true;
+}
+async function loadFarmLocation() {
+  if (!currentToken) return;
+  try {
+    const response = await fetch('/farm/location', { headers: { Authorization: `Bearer ${currentToken}` } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (applyFarmLocation(payload.farm_center)) loadAreaMonitoring();
+  } catch (error) { console.warn('Could not load farm location:', error); }
+}
 
 function getRecordCoordinates(record) {
   const gps = typeof record?.gps_data === 'string' ? (() => { try { return JSON.parse(record.gps_data); } catch (_) { return {}; } })() : (record?.gps_data || record?.gps || {});
-  const lat = Number(record?.lat ?? gps.latitude ?? gps.lat);
-  const lng = Number(record?.lng ?? gps.longitude ?? gps.lng);
-  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 ? { lat, lng } : null;
+  const metadataGps = record?.image_metadata?.gps || {};
+  const lat = Number(record?.lat ?? gps.latitude ?? gps.lat ?? metadataGps.latitude ?? metadataGps.lat);
+  const lng = Number(record?.lng ?? gps.longitude ?? gps.lng ?? metadataGps.longitude ?? metadataGps.lng);
+  const source = String(record?.gps_source ?? gps.source ?? '').toLowerCase();
+  if (['exif', 'dji_exif'].includes(source) && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat, lng };
+  const metadataLat = Number(metadataGps.latitude ?? metadataGps.lat);
+  const metadataLng = Number(metadataGps.longitude ?? metadataGps.lng);
+  return Number.isFinite(metadataLat) && Number.isFinite(metadataLng) && metadataLat >= -90 && metadataLat <= 90 && metadataLng >= -180 && metadataLng <= 180 ? { lat: metadataLat, lng: metadataLng } : null;
 }
 
 function areaColor(prevalence) {
@@ -1942,6 +1974,9 @@ async function detectImage(file){
     throw new Error(`Server error ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
   }
   const data = await res.json();
+  // Reflect a newly established farm immediately; no sign-out/sign-in cycle
+  // is needed before the disease map and its monitoring cells use it.
+  if (applyFarmLocation(data.farm_center)) loadAreaMonitoring();
   if (data.image_metadata?.is_dji) {
     const camera = data.image_metadata.camera_model || 'DJI drone';
     showToast(`DJI metadata read from ${camera}.`);
@@ -2745,6 +2780,10 @@ function renderRecordCard(record, idx, options = {}) {
     lat = record.gps.lat || record.gps.latitude;
     lng = record.gps.lng || record.gps.longitude;
     gpsSource = record.gps.source || gpsSource;
+  } else if (record.image_metadata?.gps) {
+    lat = record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat;
+    lng = record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng;
+    gpsSource = record.image_metadata.gps_source || 'exif';
   }
 
   if (lat !== null && lng !== null) {
@@ -2752,13 +2791,18 @@ function renderRecordCard(record, idx, options = {}) {
     lng = parseFloat(lng);
   }
 
-  if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-    lat = 7.3427;
-    lng = 125.6290;
-    gpsSource = 'farm_default';
+  if (!['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase()) && record.image_metadata?.gps) {
+    lat = Number(record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat);
+    lng = Number(record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng);
+    gpsSource = record.image_metadata.gps_source || 'exif';
   }
 
-  const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+  const hasEmbeddedGps = ['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase())
+    && Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+  const mapButtonHtml = hasEmbeddedGps
+    ? `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`
+    : '';
   const imageLabel = record.filename || record.image_path || 'Unknown image';
   const imagePreviewHtml = previewImage
     ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
@@ -2770,13 +2814,15 @@ function renderRecordCard(record, idx, options = {}) {
     : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
          No saved image file was found for this record yet.
        </div>`;
-  const locationDisplay = `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
-    <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Location Detected</div>
-    <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
-    <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
-    ${isExpertView ? `<div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Image:</strong> ${imageLabel}</div>` : ''}
-    ${isExpertView ? '' : mapButtonHtml}
-  </div>`;
+  const locationDisplay = hasEmbeddedGps
+    ? `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
+        <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Embedded GPS Location</div>
+        <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
+        <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
+        ${isExpertView ? `<div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Image:</strong> ${imageLabel}</div>` : ''}
+        ${isExpertView ? '' : mapButtonHtml}
+      </div>`
+    : `<div style="margin-top:10px;padding:10px;background:rgba(100,116,139,.10);border-radius:6px;border-left:4px solid #64748b;font-size:12px;color:#475569;"><strong>📍 Location: Unknown</strong><br>This image has no embedded GPS coordinates, so it is not shown on the map.</div>`;
 
   const expertActions = isExpertView && record.verification_status !== 'verified'
     ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
@@ -3040,12 +3086,12 @@ async function loadUserRecords() {
       const recordKey = getRecordKey(record, idx);
       const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot || null;
       
-      // ✅ Handle GPS from ALL possible sources with ALWAYS-AVAILABLE fallback
+      // Read only GPS coordinates that were extracted from the uploaded image.
       let lat = null;
       let lng = null;
       let gpsSource = 'unknown';
       
-      // Try multiple sources for lat/lng extraction
+      // Records may expose the same persisted EXIF GPS through legacy shapes.
       if (record.lat && record.lng) {
         lat = record.lat;
         lng = record.lng;
@@ -3059,6 +3105,10 @@ async function loadUserRecords() {
         lat = record.gps.lat || record.gps.latitude;
         lng = record.gps.lng || record.gps.longitude;
         gpsSource = record.gps.source || gpsSource;
+      } else if (record.image_metadata?.gps) {
+        lat = record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat;
+        lng = record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng;
+        gpsSource = record.image_metadata.gps_source || 'exif';
       }
       
       // Convert to numbers if they exist
@@ -3066,33 +3116,39 @@ async function loadUserRecords() {
         lat = parseFloat(lat);
         lng = parseFloat(lng);
       }
-      
-      // ✅ FALLBACK: Always provide Lanticse farm location if no GPS data
-      if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-        lat = 7.3427;
-        lng = 125.6290;
-        gpsSource = 'farm_default';
-        console.log(`📍 Record ${idx}: No GPS found - using Lanticse farm default`);
+
+      if (!['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase()) && record.image_metadata?.gps) {
+        lat = Number(record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat);
+        lng = Number(record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng);
+        gpsSource = record.image_metadata.gps_source || 'exif';
       }
       
-      // Debug log
-      console.log(`📍 Record ${idx}: Location - ${lat.toFixed(6)}, ${lng.toFixed(6)} (source: ${gpsSource})`);
+      const hasEmbeddedGps = ['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase())
+        && Number.isFinite(lat) && Number.isFinite(lng)
+        && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+      console.log(hasEmbeddedGps
+        ? `📍 Record ${idx}: Embedded GPS - ${lat.toFixed(6)}, ${lng.toFixed(6)} (source: ${gpsSource})`
+        : `📍 Record ${idx}: No embedded GPS metadata`);
       
       // Build location display with map button
       let locationDisplay = '';
-      const mapButtonHtml = `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`;
+      const mapButtonHtml = hasEmbeddedGps
+        ? `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`
+        : '';
       const recommendationButtonHtml = status.cls === 'verified'
         ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)' style="padding:6px 12px;font-size:11px;margin-top:8px;background:#f0b429;color:#0e1c15;border:none;border-radius:4px;cursor:pointer;"><span>＋ Recommendation</span></button>`
         : `<button class="btn btn-o" disabled style="padding:6px 12px;font-size:11px;margin-top:8px;background:#edf1ec;color:#7a9a8a;border:none;border-radius:4px;cursor:not-allowed;"><span>＋ Recommendation (Pending)</span></button>`;
-      locationDisplay = `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
-        <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Location Detected</div>
-        <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
-        <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;align-items:center;">
-          ${mapButtonHtml}
-          ${recommendationButtonHtml}
-        </div>
-      </div>`;
+      locationDisplay = hasEmbeddedGps
+        ? `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
+            <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Embedded GPS Location</div>
+            <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
+            <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;align-items:center;">
+              ${mapButtonHtml}
+              ${recommendationButtonHtml}
+            </div>
+          </div>`
+        : `<div style="margin-top:10px;padding:10px;background:rgba(100,116,139,.10);border-radius:6px;border-left:4px solid #64748b;font-size:12px;color:#475569;"><strong>📍 Location: Unknown</strong><br>This image has no embedded GPS coordinates, so it is not shown on the map.<div style="margin-top:8px;">${recommendationButtonHtml}</div></div>`;
       const recommendationPanel = status.cls === 'verified'
         ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';

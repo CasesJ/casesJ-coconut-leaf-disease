@@ -11,4 +11,4 @@ CoconutAI is local-first. Detection records are written to SQLite through `hybri
 
 `hybrid_storage.db` holds inference data, GPS details, verification state, and recommendation snapshots. Images are stored in `static/uploads/` and `static/annotated_uploads/`.
 
-Expert actions update verification and recommendation fields across available stores. Run the application normally with `uvicorn main:app --reload`; no separate storage service is required.
+Expert actions update verification and recommendation fields across available stores. Run the application normally with `uvicorn app.main:app --reload`; no separate storage service is required.

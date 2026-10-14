@@ -3,7 +3,7 @@
 ## Application will not start
 
 - Run `pip install -r requirements.txt` in the active virtual environment.
-- Start from the repository root with `uvicorn main:app --reload`.
+- Start from the repository root with `uvicorn app.main:app --reload`.
 - If port 8000 is busy, stop the existing server or select another port.
 
 ## Login or Firebase problems

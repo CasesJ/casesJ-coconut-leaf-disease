@@ -66,15 +66,14 @@ TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05
 UPLOAD_RECORD_CONFIDENCE_THRESHOLD: float = 0.05
-# Uploads whose primary detection is strictly above this value are automatically
-# verified and do not need to enter the expert-review queue.
-AUTO_VERIFICATION_CONFIDENCE_THRESHOLD: float = 0.50
+# Confidence affects how results are displayed and prioritised, but never
+# verifies an upload. Every upload requires an expert review.
 
-# Default farm location shown at the center of the disease map (Panabo, Davao
-# del Norte).  Uploads without usable GPS metadata are recorded here so they
-# appear on the farm map instead of at a separate generic fallback location.
-DEFAULT_FARM_LATITUDE: float = 7.3137591
-DEFAULT_FARM_LONGITUDE: float = 125.6659531
+# Default farm location shown at the center of the disease map (Catipunan,
+# Panabo City, Davao del Norte). It is a map viewport only: uploads without
+# usable embedded GPS metadata must remain unmapped.
+DEFAULT_FARM_LATITUDE: float = 7.30158
+DEFAULT_FARM_LONGITUDE: float = 125.63099
 DEFAULT_FARM_GPS_ACCURACY_METERS: float = 5.0
 
 # ── Verification status labels ─────────────────────────────────────────────────

@@ -4,6 +4,7 @@ app/api/detections.py — Image upload detection and WebSocket stream endpoints.
 import asyncio
 import base64
 import logging
+import math
 import time
 import uuid
 from collections import deque
@@ -36,6 +37,7 @@ from app.services.detection_service import (
     save_detection_record,
     update_record_everywhere,
 )
+from app.services.farm_service import get_farm_center, set_initial_farm_center
 
 router = APIRouter(tags=["detections"])
 logger = logging.getLogger(__name__)
@@ -86,16 +88,30 @@ async def detect_image(
 
     # --- GPS extraction ---
     drone_gps = get_drone_gps()
-    gps_source = "none"
+    # An upload is located only when its own embedded EXIF GPS is usable.
+    # Do not use form/browser/map defaults for uploaded drone imagery.
+    gps_source = "unknown"
     gps_accuracy = None
     if drone_gps:
         exif_gps = drone_gps.extract_gps_from_image(contents, file.filename)
-        if exif_gps:
+        if (
+            exif_gps
+            and math.isfinite(exif_gps.latitude)
+            and math.isfinite(exif_gps.longitude)
+            and -90 <= exif_gps.latitude <= 90
+            and -180 <= exif_gps.longitude <= 180
+        ):
             lat, lng = exif_gps.latitude, exif_gps.longitude
             gps_source = exif_gps.source
             gps_accuracy = exif_gps.accuracy if exif_gps.accuracy is not None else 10.0
+            # Keep the general image metadata and canonical GPS payload aligned
+            # so every storage backend and the records UI see the same values.
+            image_metadata["gps"] = {"latitude": lat, "longitude": lng}
+            image_metadata["gps_source"] = gps_source
         else:
             lat, lng = None, None
+            image_metadata["gps"] = None
+            image_metadata["gps_source"] = "unknown"
     else:
         lat, lng = None, None
 
@@ -104,6 +120,11 @@ async def detect_image(
     image = imdecode(np_arr, IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
+    # The first valid image with embedded coordinates establishes the farm,
+    # even if it contains no disease detection.
+    farm_center = None
+    if lat is not None and lng is not None and gps_source in {"exif", "dji_exif"}:
+        farm_center = set_initial_farm_center(user_id, lat, lng, gps_source)
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     result = detector.predict(image, conf=UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
@@ -150,8 +171,16 @@ async def detect_image(
             "classes": detector.class_names,
         },
         "gps_lat": lat, "gps_lng": lng, "gps_accuracy": gps_accuracy,
-        "gps_source": gps_source, "image_metadata": image_metadata,
+        "gps_source": gps_source, "gps_metadata_found": lat is not None and lng is not None,
+        "image_metadata": image_metadata,
+        "farm_center": farm_center,
     }
+
+
+@router.get("/farm/location")
+async def get_my_farm_location(decoded: dict = Depends(verify_firebase_token)):
+    """Return the authenticated user's established farm centre."""
+    return {"farm_center": get_farm_center(str(decoded.get("uid") or "").strip())}
 
 
 @router.put("/detections/my-records/{record_id}/low-confidence-recommendation")

@@ -11,7 +11,6 @@ from typing import Optional
 
 from app.core.config import (
     ANNOTATED_IMAGE_DIR,
-    AUTO_VERIFICATION_CONFIDENCE_THRESHOLD,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_IMAGE_DIR,
     VERIFIED_STATUS,
@@ -100,13 +99,12 @@ def normalize_verification_status(record: dict) -> str:
     status_value = str(record.get("verification_status") or "").strip().lower()
     source = str(record.get("source") or "upload").lower()
 
-    # Correct records written before automatic verification was introduced (or
-    # by an older running server). A high-confidence upload must never remain
-    # in the expert's pending queue merely because it carries an old status.
-    if source == "upload" and upload_verification_status(
-        record.get("detections") or record.get("inference_results") or [], source
-    ) == VERIFIED_STATUS:
-        return VERIFIED_STATUS
+    # High confidence is not expert verification.  Older automatic-verification
+    # records did not record an expert or verification time, so return them to
+    # the pending queue while preserving genuine expert decisions.
+    if source == "upload" and status_value == VERIFIED_STATUS:
+        if not record.get("verified_by") and not record.get("verified_by_uid") and not record.get("verified_at"):
+            return PENDING_VERIFICATION_STATUS
 
     if status_value in {PENDING_VERIFICATION_STATUS, VERIFIED_STATUS}:
         return status_value
@@ -218,23 +216,10 @@ def _extract_primary_disease(record: dict) -> tuple[str, float]:
 
 
 def upload_verification_status(detections: list[dict], source: str) -> str:
-    """Return the initial status for a record based on its primary confidence."""
+    """Return the initial status for a newly submitted detection record."""
     if str(source or "").lower() != "upload":
         return VERIFIED_STATUS
-
-    primary_confidence = max(
-        (
-            float(detection.get("confidence") or 0)
-            for detection in detections
-            if isinstance(detection, dict)
-        ),
-        default=0.0,
-    )
-    return (
-        VERIFIED_STATUS
-        if primary_confidence > AUTO_VERIFICATION_CONFIDENCE_THRESHOLD
-        else PENDING_VERIFICATION_STATUS
-    )
+    return PENDING_VERIFICATION_STATUS
 
 
 def _serialize_detection_payload(

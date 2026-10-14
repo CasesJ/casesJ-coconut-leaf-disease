@@ -142,6 +142,9 @@
         }
 
         @media (max-width: 768px) {
+            body {
+                padding: 14px;
+            }
             .content-wrapper {
                 grid-template-columns: 1fr;
             }
@@ -153,6 +156,16 @@
             #map {
                 height: 350px;
             }
+        }
+
+        @media (max-width: 480px) {
+            body { padding: 10px; }
+            .header { margin-bottom: 20px; }
+            .header h1 { font-size: 1.55em; }
+            .header p { font-size: 0.95em; line-height: 1.45; }
+            #map { height: min(62vh, 330px); min-height: 260px; }
+            .location-box { padding: 18px; }
+            .coordinates-display { font-size: 0.95em; overflow-wrap: anywhere; }
         }
 
         .map-marker-info {

@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -68,16 +69,43 @@ class DroneGPS:
             return None
         return self._history[-1]
 
+    @staticmethod
+    def _gps_from_metadata(metadata: dict) -> Optional[EXIFGPS]:
+        """Build a validated GPS result from Pillow-normalized image metadata."""
+        gps_data = metadata.get("gps") if isinstance(metadata, dict) else None
+        if not isinstance(gps_data, dict):
+            return None
+        try:
+            latitude = float(gps_data["latitude"])
+            longitude = float(gps_data["longitude"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not (math.isfinite(latitude) and math.isfinite(longitude)):
+            return None
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return None
+        return EXIFGPS(
+            latitude=latitude,
+            longitude=longitude,
+            altitude=0.0,
+            accuracy=None,
+            source="dji_exif" if metadata.get("is_dji") else "exif",
+        )
+
     def extract_gps_from_image(self, contents: bytes, filename: str, fallback_coords: Optional[dict] = None) -> Optional[EXIFGPS]:
         """Attempt to extract GPS EXIF from image bytes using piexif/Pillow.
 
         Returns an EXIFGPS on success, or a fallback EXIFGPS when fallback_coords provided.
         Returns None if no GPS info and no fallback provided.
         """
+        metadata = self.extract_image_metadata(contents, filename)
         try:
             img = Image.open(BytesIO(contents))
             exif_bytes = img.info.get("exif")
             if not exif_bytes:
+                metadata_gps = self._gps_from_metadata(metadata)
+                if metadata_gps:
+                    return metadata_gps
                 if fallback_coords:
                     return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
                 return None
@@ -85,6 +113,9 @@ class DroneGPS:
             exif = piexif.load(exif_bytes)
             gps_ifd = exif.get("GPS", {})
             if not gps_ifd:
+                metadata_gps = self._gps_from_metadata(metadata)
+                if metadata_gps:
+                    return metadata_gps
                 if fallback_coords:
                     return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
                 return None
@@ -142,11 +173,13 @@ class DroneGPS:
                     accuracy = None
 
             if lat is None or lng is None:
+                metadata_gps = self._gps_from_metadata(metadata)
+                if metadata_gps:
+                    return metadata_gps
                 if fallback_coords:
                     return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
                 return None
 
-            metadata = self.extract_image_metadata(contents, filename)
             source = "dji_exif" if metadata.get("is_dji") else "exif"
             gps = EXIFGPS(latitude=lat, longitude=lng, altitude=alt, accuracy=accuracy, source=source)
             # store in history
@@ -157,6 +190,9 @@ class DroneGPS:
 
             return gps
         except Exception:
+            metadata_gps = self._gps_from_metadata(metadata)
+            if metadata_gps:
+                return metadata_gps
             if fallback_coords:
                 return EXIFGPS(fallback_coords["lat"], fallback_coords["lng"], fallback_coords.get("alt", 0.0), fallback_coords.get("accuracy", None), "browser_fallback")
             return None

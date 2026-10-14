@@ -5,7 +5,7 @@ CoconutAI identifies its active upload model as **YOLO26 v6**. Model assets incl
 ## Verify runtime
 
 1. Install dependencies from `requirements.txt`.
-2. Start `uvicorn main:app --reload`.
+2. Start `uvicorn app.main:app --reload`.
 3. Upload a coconut-leaf image.
 4. Confirm the annotated image, labels, confidence scores, and a Detection Record are returned.
 5. Confirm a recommendation appears only when the primary confidence is at least 50%.
