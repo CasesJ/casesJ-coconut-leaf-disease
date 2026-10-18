@@ -33,6 +33,7 @@ class DetectionRecord:
     verification_status: str = "pending_verification"
     verified_by: str = ""
     verified_by_uid: str = ""
+    verified_by_role: str = ""
     verified_at: str = ""
     recommendation_snapshot: dict = None
     recommendation_source: str = ""
@@ -101,6 +102,7 @@ class LocalStorageManager:
                     verification_status TEXT DEFAULT 'pending_verification',
                     verified_by TEXT,
                     verified_by_uid TEXT,
+                    verified_by_role TEXT,
                     verified_at TEXT,
                     recommendation_snapshot TEXT,
                     recommendation_source TEXT,
@@ -113,6 +115,7 @@ class LocalStorageManager:
                 ("verification_status", "TEXT DEFAULT 'pending_verification'"),
                 ("verified_by", "TEXT"),
                 ("verified_by_uid", "TEXT"),
+                ("verified_by_role", "TEXT"),
                 ("verified_at", "TEXT"),
                 ("recommendation_snapshot", "TEXT"),
                 ("recommendation_source", "TEXT"),
@@ -176,9 +179,9 @@ class LocalStorageManager:
                         INSERT OR REPLACE INTO detections 
                         (id, user_id, email, timestamp, inference_results, gps_data, 
                          image_path, is_synced, sync_attempts, error_message,
-                         verification_status, verified_by, verified_by_uid, verified_at,
+                         verification_status, verified_by, verified_by_uid, verified_by_role, verified_at,
                          recommendation_snapshot, recommendation_source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             detection_record.id,
@@ -194,6 +197,7 @@ class LocalStorageManager:
                             detection_record.verification_status,
                             detection_record.verified_by,
                             detection_record.verified_by_uid,
+                            detection_record.verified_by_role,
                             detection_record.verified_at,
                             json.dumps(detection_record.recommendation_snapshot) if detection_record.recommendation_snapshot else None,
                             detection_record.recommendation_source,
@@ -234,6 +238,7 @@ class LocalStorageManager:
                 "verification_status": record.verification_status,
                 "verified_by": record.verified_by,
                 "verified_by_uid": record.verified_by_uid,
+                "verified_by_role": record.verified_by_role,
                 "verified_at": record.verified_at,
                 "recommendation_snapshot": record.recommendation_snapshot,
                 "recommendation_source": record.recommendation_source,
@@ -391,6 +396,7 @@ class LocalStorageManager:
             "verification_status",
             "verified_by",
             "verified_by_uid",
+            "verified_by_role",
             "verified_at",
             "recommendation_snapshot",
             "recommendation_source",

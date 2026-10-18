@@ -251,25 +251,64 @@ function setExpertRecommendationDisease(diseaseName) {
 
 function openExpertRecommendationEditor() {
   const editor = document.getElementById('expert-recommendation-editor');
-  if (editor) editor.classList.remove('hidden');
+  if (editor) {
+    // The expert panel uses a transform animation.  A fixed child of a
+    // transformed element is positioned inside that panel instead of the
+    // viewport, so portal the editor to <body> before making it visible.
+    if (editor.parentElement !== document.body) document.body.appendChild(editor);
+    editor.classList.remove('hidden');
+    editor.querySelector('.expert-recommendation-modal-card')?.scrollTo({ top: 0, left: 0 });
+    editor.querySelector('.expert-recommendation-modal-body')?.scrollTo({ top: 0, left: 0 });
+    editor.querySelector('.record-modal-close')?.focus();
+  }
   document.body.classList.add('expert-recommendation-open');
 }
 
-function setExpertRecommendationPreview(imageUrl, imageLabel) {
+function setExpertRecommendationPreview(imageUrls, imageLabel) {
   const image = document.getElementById('expert-recommendation-image');
   const empty = document.getElementById('expert-recommendation-image-empty');
-  const url = String(imageUrl || '').trim();
   if (!image || !empty) return;
-  if (url) {
-    image.src = url;
-    image.alt = imageLabel ? `Uploaded image: ${imageLabel}` : 'Selected uploaded image';
-    image.classList.remove('hidden');
-    empty.classList.add('hidden');
-  } else {
+
+  // Prefer the original upload, but use the annotated result if that asset is
+  // unavailable.  This keeps an expert from losing the visual evidence when a
+  // legacy original-image link has expired or was removed.
+  const urls = [...new Set((Array.isArray(imageUrls) ? imageUrls : [imageUrls])
+    .map(url => String(url || '').trim())
+    .filter(Boolean))];
+  const showUnavailable = () => {
     image.removeAttribute('src');
+    image.onload = null;
+    image.onerror = null;
     image.classList.add('hidden');
     empty.classList.remove('hidden');
+  };
+
+  if (!urls.length) {
+    showUnavailable();
+    return;
   }
+
+  let currentUrl = 0;
+  const loadImage = () => {
+    image.onload = () => {
+      image.classList.remove('hidden');
+      empty.classList.add('hidden');
+    };
+    image.onerror = () => {
+      currentUrl += 1;
+      if (currentUrl < urls.length) {
+        image.src = urls[currentUrl];
+      } else {
+        showUnavailable();
+      }
+    };
+    image.src = urls[currentUrl];
+  };
+
+  image.alt = imageLabel ? `Uploaded image: ${imageLabel}` : 'Selected uploaded image';
+  image.classList.add('hidden');
+  empty.classList.remove('hidden');
+  loadImage();
 }
 
 window.openExpertRecommendationImage = function openExpertRecommendationImage() {
@@ -2860,7 +2899,7 @@ window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
 
 let expertAuditEvents = [];
 let expertQueueRecords = [];
-let currentExpertQueueQuickFilter = 'needs-review';
+let currentExpertQueueQuickFilter = 'all';
 
 function getExpertQueueDetails(record) {
   const primary = getPrimaryDetection(record);
@@ -2894,7 +2933,7 @@ window.filterExpertQueue = function filterExpertQueue() {
     const haystack = `${record.filename || ''} ${record.email || ''} ${record.user_id || ''} ${info.primary.class || ''} ${info.location}`.toLowerCase();
     const confidenceMatch = !confidenceFilter || (confidenceFilter === 'high' && info.confidence >= .75) || (confidenceFilter === 'moderate' && info.confidence >= .5 && info.confidence < .75) || (confidenceFilter === 'low' && info.confidence < .5);
     const statusMatch = !statusFilter || (statusFilter === 'pending' && info.status !== 'verified') || (statusFilter === 'verified' && info.status === 'verified') || (statusFilter === 'corrected' && info.corrected);
-    const quickMatch = currentExpertQueueQuickFilter === 'all' || (currentExpertQueueQuickFilter === 'needs-review' && info.confidence < .5) || (currentExpertQueueQuickFilter === 'multiple' && info.detections.length > 1) || (currentExpertQueueQuickFilter === 'verified' && info.status === 'verified') || (currentExpertQueueQuickFilter === 'corrected' && info.corrected);
+    const quickMatch = (currentExpertQueueQuickFilter === 'all' && info.status !== 'verified') || (currentExpertQueueQuickFilter === 'needs-review' && info.confidence < .5) || (currentExpertQueueQuickFilter === 'multiple' && info.detections.length > 1) || (currentExpertQueueQuickFilter === 'verified' && info.status === 'verified') || (currentExpertQueueQuickFilter === 'corrected' && info.corrected);
     return (!search || haystack.includes(search)) && (!disease || info.detections.some(item => formatDiseaseClass(item.class).toLowerCase() === disease)) && confidenceMatch && statusMatch && (!date || String(record.timestamp || '').slice(0, 10) === date) && (!farmer || `${record.email || ''} ${record.user_id || ''}`.toLowerCase().includes(farmer)) && (!area || info.location.includes(area)) && quickMatch;
   });
   const queue = document.getElementById('expert-pending-list');
@@ -2961,7 +3000,7 @@ function renderExpertRecordsTable(records) {
       ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
-      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')">Recommendation</button></div>`
+      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeURIComponent(record.image_url || '')}', '${encodeURIComponent(annotatedImage)}', '${encodeURIComponent(imageLabel)}')">Recommendation</button></div>`
       : '<span class="expert-table-muted">Verified</span>';
 
     return `<tr>
@@ -3451,20 +3490,23 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
     if (preventionInput) preventionInput.value = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : '';
     if (noteInput) noteInput.value = data.note || '';
     if (statusEl) statusEl.textContent = data.source === 'expert_override' ? 'Loaded expert-edited recommendation data.' : 'Loaded default recommendation data.';
-    if (diseaseInput) diseaseInput.focus();
   } catch (error) {
     console.error('Error loading expert recommendation:', error);
     showToast('Could not load recommendation');
   }
 };
 
-window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId, encodedImageUrl = '', encodedImageLabel = '') {
+window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId, encodedImageUrl = '', encodedAnnotatedImageUrl = '', encodedImageLabel = '') {
   if (!currentToken || !currentUserIsExpert) return;
-  openExpertRecommendationEditor();
   const selectedRecord = expertQueueRecords.find(record => String(record.user_id || '') === String(userId || '') && String(record.id || '') === String(recordId || ''));
-  const imageUrl = decodeURIComponent(encodedImageUrl || '') || selectedRecord?.image_url || selectedRecord?.annotated_image_url || '';
+  const imageUrls = [
+    decodeURIComponent(encodedImageUrl || ''),
+    decodeURIComponent(encodedAnnotatedImageUrl || ''),
+    selectedRecord?.image_url,
+    selectedRecord?.annotated_image_url,
+  ];
   const imageLabel = decodeURIComponent(encodedImageLabel || '') || selectedRecord?.filename || selectedRecord?.image_path || '';
-  setExpertRecommendationPreview(imageUrl, imageLabel);
+  setExpertRecommendationPreview(imageUrls, imageLabel);
   await loadExpertRecommendation(diseaseName, confidence, { userId, recordId });
 };
 

@@ -46,8 +46,10 @@ def save_upload_image_assets(
         else:
             try:
                 annotated_path = ANNOTATED_IMAGE_DIR / f"{record_id}.jpg"
-                cv2.imwrite(str(annotated_path), annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 92])
-                image_urls["annotated_image_url"] = f"/static/annotated_uploads/{record_id}.jpg"
+                if cv2.imwrite(str(annotated_path), annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+                    image_urls["annotated_image_url"] = f"/static/annotated_uploads/{record_id}.jpg"
+                else:
+                    logger.warning("Could not write annotated image for %s", record_id)
             except Exception as error:
                 logger.warning("Could not save annotated image for %s: %s", record_id, error)
 

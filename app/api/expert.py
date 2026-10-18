@@ -137,12 +137,13 @@ async def verify_expert_record(
         "verification_status": desired_status,
         "verified_by": decoded.get("email"),
         "verified_by_uid": decoded.get("uid"),
+        "verified_by_role": "expert",
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "recommendation_snapshot": recommendation_snapshot,
         "recommendation_source": recommendation_snapshot.get("source", "default"),
     }
     if desired_status == PENDING_VERIFICATION_STATUS:
-        updates.update({"verified_by": None, "verified_by_uid": None, "verified_at": None,
+        updates.update({"verified_by": None, "verified_by_uid": None, "verified_by_role": None, "verified_at": None,
                         "recommendation_snapshot": None, "recommendation_source": None})
 
     updated = update_record_everywhere(user_id, record_id, updates)
@@ -228,6 +229,7 @@ async def update_expert_recommendation(
             "verification_status": VERIFIED_STATUS,
             "verified_by": decoded.get("email"),
             "verified_by_uid": decoded.get("uid"),
+            "verified_by_role": "expert",
             "verified_at": datetime.now(timezone.utc).isoformat(),
             "recommendation_snapshot": expert_snapshot,
             "recommendation_source": "expert_override",

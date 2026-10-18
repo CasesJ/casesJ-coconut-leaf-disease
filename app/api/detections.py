@@ -212,6 +212,10 @@ async def save_farmer_low_confidence_recommendation(
         "farmer_recommendation_confirmed": True,
         "farmer_recommendation_confirmed_at": datetime.now(timezone.utc).isoformat(),
         "verification_status": PENDING_VERIFICATION_STATUS,
+        "verified_by": None,
+        "verified_by_uid": None,
+        "verified_by_role": None,
+        "verified_at": None,
     })
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")

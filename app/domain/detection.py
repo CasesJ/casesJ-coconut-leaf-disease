@@ -7,7 +7,9 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 from app.core.config import (
     ANNOTATED_IMAGE_DIR,
@@ -15,6 +17,7 @@ from app.core.config import (
     UPLOAD_IMAGE_DIR,
     VERIFIED_STATUS,
 )
+from app.domain.expert import is_expert_identity
 
 
 def _build_record_signature(record: dict) -> str:
@@ -99,18 +102,47 @@ def normalize_verification_status(record: dict) -> str:
     status_value = str(record.get("verification_status") or "").strip().lower()
     source = str(record.get("source") or "upload").lower()
 
-    # High confidence is not expert verification.  Older automatic-verification
-    # records did not record an expert or verification time, so return them to
-    # the pending queue while preserving genuine expert decisions.
-    if source == "upload" and status_value == VERIFIED_STATUS:
-        if not record.get("verified_by") and not record.get("verified_by_uid") and not record.get("verified_at"):
+    # Every uploaded image remains pending unless a server-authorized expert
+    # action recorded who verified it and when.  Confidence never verifies an
+    # upload, and a stray `verified` field from legacy data is not sufficient.
+    if source == "upload":
+        verified_by_role = str(record.get("verified_by_role") or "").strip().lower()
+        verified_by = str(record.get("verified_by") or "").strip()
+        verified_by_uid = str(record.get("verified_by_uid") or "").strip()
+        verified_at = record.get("verified_at")
+        verifier_is_expert = verified_by_role == "expert" or is_expert_identity({
+            "email": verified_by,
+            "uid": verified_by_uid,
+        })
+        if status_value != VERIFIED_STATUS or not (verified_at and verifier_is_expert):
             return PENDING_VERIFICATION_STATUS
+        return VERIFIED_STATUS
 
     if status_value in {PENDING_VERIFICATION_STATUS, VERIFIED_STATUS}:
         return status_value
     if source == "upload":
         return PENDING_VERIFICATION_STATUS
     return VERIFIED_STATUS
+
+
+def _is_available_image_url(url: object) -> bool:
+    """Return whether a local image URL still resolves to an on-disk asset.
+
+    Cloud URLs are durable and cannot be checked without an unnecessary network
+    request, so they are preserved.  Local static URLs must point to a file in
+    the matching upload directory; otherwise sending them to the browser causes
+    a 404 for every record-list refresh.
+    """
+    path = urlsplit(str(url or "")).path
+    local_roots = (
+        ("/static/uploads/", UPLOAD_IMAGE_DIR),
+        ("/static/annotated_uploads/", ANNOTATED_IMAGE_DIR),
+    )
+    for prefix, directory in local_roots:
+        if path.startswith(prefix):
+            filename = Path(path).name
+            return bool(filename) and (directory / filename).is_file()
+    return True
 
 
 def apply_record_defaults(record: dict) -> dict:
@@ -128,6 +160,14 @@ def apply_record_defaults(record: dict) -> dict:
 
     if not record.get("filename") and record.get("image_path"):
         record["filename"] = record["image_path"]
+
+    # Older records can retain local URLs after their files have been removed
+    # (for example after a deployment or storage cleanup).  Omit only those
+    # stale local links so the client renders its no-image state rather than
+    # repeatedly requesting a missing file.  Remote storage URLs are retained.
+    for field_name in ("image_url", "annotated_image_url"):
+        if record.get(field_name) and not _is_available_image_url(record[field_name]):
+            record.pop(field_name, None)
 
     record_id = str(record.get("id") or "").strip()
     if record_id:
@@ -244,10 +284,9 @@ def _serialize_detection_payload(
         "gps_data": gps_data,
         "filename": filename,
         "image_metadata": image_metadata or {},
-        "image_url": f"/static/uploads/{record_id}.jpg",
-        "annotated_image_url": f"/static/annotated_uploads/{record_id}.jpg",
         "verification_status": upload_verification_status(detections, source),
         "verified_by": None,
         "verified_by_uid": None,
+        "verified_by_role": None,
         "verified_at": None,
     }

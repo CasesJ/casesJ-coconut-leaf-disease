@@ -99,7 +99,7 @@ def create_app() -> FastAPI:
             response.headers["Expires"] = "0"
         return response
 
-    # Static files
+    # Keep the historic /static URLs for generated upload previews.
     application.mount("/static", StaticFiles(directory="static"), name="static")
 
     # Routers
@@ -112,6 +112,11 @@ def create_app() -> FastAPI:
     application.include_router(reports.router)
     application.include_router(drone.router)
     application.include_router(health.router)
+
+    # Firebase Hosting exposes the static directory as the site root.  Serving
+    # it here too keeps the same asset URLs working during local development.
+    # This catch-all mount must remain after every API router.
+    application.mount("/", StaticFiles(directory="static", html=True), name="frontend")
 
     return application
 

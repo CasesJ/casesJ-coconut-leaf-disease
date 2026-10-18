@@ -1,0 +1,42 @@
+{
+  "hosting": {
+    "public": "static",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/node_modules/**",
+      "uploads/**",
+      "annotated_uploads/**"
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=3600"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      { "source": "/auth/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/recommendations/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/detect/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/detections/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/expert/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/notifications/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/records/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/reports/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/drone/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/farm/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/api/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/health", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/classes", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/static/uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/static/annotated_uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  }
+}
