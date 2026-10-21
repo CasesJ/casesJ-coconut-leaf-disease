@@ -7,6 +7,100 @@
 var recommendationSnapshot = null;
 var currentExpertRecommendationTarget = null;
 
+// The dashboard, history, map, and records panels share one farmer history.
+// Coalesce simultaneous reads and reuse a very short-lived response so tab
+// changes do not start duplicate Firebase requests.
+const USER_RECORDS_CACHE_TTL_MS = 45_000;
+let userRecordsCache = null;
+let userRecordsRequest = null;
+
+function clearUserRecordsCache() {
+  userRecordsCache = null;
+  userRecordsRequest = null;
+}
+
+function getCachedUserRecords() {
+  if (!userRecordsCache || userRecordsCache.userId !== currentUser?.uid) return null;
+  return Date.now() - userRecordsCache.loadedAt < USER_RECORDS_CACHE_TTL_MS
+    ? userRecordsCache.payload
+    : null;
+}
+
+async function fetchUserRecords({ force = false } = {}) {
+  if (!currentToken || !currentUser?.uid) throw new Error('Please log in first');
+
+  const requestUserId = currentUser.uid;
+  const requestToken = currentToken;
+  const cached = !force && getCachedUserRecords();
+  if (cached) return cached;
+  if (userRecordsRequest) return userRecordsRequest;
+
+  const request = fetch('/detections/my-records?limit=100', {
+    headers: { Authorization: `Bearer ${requestToken}` }
+  }).then(async (response) => {
+    if (!response.ok) throw new Error('Failed to load records');
+    const payload = await response.json();
+    if (currentUser?.uid === requestUserId && currentToken === requestToken) {
+      userRecordsCache = { userId: requestUserId, loadedAt: Date.now(), payload };
+    }
+    return payload;
+  });
+  userRecordsRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (userRecordsRequest === request) userRecordsRequest = null;
+  }
+}
+
+// The expert dashboard, review queue, and analytics all use the same global
+// record set. Keep one short-lived, in-flight-aware copy so opening a panel
+// does not start several identical cross-user database reads.
+const EXPERT_RECORDS_CACHE_TTL_MS = 45_000;
+let expertRecordsCache = null;
+let expertRecordsRequest = null;
+
+function clearExpertRecordsCache() {
+  expertRecordsCache = null;
+  expertRecordsRequest = null;
+}
+
+function getCachedExpertRecords() {
+  if (!expertRecordsCache || expertRecordsCache.userId !== currentUser?.uid) return null;
+  return Date.now() - expertRecordsCache.loadedAt < EXPERT_RECORDS_CACHE_TTL_MS
+    ? expertRecordsCache.payload
+    : null;
+}
+
+async function fetchExpertRecords({ force = false } = {}) {
+  if (!currentToken || !currentUser?.uid || !currentUserIsExpert) {
+    throw new Error('Expert login is required');
+  }
+
+  const requestUserId = currentUser.uid;
+  const requestToken = currentToken;
+  const cached = !force && getCachedExpertRecords();
+  if (cached) return cached;
+  if (expertRecordsRequest) return expertRecordsRequest;
+
+  const request = fetch('/expert/records?status=all&limit=500', {
+    headers: { Authorization: `Bearer ${requestToken}` }
+  }).then(async (response) => {
+    if (!response.ok) throw new Error('Failed to load expert records');
+    const payload = await response.json();
+    if (currentUser?.uid === requestUserId && currentToken === requestToken) {
+      expertRecordsCache = { userId: requestUserId, loadedAt: Date.now(), payload };
+    }
+    return payload;
+  });
+  expertRecordsRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (expertRecordsRequest === request) expertRecordsRequest = null;
+  }
+}
+
 // ── Auth UI Functions ──
 
 window.showError = function showError(message) {
@@ -221,23 +315,48 @@ function setFarmerNavigationVisible(visible) {
 function updateDashboardPrimaryAction() {
   const title = document.getElementById('dashboard-primary-action-title');
   const description = document.getElementById('dashboard-primary-action-description');
+  const quickActions = document.getElementById('dashboard-quick-actions');
+  const expertReviewAction = document.querySelector('.dashboard-action.history');
+  const farmerOnlyActions = document.querySelectorAll('.dashboard-action.guide, .dashboard-action.reports');
   if (!title || !description) return;
 
   if (currentUserIsExpert) {
-    title.textContent = 'All Verified Diseases';
-    description.textContent = 'View verified disease uploads from all users.';
+    title.textContent = 'Detection Records';
+    description.textContent = 'View and audit uploaded detection records.';
+    if (expertReviewAction) {
+      expertReviewAction.onclick = window.openDashboardSecondaryAction;
+      expertReviewAction.querySelector('strong').textContent = 'Expert Review';
+      expertReviewAction.querySelector('small').textContent = 'Review pending detection records.';
+    }
+    if (quickActions) quickActions.classList.add('expert-quick-actions');
+    farmerOnlyActions.forEach(action => { action.style.display = 'none'; });
   } else {
     title.textContent = 'Scan Coconut Leaf';
     description.textContent = 'Upload an image to detect coconut diseases.';
+    if (expertReviewAction) {
+      expertReviewAction.onclick = window.openDashboardSecondaryAction;
+      expertReviewAction.querySelector('strong').textContent = 'View History';
+      expertReviewAction.querySelector('small').textContent = 'Check previous scans and results.';
+    }
+    if (quickActions) quickActions.classList.remove('expert-quick-actions');
+    farmerOnlyActions.forEach(action => { action.style.display = ''; });
   }
 }
 
 window.openDashboardPrimaryAction = function openDashboardPrimaryAction() {
   if (currentUserIsExpert) {
-    switchTab('history', document.getElementById('nav-history-link'));
+    switchTab('records', document.getElementById('nav-records-link'));
     return;
   }
   switchTab('upload', document.getElementById('nav-upload-link'));
+};
+
+window.openDashboardSecondaryAction = function openDashboardSecondaryAction() {
+  if (currentUserIsExpert) {
+    switchTab('expert', document.getElementById('expert-nav-link'));
+    return;
+  }
+  switchTab('records', document.getElementById('nav-records-link'));
 };
 
 function setExpertRecommendationDisease(diseaseName) {
@@ -335,6 +454,8 @@ function hideExpertRecommendationEditor() {
 }
 
 window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
+  clearUserRecordsCache();
+  clearExpertRecordsCache();
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
   const userEmail = document.getElementById('user-email');
@@ -380,14 +501,13 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   if (currentUserIsExpert && typeof loadExpertReview === 'function') {
     setTimeout(loadExpertReview, 350);
   }
-  if (currentUserIsExpert && typeof loadExpertAuditLog === 'function') {
-    setTimeout(loadExpertAuditLog, 450);
-  }
   if (!currentUserIsExpert && typeof loadNotifications === 'function') setTimeout(loadNotifications, 500);
   if (typeof renderEnhancedSettings === 'function') renderEnhancedSettings();
 };
 
 window.updateUIOnLogout = function updateUIOnLogout() {
+  clearUserRecordsCache();
+  clearExpertRecordsCache();
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
   const expertNavLink = document.getElementById('expert-nav-link');
@@ -428,17 +548,12 @@ window.loadDashboardStats = async function loadDashboardStats() {
       return;
     }
 
-    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
-    const response = await fetch(endpoint, {
-      headers: { 'Authorization': 'Bearer ' + currentToken }
-    });
-
-    if (!response.ok) {
-      console.warn('Failed to load dashboard stats:', response.status);
-      return;
+    let payload;
+    if (currentUserIsExpert) {
+      payload = await fetchExpertRecords();
+    } else {
+      payload = await fetchUserRecords();
     }
-
-    const payload = await response.json();
     const records = Array.isArray(payload) ? payload : (payload.records || []);
     const normalized = (records || []).map(normalizeRecordForDashboard);
     const dashboardRecords = currentUserIsExpert
@@ -959,6 +1074,12 @@ window.addEventListener('load', () => {
 
 // ── Tabs ──
 function switchTab(name, btn) {
+  const farmerOnlyTabs = new Set(['upload', 'map', 'history', 'drone']);
+  if (currentUserIsExpert && farmerOnlyTabs.has(name)) {
+    switchTab('dashboard', document.querySelector('.nav-link[onclick*="dashboard"]'));
+    return;
+  }
+
   document.querySelectorAll('.panel').forEach(p=>{
     p.classList.remove('active');
     p.style.display = 'none';
@@ -982,6 +1103,7 @@ function switchTab(name, btn) {
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
   if(name==='expert' && typeof loadExpertReview === 'function') loadExpertReview();
   if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
+  if(name==='records' && currentUserIsExpert && typeof loadExpertAuditLog === 'function') loadExpertAuditLog();
   if(name==='history' && typeof loadVerifiedDiseaseHistory === 'function') loadVerifiedDiseaseHistory();
   if(name==='map' && typeof loadAreaMonitoring === 'function') loadAreaMonitoring();
   if(name==='dashboard') {
@@ -1018,12 +1140,12 @@ let healthDistributionChart = null;
 window.refreshAnalyticsCharts = async function refreshAnalyticsCharts() {
   if (!currentUser?.uid) return;
   try {
-    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
-    const res = await fetch(endpoint, {
-      headers: { 'Authorization': 'Bearer ' + currentToken }
-    });
-    if (!res.ok) return;
-    const payload = await res.json();
+    let payload;
+    if (currentUserIsExpert) {
+      payload = await fetchExpertRecords();
+    } else {
+      payload = await fetchUserRecords();
+    }
     const records = Array.isArray(payload) ? payload : (payload.records || []);
     const normalized = records.map(normalizeRecordForDashboard);
     const analyticsRecords = currentUserIsExpert
@@ -1676,10 +1798,12 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
   if (!gridEl || !currentToken) return;
   gridEl.innerHTML = '<div class="no-events" style="grid-column:1/-1;padding:1rem">Loading GPS-tagged samples…</div>';
   try {
-    const endpoint = currentUserIsExpert ? '/expert/records?status=all' : '/detections/my-records';
-    const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${currentToken}` } });
-    if (!response.ok) throw new Error('Unable to load disease records');
-    const payload = await response.json();
+    let payload;
+    if (currentUserIsExpert) {
+      payload = await fetchExpertRecords();
+    } else {
+      payload = await fetchUserRecords();
+    }
     const records = Array.isArray(payload) ? payload : (payload.records || []);
     const latStep = (AREA_MONITORING_BOUNDS.maxLat - AREA_MONITORING_BOUNDS.minLat) / 2;
     const lngStep = (AREA_MONITORING_BOUNDS.maxLng - AREA_MONITORING_BOUNDS.minLng) / 2;
@@ -2013,6 +2137,7 @@ async function detectImage(file){
     throw new Error(`Server error ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
   }
   const data = await res.json();
+  if (data.record_id) clearUserRecordsCache();
   // Reflect a newly established farm immediately; no sign-out/sign-in cycle
   // is needed before the disease map and its monitoring cells use it.
   if (applyFarmLocation(data.farm_center)) loadAreaMonitoring();
@@ -2242,6 +2367,7 @@ window.saveFarmerLowConfidenceRecommendation = async function saveFarmerLowConfi
       recArea.innerHTML = '';
       recArea.style.display = 'none';
     }
+    clearUserRecordsCache();
     showToast('Recommendation confirmed and sent to an expert for verification.');
   } catch (error) {
     showToast(`Could not save recommendation: ${error.message}`);
@@ -2707,13 +2833,12 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
   listEl.innerHTML = '<div class="no-records">Loading verified history...</div>';
 
   try {
-    const endpoint = currentUserIsExpert ? '/expert/records?status=verified' : '/detections/my-records';
-    const response = await fetch(endpoint, {
-      headers: { 'Authorization': `Bearer ${currentToken}` }
-    });
-    if (!response.ok) throw new Error('Failed to load verified history');
-
-    const payload = await response.json();
+    let payload;
+    if (currentUserIsExpert) {
+      payload = await fetchExpertRecords();
+    } else {
+      payload = await fetchUserRecords();
+    }
     const verifiedRecords = (payload.records || []).filter((record) =>
       formatVerificationStatus(record.verification_status).cls === 'verified'
     );
@@ -3065,7 +3190,7 @@ window.filterExpertAuditLog = function filterExpertAuditLog() {
   renderExpertAuditLog();
 };
 
-async function loadUserRecords() {
+async function loadUserRecords({ force = false } = {}) {
   if (!currentToken) {
     showToast('Please log in first');
     return;
@@ -3075,15 +3200,7 @@ async function loadUserRecords() {
   listEl.innerHTML = '<div class="no-records">Loading records...</div>';
   
   try {
-    const res = await fetch('/detections/my-records', {
-      headers: {
-        'Authorization': `Bearer ${currentToken}`
-      }
-    });
-    
-    if (!res.ok) throw new Error('Failed to load records');
-    
-    const data = await res.json();
+    const data = await fetchUserRecords({ force });
     console.log('📊 User records:', data);
     
     const allRecords = data.records || [];
@@ -3368,7 +3485,7 @@ window.reviewExpertPriority = function reviewExpertPriority(userId, recordId) {
   });
 };
 
-window.loadExpertReview = async function loadExpertReview() {
+window.loadExpertReview = async function loadExpertReview({ force = false } = {}) {
   if (!currentToken || !currentUserIsExpert) return;
 
   // Verified records are intentionally excluded from the review queue; each
@@ -3387,30 +3504,31 @@ window.loadExpertReview = async function loadExpertReview() {
   if (filterStateEl) filterStateEl.textContent = `Showing ${getExpertFilterLabel(currentExpertFilter)}`;
 
   try {
-    const [recordsRes, allRecordsRes, overridesRes, auditRes] = await Promise.all([
-      fetch(`/expert/records?status=${encodeURIComponent(currentExpertFilter)}`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
-      fetch('/expert/records?status=all', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+    // Load the queue first. The following audit request then reuses the
+    // server's freshly populated queue cache instead of racing it with a
+    // second global record scan.
+    const allRecordsData = await fetchExpertRecords({ force });
+    const [overridesRes, auditRes] = await Promise.all([
       fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
       fetch('/expert/audit-log?limit=10', { headers: { 'Authorization': `Bearer ${currentToken}` } })
     ]);
 
-    if (!recordsRes.ok) throw new Error('Failed to load expert records');
-
-    const recordsData = await recordsRes.json();
-    const records = recordsData.records || [];
+    const allRecords = allRecordsData.records || [];
+    const records = allRecords.filter(record =>
+      formatVerificationStatus(record.verification_status).cls === currentExpertFilter
+    );
     expertQueueRecords = records;
     updateExpertQueueDiseaseOptions(expertQueueRecords);
-    const allRecordsData = allRecordsRes.ok ? await allRecordsRes.json() : recordsData;
     const overridesData = overridesRes.ok ? await overridesRes.json() : { overrides: {} };
     const overrides = overridesData.overrides || {};
     const dashboardEvents = auditRes.ok ? (await auditRes.json()).events || [] : [];
     const pendingCountEl = document.getElementById('expert-pending-records');
     const totalCountEl = document.getElementById('expert-total-records');
     const overrideCountEl = document.getElementById('expert-override-count');
-    if (pendingCountEl) pendingCountEl.textContent = recordsData.pending_records ?? records.length;
-    if (totalCountEl) totalCountEl.textContent = recordsData.total_records ?? records.length;
+    if (pendingCountEl) pendingCountEl.textContent = allRecordsData.pending_records ?? records.length;
+    if (totalCountEl) totalCountEl.textContent = allRecordsData.total_records ?? allRecords.length;
     if (overrideCountEl) overrideCountEl.textContent = Object.keys(overrides).length;
-    renderExpertCommandCenter(allRecordsData.records || records, dashboardEvents, overrides);
+    renderExpertCommandCenter(allRecords, dashboardEvents, overrides);
 
     filterExpertQueue();
 
@@ -3418,7 +3536,6 @@ window.loadExpertReview = async function loadExpertReview() {
     if (statusEl) {
       statusEl.textContent = `Loaded ${records.length} ${getExpertFilterLabel(currentExpertFilter)} and ${Object.keys(overrides).length} expert overrides.`;
     }
-    if (typeof loadExpertAuditLog === 'function') loadExpertAuditLog();
   } catch (error) {
     console.error('Error loading expert review:', error);
     if (pendingListEl) pendingListEl.innerHTML = `<div class="no-records">❌ Error loading expert queue<br>${error.message}</div>`;
@@ -3558,17 +3675,18 @@ window.saveExpertRecommendation = async function saveExpertRecommendation() {
     showToast(`Saved recommendation for ${disease}`);
 
     const target = currentExpertRecommendationTarget;
+    clearExpertRecordsCache();
     if (target && target.userId && target.recordId) {
       if (statusEl) statusEl.textContent = `Saved recommendation for ${disease} and marked the record verified.`;
       currentExpertRecommendationTarget = null;
       if (typeof loadExpertReview === 'function') {
-        loadExpertReview();
+        loadExpertReview({ force: true });
       }
       if (typeof loadUserRecords === 'function') {
         loadUserRecords();
       }
     } else if (typeof loadExpertReview === 'function') {
-      loadExpertReview();
+      loadExpertReview({ force: true });
     }
 
     // The editor is shown only while an expert is working on a selected
@@ -3602,7 +3720,8 @@ window.verifyExpertRecord = async function verifyExpertRecord(userId, recordId, 
     }
 
     showToast('Record verified');
-    if (typeof loadExpertReview === 'function') loadExpertReview();
+    clearExpertRecordsCache();
+    if (typeof loadExpertReview === 'function') loadExpertReview({ force: true });
     if (typeof loadUserRecords === 'function') loadUserRecords();
     if (typeof loadDashboardStats === 'function') loadDashboardStats();
   } catch (error) {

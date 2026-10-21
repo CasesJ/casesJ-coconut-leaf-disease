@@ -44,13 +44,15 @@ def _require_expert(decoded: dict) -> None:
 
 
 @router.get("/records")
-async def get_expert_records(
+def get_expert_records(
     status: str = "pending",
+    limit: int = 500,
     decoded: dict = Depends(verify_firebase_token),
 ):
     """Get all detection records across all farmers for expert review."""
     _require_expert(decoded)
-    all_records = get_all_user_records()
+    safe_limit = max(1, min(limit, 500))
+    all_records = get_all_user_records(limit=safe_limit)
     pending_count = sum(1 for r in all_records if r.get("verification_status") == PENDING_VERIFICATION_STATUS)
     verified_count = sum(1 for r in all_records if r.get("verification_status") == VERIFIED_STATUS)
     status_value = str(status or "pending").strip().lower()
@@ -63,16 +65,24 @@ async def get_expert_records(
     return {
         "role": "expert", "email": decoded.get("email"),
         "total_records": len(all_records), "pending_records": pending_count,
-        "verified_records": verified_count, "filter": status_value, "records": filtered,
+        "verified_records": verified_count, "filter": status_value,
+        "limit": safe_limit, "records": filtered,
     }
 
 
 @router.get("/pending-records")
-async def get_pending_records(decoded: dict = Depends(verify_firebase_token)):
+def get_pending_records(
+    limit: int = 500,
+    decoded: dict = Depends(verify_firebase_token),
+):
     """Get only pending records for expert verification."""
     _require_expert(decoded)
-    records = [r for r in get_all_user_records() if r.get("verification_status") == PENDING_VERIFICATION_STATUS]
-    return {"role": "expert", "total_records": len(records), "records": records}
+    safe_limit = max(1, min(limit, 500))
+    records = [
+        r for r in get_all_user_records(limit=safe_limit)
+        if r.get("verification_status") == PENDING_VERIFICATION_STATUS
+    ]
+    return {"role": "expert", "total_records": len(records), "limit": safe_limit, "records": records}
 
 
 @router.post("/records/{user_id}/{record_id}/verify")
@@ -256,17 +266,27 @@ async def update_expert_recommendation(
 
 
 @router.get("/audit-log")
-async def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_firebase_token)):
+def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_firebase_token)):
     """Get the latest expert audit events."""
     _require_expert(decoded)
-    events = read_expert_audit_events(limit=limit)
+    safe_limit = max(1, min(limit, 100))
+    events = read_expert_audit_events(limit=safe_limit)
+    # Do not turn a 50-row audit log into up to 150 individual Firebase reads.
+    # The expert queue already has the most recent records in its shared cache.
+    # Audit entries without a cached record still carry their target IDs and
+    # remain visible rather than delaying the entire screen for a thumbnail.
+    recent_records = get_all_user_records(limit=500)
+    records_by_key = {
+        (str(record.get("user_id") or ""), str(record.get("id") or "")): record
+        for record in recent_records
+    }
     for event in events:
         target = event.get("target") or {}
         uid = str(target.get("user_id") or "").strip()
         rid = str(target.get("record_id") or "").strip()
         if not uid or not rid:
             continue
-        record = find_record_for_user(uid, rid)
+        record = records_by_key.get((uid, rid))
         if not record:
             continue
         event["upload"] = {
@@ -275,4 +295,4 @@ async def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_
             "image_url": str(record.get("image_url") or ""),
             "annotated_image_url": str(record.get("annotated_image_url") or ""),
         }
-    return {"events": events, "limit": limit}
+    return {"events": events, "limit": safe_limit}

@@ -223,15 +223,24 @@ async def save_farmer_low_confidence_recommendation(
 
 
 @router.get("/detections/my-records")
-async def get_user_detections_endpoint(decoded: dict = Depends(verify_firebase_token)):
-    """Get all detection records for the logged-in user."""
+def get_user_detections_endpoint(
+    limit: int = 100,
+    decoded: dict = Depends(verify_firebase_token),
+):
+    """Get recent detection records for the logged-in user."""
     from app.services.detection_service import get_user_records  # noqa: PLC0415
     user_id = decoded.get("uid")
     email = decoded.get("email")
-    records = get_user_records(user_id)
+    safe_limit = max(1, min(limit, 200))
+    records = get_user_records(user_id, limit=safe_limit)
     for record in records:
         apply_record_defaults(record)
-    return {"email": email, "total_records": len(records), "records": records}
+    return {
+        "email": email,
+        "total_records": len(records),
+        "limit": safe_limit,
+        "records": records,
+    }
 
 
 @router.websocket("/detect/stream")
