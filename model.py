@@ -212,20 +212,28 @@ class CoconutDiseaseDetector:
             conf: Confidence threshold (0-100, default 50 for better filtering)
         
         Returns:
-            dict with detections and annotated image
+            dict with detections, annotated image, and an inference status.
+            A successful empty detection list is a genuine no-detection
+            result. A backend error returns ``inference_status="failed"`` so
+            callers never mistake it for a valid analysis.
         """
         try:
             print(f"[PREDICT] Starting {self.backend} prediction with confidence threshold: {conf}")
             if self.backend == "ultralytics":
-                return self._predict_with_ultralytics(image, conf)
-            return self._predict_with_openvino(image, conf)
-        except Exception as e:
-            print(f"[ERROR] Prediction error: {e}")
+                result = self._predict_with_ultralytics(image, conf)
+            else:
+                result = self._predict_with_openvino(image, conf)
+            result["inference_status"] = "success"
+            return result
+        except Exception as error:
+            print(f"[ERROR] Prediction error: {error}")
             import traceback
             traceback.print_exc()
             return {
                 "detections": [],
-                "image": image
+                "image": image,
+                "inference_status": "failed",
+                "inference_error": "model_execution_failed",
             }
 
     def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50) -> dict:

@@ -38,6 +38,7 @@ from app.services.detection_service import (
     update_record_everywhere,
 )
 from app.services.farm_service import get_farm_center, set_initial_farm_center
+from app.services.inference_service import InferenceUnavailable, run_image_inference
 
 router = APIRouter(tags=["detections"])
 logger = logging.getLogger(__name__)
@@ -127,7 +128,14 @@ async def detect_image(
         farm_center = set_initial_farm_center(user_id, lat, lng, gps_source)
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
-    result = detector.predict(image, conf=UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+    try:
+        result = run_image_inference(detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+    except InferenceUnavailable as exc:
+        logger.error("Image inference failed for upload by %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Disease analysis is temporarily unavailable. Your image was not saved.",
+        ) from exc
     all_detections = result["detections"]
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
@@ -327,7 +335,16 @@ async def detect_stream(websocket: WebSocket):
                 if image is None:
                     continue
 
-                result = detector.predict(image)
+                try:
+                    result = run_image_inference(detector, image, 50)
+                except InferenceUnavailable:
+                    await websocket.send_json({
+                        "error": "Disease analysis is temporarily unavailable",
+                        "inference_status": "failed",
+                        "recorded": False,
+                        "frame": frame_count,
+                    })
+                    continue
                 all_detections = result["detections"]
                 high_confidence_detections = [d for d in all_detections if d["confidence"] >= 0.50]
 

@@ -30,6 +30,18 @@ async def verify_firebase_token(credentials: Any = Depends(_security)) -> dict:
         )
 
 
+async def verify_verified_firebase_token(decoded: dict = Depends(verify_firebase_token)) -> dict:
+    """Require a verified Firebase identity even when legacy offline fallback is enabled.
+
+    firebase_config marks every unsigned fallback result token_verified_offline.
+    Never trust its role, email, UID, or any other self-asserted claim.
+    """
+    if decoded.get("token_verified_offline") or not decoded.get("uid"):
+        raise HTTPException(401, "Verified Firebase sign-in is required for monitoring",
+                            headers={"WWW-Authenticate": "Bearer"})
+    return decoded
+
+
 async def verify_firebase_token_optional(
     credentials: Any = Depends(_security),
 ) -> Optional[dict]:

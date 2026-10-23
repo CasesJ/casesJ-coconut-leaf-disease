@@ -1,0 +1,447 @@
+"""Authenticated treatment monitoring endpoints."""
+
+import logging
+import re
+from datetime import date, datetime, timedelta
+from io import BytesIO
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from PIL import Image, UnidentifiedImageError
+
+from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MINUTE,
+                             MAX_IMAGE_UPLOAD_BYTES, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+from app.core.rate_limit import limiter
+from app.core.security import verify_verified_firebase_token as verify_firebase_token
+from app.domain.expert import is_expert_identity
+from app.infrastructure.firebase.cloud_storage import (
+    delete_monitoring_evidence,
+    upload_monitoring_evidence,
+    upload_private_tree_reference,
+    delete_new_tree_reference,
+)
+from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
+from app.schemas.monitoring import (FollowUpRecord, FollowUpReview,
+                                    FollowUpScheduleUpdate, MonitoringCaseCreate,
+                                    PlannedTreatmentCreate, PlannedTreatmentRecord,
+                                    TreatmentApplicationCreate,
+                                    TreatmentApplicationRecord)
+from app.services import monitoring_service as store
+from app.services.inference_service import InferenceUnavailable, run_image_inference
+
+router = APIRouter(tags=["monitoring"])
+logger = logging.getLogger(__name__)
+_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _uid(decoded: dict) -> str:
+    uid = str(decoded.get("uid") or "").strip()
+    if not uid or not _ID.fullmatch(uid) or decoded.get("token_verified_offline"):
+        raise HTTPException(401, "Token does not contain a user identity")
+    return uid
+
+
+def _case_id(case_id: str) -> None:
+    if not _ID.fullmatch(case_id):
+        raise HTTPException(404, "Monitoring case not found")
+
+
+def _farmer(decoded: dict) -> str:
+    uid = _uid(decoded)
+    if _trusted_expert(decoded):
+        raise HTTPException(403, "Farmer access required")
+    return uid
+
+
+def _expert(decoded: dict) -> str:
+    uid = _uid(decoded)
+    if not _trusted_expert(decoded):
+        raise HTTPException(403, "Expert access required")
+    return uid
+
+
+def _trusted_expert(decoded: dict) -> bool:
+    # Email allowlists require proof of email ownership. Signed role/UID claims
+    # continue to work without changing existing account records.
+    return is_expert_identity(decoded if decoded.get("email_verified") is True
+                              else {**decoded, "email": None})
+
+
+_PHILIPPINE_TZ = ZoneInfo("Asia/Manila")
+
+
+def _today_philippine() -> date:
+    return datetime.now(_PHILIPPINE_TZ).date()
+
+
+def _audit_timestamp() -> str:
+    return datetime.now(_PHILIPPINE_TZ).isoformat()
+
+
+@router.post("/expert/monitoring/cases", status_code=201)
+def create_monitoring_case(payload: MonitoringCaseCreate,
+                           decoded: dict = Depends(verify_firebase_token)):
+    expert_id = _expert(decoded)
+    due = payload.next_follow_up_date
+    if due and due <= _today_philippine():
+        raise HTTPException(422, "Next follow-up date must be in the future")
+    try:
+        return store.create_case(payload.farmer_id, payload.tree_id,
+                                 payload.baseline_detection_id,
+                                 due.isoformat() if due else None,
+                                 expert_id, payload.follow_up_interval_days)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Could not create monitoring case")
+        raise HTTPException(503, "Monitoring storage unavailable") from exc
+
+
+@router.get("/monitoring/cases")
+def my_monitoring_cases(decoded: dict = Depends(verify_firebase_token)):
+    return {"cases": store.list_cases(_farmer(decoded))}
+
+
+@router.get("/expert/monitoring/cases")
+def all_monitoring_cases(decoded: dict = Depends(verify_firebase_token)):
+    _expert(decoded)
+    return {"cases": store.list_expert_cases()}
+
+
+@router.get("/monitoring/cases/{case_id}")
+def my_monitoring_case(case_id: str, decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    case = store.get_case(_farmer(decoded), case_id)
+    if not case:
+        raise HTTPException(404, "Monitoring case not found")
+    return case
+
+
+@router.get("/monitoring/cases/{case_id}/overview")
+def my_monitoring_overview(case_id: str, decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    overview = store.get_overview(_farmer(decoded), case_id)
+    if not overview:
+        raise HTTPException(404, "Monitoring case not found")
+    return overview
+
+
+@router.get("/monitoring/cases/{case_id}/planned-treatments")
+def my_planned_treatments(case_id: str, decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    if not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    return {"planned_treatments": store.list_planned_treatments(farmer_id, case_id)}
+
+
+@router.post("/monitoring/cases/{case_id}/planned-treatments", status_code=201)
+def create_planned_treatment(case_id: str, payload: PlannedTreatmentCreate,
+                             decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    if not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    if payload.planned_date <= _today_philippine():
+        raise HTTPException(422, "Planned treatment date must be in the future")
+    planned = PlannedTreatmentRecord(
+        id=uuid4().hex, case_id=case_id, farmer_id=farmer_id,
+        planned_date=payload.planned_date,
+        notes=payload.notes.strip() if payload.notes else None,
+        status="scheduled", created_at=_audit_timestamp(),
+        created_by_farmer_uid=farmer_id,
+    ).model_dump(mode="json")
+    try:
+        store.save_planned_treatment(farmer_id, case_id, planned)
+    except Exception as exc:
+        logger.exception("Could not persist planned treatment for %s/%s", farmer_id, case_id)
+        raise HTTPException(503, "Planned treatment storage unavailable") from exc
+    return planned
+
+
+@router.get("/monitoring/cases/{case_id}/treatment-applications")
+def my_treatment_applications(case_id: str, decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    if not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    return {"treatment_applications": store.list_treatment_applications(farmer_id, case_id)}
+
+
+@router.post("/monitoring/cases/{case_id}/treatment-applications", status_code=201)
+def create_treatment_application(case_id: str, payload: TreatmentApplicationCreate,
+                                 decoded: dict = Depends(verify_firebase_token)):
+    """Append what the farmer actually applied, separate from the care plan."""
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    case = store.get_case(farmer_id, case_id)
+    if not case:
+        raise HTTPException(404, "Monitoring case not found")
+    if payload.application_date > _today_philippine():
+        raise HTTPException(422, "Application date cannot be in the future")
+    treatment_performed = payload.treatment_performed.strip()
+    if not treatment_performed:
+        raise HTTPException(422, "Treatment performed is required")
+    notes = payload.notes.strip() if payload.notes else None
+    planned_id = payload.planned_treatment_id
+    if planned_id:
+        planned = store.get_planned_treatment(farmer_id, case_id, planned_id)
+        if not planned:
+            raise HTTPException(404, "Planned treatment not found")
+        if planned.get("status") != "scheduled":
+            raise HTTPException(409, "Planned treatment has already been recorded as applied")
+    interval_days = int(case.get("follow_up_interval_days") or 6)
+    if interval_days < 1 or interval_days > 90:
+        interval_days = 6
+    due_date = payload.application_date + timedelta(days=interval_days)
+    now = _audit_timestamp()
+    application_id = uuid4().hex
+    application = TreatmentApplicationRecord(
+        id=application_id,
+        case_id=case_id,
+        farmer_id=farmer_id,
+        treatment_performed=treatment_performed,
+        application_date=payload.application_date,
+        notes=notes or None,
+        planned_treatment_id=planned_id,
+        follow_up_interval_days=interval_days,
+        first_follow_up_due_date=due_date,
+        created_at=now,
+        recorded_by_farmer_uid=farmer_id,
+    ).model_dump(mode="json")
+    follow_up_schedule = {
+        "id": uuid4().hex, "case_id": case_id, "farmer_id": farmer_id,
+        "schedule_type": "post_treatment", "due_date": due_date.isoformat(),
+        "follow_up_interval_days": interval_days,
+        "treatment_application_id": application_id,
+        "created_at": now, "created_by_uid": farmer_id,
+        "created_by_role": "farmer", "status": "scheduled",
+    }
+    try:
+        store.save_treatment_application(farmer_id, case_id, application, follow_up_schedule)
+    except Exception as exc:
+        logger.exception("Could not persist treatment application for %s/%s", farmer_id, case_id)
+        raise HTTPException(503, "Treatment application storage unavailable") from exc
+    return application
+
+
+@router.get("/expert/monitoring/cases/{farmer_id}/{case_id}")
+def expert_monitoring_case(farmer_id: str, case_id: str,
+                           decoded: dict = Depends(verify_firebase_token)):
+    _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id):
+        raise HTTPException(404, "Monitoring case not found")
+    case = store.get_case(farmer_id, case_id)
+    if not case:
+        raise HTTPException(404, "Monitoring case not found")
+    return case
+
+
+@router.get("/expert/monitoring/cases/{farmer_id}/{case_id}/overview")
+def expert_monitoring_overview(farmer_id: str, case_id: str,
+                               decoded: dict = Depends(verify_firebase_token)):
+    _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id):
+        raise HTTPException(404, "Monitoring case not found")
+    overview = store.get_overview(farmer_id, case_id)
+    if not overview:
+        raise HTTPException(404, "Monitoring case not found")
+    return overview
+
+
+@router.get("/expert/monitoring/cases/{farmer_id}/{case_id}/treatment-applications")
+def expert_treatment_applications(farmer_id: str, case_id: str,
+                                  decoded: dict = Depends(verify_firebase_token)):
+    _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id) or not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    return {"treatment_applications": store.list_treatment_applications(farmer_id, case_id)}
+
+
+@router.get("/expert/monitoring/cases/{farmer_id}/{case_id}/follow-ups")
+def expert_follow_ups(farmer_id: str, case_id: str,
+                      decoded: dict = Depends(verify_firebase_token)):
+    _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id) or not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    return {"follow_ups": store.list_follow_ups(farmer_id, case_id)}
+
+
+@router.put("/expert/monitoring/cases/{farmer_id}/{case_id}/schedule")
+def reschedule_case(farmer_id: str, case_id: str, payload: FollowUpScheduleUpdate,
+                    decoded: dict = Depends(verify_firebase_token)):
+    expert_id = _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id):
+        raise HTTPException(404, "Monitoring case not found")
+    if payload.next_follow_up_date <= _today_philippine():
+        raise HTTPException(422, "Next follow-up date must be in the future")
+    updated = store.update_next_follow_up(farmer_id, case_id,
+                                          payload.next_follow_up_date.isoformat(), expert_id,
+                                          payload.follow_up_interval_days)
+    if not updated:
+        raise HTTPException(404, "Monitoring case not found")
+    return updated
+
+
+@router.put("/expert/monitoring/cases/{farmer_id}/{case_id}/follow-ups/{follow_up_id}/review")
+def confirm_follow_up(farmer_id: str, case_id: str, follow_up_id: str,
+                      payload: FollowUpReview, decoded: dict = Depends(verify_firebase_token)):
+    expert_id = _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id) or not _ID.fullmatch(follow_up_id):
+        raise HTTPException(404, "Follow-up not found")
+    if not payload.note.strip():
+        raise HTTPException(422, "Review note is required")
+    if payload.next_follow_up_date and payload.next_follow_up_date <= _today_philippine():
+        raise HTTPException(422, "Next follow-up date must be in the future")
+    reviewed = store.review_follow_up(farmer_id, case_id, follow_up_id,
+                                      payload.confirmed_outcome, payload.note.strip(), expert_id,
+                                      payload.next_follow_up_date.isoformat() if payload.next_follow_up_date else None)
+    if not reviewed:
+        raise HTTPException(404, "Follow-up not found")
+    return reviewed
+
+
+@router.get("/monitoring/cases/{case_id}/follow-ups")
+def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    if not store.get_case(farmer_id, case_id):
+        raise HTTPException(404, "Monitoring case not found")
+    return {"follow_ups": store.list_follow_ups(farmer_id, case_id)}
+
+
+@router.post("/monitoring/cases/{case_id}/follow-ups", status_code=201)
+async def upload_follow_up(case_id: str, file: UploadFile = File(...),
+                           preliminary_status: str = Form("needs_review"),
+                           follow_up_schedule_id: str | None = Form(None),
+                           tree_reference_file: UploadFile | None = File(None),
+                           decoded: dict = Depends(verify_firebase_token)):
+    _case_id(case_id)
+    farmer_id = _farmer(decoded)
+    case = store.get_case(farmer_id, case_id)
+    if not case:
+        raise HTTPException(404, "Monitoring case not found")
+    if preliminary_status not in {"needs_review", "improving", "no_visible_change", "worsening"}:
+        raise HTTPException(422, "Invalid preliminary status")
+    follow_up_schedule = None
+    treatment_application_id = None
+    if follow_up_schedule_id:
+        if not _ID.fullmatch(follow_up_schedule_id):
+            raise HTTPException(404, "Follow-up schedule not found")
+        follow_up_schedule = store.get_follow_up_schedule(farmer_id, case_id, follow_up_schedule_id)
+        if not follow_up_schedule:
+            raise HTTPException(404, "Follow-up schedule not found")
+        treatment_application_id = follow_up_schedule.get("treatment_application_id")
+
+    # Validate every input before inference, quota consumption, or any uploads.
+    tree_contents, tree_mime = (await read_reference_image(tree_reference_file)
+                                if tree_reference_file is not None else (None, None))
+
+    contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(413, "Image upload is too large")
+    if not contents:
+        raise HTTPException(400, "Image upload is empty")
+    try:
+        with Image.open(BytesIO(contents)) as image:
+            if image.format not in {"JPEG", "PNG"} or image.width * image.height > 40_000_000:
+                raise ValueError("Upload must be a JPEG or PNG image of at most 40 megapixels")
+            content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
+            image.verify()
+        if file.content_type != content_type:
+            raise ValueError("Image MIME type does not match its contents")
+        decoded_image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+        if decoded_image is None:
+            raise ValueError("Upload must be a valid image")
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(400, str(exc) or "Upload must be a valid image") from exc
+
+    await limiter.rolling(f"image-minute:{farmer_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
+    await limiter.image_quota_24h(f"image-quota:{farmer_id}", IMAGE_INFERENCE_DAILY_LIMIT)
+    from model import detector  # noqa: PLC0415
+    from drone_gps import DroneGPS  # noqa: PLC0415
+
+    try:
+        result = run_image_inference(detector, decoded_image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+    except InferenceUnavailable as exc:
+        logger.error("Monitoring inference failed for %s/%s: %s", farmer_id, case_id, exc)
+        raise HTTPException(
+            503,
+            "Disease analysis is temporarily unavailable. The follow-up was not saved.",
+        ) from exc
+    predictions = result["detections"]
+    success, annotated = cv2.imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not success:
+        raise HTTPException(500, "Could not encode annotated image")
+    gps_reader = DroneGPS()
+    gps = gps_reader.extract_gps_from_image(contents, file.filename or "")
+    gps_data = ({"latitude": gps.latitude, "longitude": gps.longitude,
+                 "accuracy": gps.accuracy, "source": gps.source} if gps else None)
+    follow_up_id = uuid4().hex
+    uploaded_evidence: list[tuple[str, str]] = []
+    tree_reference = None
+
+    def cleanup_new_evidence() -> None:
+        # Each identifier is generated for this request. Cleanup uses the exact
+        # object key, never a prefix, and only after an object was uploaded.
+        for kind, mime_type in reversed(uploaded_evidence):
+            delete_monitoring_evidence(farmer_id, case_id, follow_up_id, kind, mime_type)
+        if tree_reference:
+            delete_new_tree_reference(tree_reference)
+
+    try:
+        original_url = upload_monitoring_evidence(farmer_id, case_id, follow_up_id,
+                                                  "original", contents, content_type)
+        uploaded_evidence.append(("original", content_type))
+        annotated_url = upload_monitoring_evidence(farmer_id, case_id, follow_up_id,
+                                                   "annotated", annotated.tobytes(), "image/jpeg")
+        uploaded_evidence.append(("annotated", "image/jpeg"))
+        if tree_contents is not None:
+            metadata = reference_metadata(case, uuid4().hex, farmer_id, tree_contents,
+                                          tree_mime, tree_reference_file.filename or "", follow_up_id)
+            tree_reference = upload_private_tree_reference(metadata, tree_contents)
+    except Exception as exc:
+        cleanup_new_evidence()
+        logger.exception("Could not upload follow-up evidence")
+        raise HTTPException(503, "Follow-up evidence storage is temporarily unavailable") from exc
+
+    record = FollowUpRecord(
+        id=follow_up_id, case_id=case_id, farmer_id=farmer_id,
+        tree_id=case["tree_id"], baseline_detection_id=case["baseline_detection_id"],
+        treatment_record_id=case["treatment_record_id"], disease=case["disease"],
+        follow_up_schedule_id=follow_up_schedule_id,
+        treatment_application_id=treatment_application_id,
+        created_at=_audit_timestamp(),
+        filename=file.filename or "", predictions=predictions,
+        image_url=original_url, annotated_image_url=annotated_url,
+        original_storage_path=(f"monitoring/{farmer_id}/{case_id}/{follow_up_id}/"
+                               f"original{'.png' if content_type == 'image/png' else '.jpg'}"),
+        annotated_storage_path=f"monitoring/{farmer_id}/{case_id}/{follow_up_id}/annotated.jpg",
+        gps_data=gps_data, preliminary_status=preliminary_status,
+        tree_reference=tree_reference,
+        identity_baseline_reference_id=(case.get("tree_reference") or {}).get("id"),
+    ).model_dump(mode="json")
+    try:
+        store.save_follow_up(farmer_id, case_id, record)
+        return record
+    except Exception as exc:
+        # A failed Firestore commit can be ambiguous. Remove the new assets
+        # only when a follow-up read succeeds and proves no record was stored.
+        persistence_absent = False
+        try:
+            persistence_absent = store.get_follow_up(farmer_id, case_id, follow_up_id) is None
+        except Exception:
+            logger.warning("Could not verify follow-up persistence after a write failure")
+        if persistence_absent:
+            cleanup_new_evidence()
+        logger.exception("Could not persist follow-up evidence")
+        raise HTTPException(503, "Follow-up storage unavailable") from exc

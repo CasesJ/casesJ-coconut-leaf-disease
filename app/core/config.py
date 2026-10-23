@@ -60,6 +60,7 @@ WS_CONNECTIONS_PER_USER = _positive_int_env("WS_CONNECTIONS_PER_USER", 2)
 WS_FRAMES_PER_SECOND = _positive_int_env("WS_FRAMES_PER_SECOND", 10)
 WS_MAX_FRAME_BYTES = _positive_int_env("WS_MAX_FRAME_BYTES", 3_000_000)
 MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 10_000_000)
+TREE_IDENTITY_GPS_TOLERANCE_METERS = _positive_int_env("TREE_IDENTITY_GPS_TOLERANCE_METERS", 25)
 TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
 
 # ── Confidence thresholds ──────────────────────────────────────────────────────

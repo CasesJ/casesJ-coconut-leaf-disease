@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.logging import configure_logging
 from app.core.config import CORS_ALLOWED_ORIGINS
-from app.api import auth, detections, drone, expert, health, notifications, records, recommendations, reports
+from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports
+from app.api import tree_identity
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -107,6 +108,8 @@ def create_app() -> FastAPI:
     application.include_router(recommendations.router)
     application.include_router(detections.router)
     application.include_router(expert.router)
+    application.include_router(monitoring.router)
+    application.include_router(tree_identity.router)
     application.include_router(notifications.router)
     application.include_router(records.router)
     application.include_router(reports.router)

@@ -521,6 +521,7 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   setFarmerNavigationVisible(true);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
+  window.monitoringResetIdentity?.();
   updateDashboardPrimaryAction();
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = 'none';
@@ -1105,6 +1106,7 @@ function switchTab(name, btn) {
   if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
   if(name==='records' && currentUserIsExpert && typeof loadExpertAuditLog === 'function') loadExpertAuditLog();
   if(name==='history' && typeof loadVerifiedDiseaseHistory === 'function') loadVerifiedDiseaseHistory();
+  if(name==='monitoring' && typeof loadMonitoringDashboard === 'function') loadMonitoringDashboard();
   if(name==='map' && typeof loadAreaMonitoring === 'function') loadAreaMonitoring();
   if(name==='dashboard') {
     const statusPill = document.getElementById('drone-status-text');
