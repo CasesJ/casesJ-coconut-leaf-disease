@@ -3,6 +3,7 @@
 import sys
 from datetime import date, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import cv2
 import numpy as np
@@ -29,6 +30,19 @@ def client(monkeypatch):
 
     monkeypatch.setattr(monitoring.limiter, "rolling", allowed)
     monkeypatch.setattr(monitoring.limiter, "image_quota_24h", allowed)
+    uploads, deleted = [], []
+
+    def upload_asset(content, content_type, category):
+        reference = {"provider": "cloudinary", "asset_id": uuid4().hex,
+                     "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+                     "resource_type": "image", "delivery_type": "authenticated",
+                     "version": 1, "format": "png" if content_type == "image/png" else "jpg",
+                     "content_type": content_type, "byte_size": len(content), "sha256": "test"}
+        uploads.append((category, content, content_type, reference))
+        return reference
+
+    monkeypatch.setattr(monitoring, "upload_asset", upload_asset)
+    monkeypatch.setattr(monitoring, "delete_asset", lambda ref: deleted.append(ref) or True)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -88,28 +102,32 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
         predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.82}],
                                      "image": image})))
 
-    def fake_upload(farmer, case, follow_up, kind, content, content_type):
-        uploads.append((kind, content, content_type))
-        return f"https://storage.test/{follow_up}/{kind}"
+    def fake_upload(content, content_type, category):
+        uploads.append((category, content, content_type))
+        return {"provider": "cloudinary", "asset_id": uuid4().hex,
+                "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+                "resource_type": "image", "delivery_type": "authenticated",
+                "version": 1, "format": "jpg", "content_type": content_type,
+                "byte_size": len(content), "sha256": "test"}
 
-    monkeypatch.setattr(monitoring, "upload_monitoring_evidence", fake_upload)
+    monkeypatch.setattr(monitoring, "upload_asset", fake_upload)
     monkeypatch.setattr(monitoring, "reference_metadata",
                         lambda *args: pytest.fail("Omitted whole-tree image must skip metadata processing"))
-    monkeypatch.setattr(monitoring, "upload_private_tree_reference",
-                        lambda *args: pytest.fail("Omitted whole-tree image must skip storage upload"))
     monkeypatch.setattr(monitoring.store, "save_follow_up", lambda farmer, case, record: saved.append(record))
     response = _upload(client, source)
     assert response.status_code == 201, response.text
-    assert uploads[0] == ("original", source, "image/jpeg")
-    assert uploads[1][0] == "annotated"
+    assert uploads[0] == ("monitoring-original", source, "image/jpeg")
+    assert uploads[1][0] == "monitoring-annotated"
     assert saved[0]["predictions"] == [{"class": "Bud Rot", "confidence": 0.82}]
     assert saved[0]["baseline_detection_id"] == "upload-1"
     assert saved[0]["review_status"] == "pending_expert_review"
     assert saved[0]["gps_data"] is None
     assert saved[0]["tree_reference"] is None
     assert saved[0]["image_url"] and saved[0]["annotated_image_url"]
-    assert saved[0]["original_storage_path"].endswith("/original.jpg")
-    assert saved[0]["annotated_storage_path"].endswith("/annotated.jpg")
+    assert saved[0]["original_storage_path"] is None
+    assert saved[0]["annotated_storage_path"] is None
+    assert set(saved[0]["image_assets"]) == {"original", "annotated"}
+    assert "api.cloudinary.com" not in response.text
     assert "severity" not in saved[0] and "recovery" not in saved[0]
 
 
@@ -120,7 +138,7 @@ def test_failed_inference_is_not_saved_as_a_no_detection(client, monkeypatch):
         predict=lambda image, conf: {"detections": [], "image": image,
                                      "inference_status": "failed",
                                      "inference_error": "model_execution_failed"})))
-    monkeypatch.setattr(monitoring, "upload_monitoring_evidence",
+    monkeypatch.setattr(monitoring, "upload_asset",
                         lambda *args: upload_attempts.append(args))
     monkeypatch.setattr(monitoring.store, "save_follow_up",
                         lambda *args: saved.append(args))
@@ -141,26 +159,27 @@ def test_partial_storage_failure_cleans_only_current_request_objects(client, mon
         predict=lambda image, conf: {"detections": [], "image": image,
                                      "inference_status": "success"})))
 
-    def partial_upload(farmer, case, follow_up, kind, content, content_type):
-        uploaded.append((farmer, case, follow_up, kind, content_type))
-        if kind == "annotated":
+    def partial_upload(content, content_type, category):
+        uploaded.append((category, content_type))
+        if category == "monitoring-annotated":
             raise RuntimeError("annotated upload unavailable")
-        return f"https://storage.test/{follow_up}/{kind}"
+        return {"provider": "cloudinary", "asset_id": uuid4().hex,
+                "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+                "resource_type": "image", "delivery_type": "authenticated",
+                "version": 1, "format": "jpg", "content_type": content_type,
+                "byte_size": len(content), "sha256": "test"}
 
-    monkeypatch.setattr(monitoring, "upload_monitoring_evidence", partial_upload)
-    monkeypatch.setattr(monitoring, "delete_monitoring_evidence",
-                        lambda *args: deleted.append(args) or True)
+    monkeypatch.setattr(monitoring, "upload_asset", partial_upload)
+    monkeypatch.setattr(monitoring, "delete_asset", lambda ref: deleted.append(ref) or True)
     monkeypatch.setattr(monitoring.store, "save_follow_up",
                         lambda *args: pytest.fail("No partial follow-up may be persisted"))
 
     response = _upload(client, _image())
 
     assert response.status_code == 503
-    assert [entry[3] for entry in uploaded] == ["original", "annotated"]
+    assert [entry[0] for entry in uploaded] == ["monitoring-original", "monitoring-annotated"]
     assert len(deleted) == 1
-    farmer, case, follow_up, kind, content_type = deleted[0]
-    assert (farmer, case, kind, content_type) == ("farmer-a", "case-1", "original", "image/jpeg")
-    assert follow_up == uploaded[0][2]
+    assert deleted[0]["public_id"].startswith("neuralcoco/monitoring-original/")
 
 
 def test_case_creation_requires_expert(client, monkeypatch):
@@ -439,9 +458,13 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
         predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.7}],
                                      "image": image})))
-    monkeypatch.setattr(monitoring, "upload_monitoring_evidence",
-                        lambda farmer, case, follow_up, kind, content, mime:
-                        f"https://storage.test/{case}/{follow_up}/{kind}")
+    def upload_asset(content, mime, category):
+        return {"provider": "cloudinary", "asset_id": uuid4().hex,
+                "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+                "resource_type": "image", "delivery_type": "authenticated",
+                "version": 1, "format": "jpg", "content_type": mime,
+                "byte_size": len(content), "sha256": "test"}
+    monkeypatch.setattr(monitoring, "upload_asset", upload_asset)
 
     app.dependency_overrides[verify_firebase_token] = lambda: {"uid": "expert-1", "role": "expert"}
     created = client.post("/expert/monitoring/cases", json={"farmer_id": "farmer-a",
@@ -517,7 +540,7 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     overview = client.get(f"/monitoring/cases/{case_id}/overview")
     assert overview.status_code == 200, overview.text
     body = overview.json()
-    assert body["baseline"]["image_url"] == "https://storage.test/baseline"
+    assert body["baseline"]["image_url"] == f"/media/monitoring/{case_id}/baseline/original"
     assert body["treatment"]["recommendation_snapshot"]["recommendations"]["treatment"] == "Recorded guidance"
     assert body["follow_ups"][0]["confirmed_outcome"] == "improving"
     assert len(body["follow_ups"]) == 3

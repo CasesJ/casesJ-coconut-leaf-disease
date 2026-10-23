@@ -5,6 +5,7 @@ Extracted from the large export/report block in main.py (~600 lines).
 No route handling; returns raw bytes or string content.
 """
 import logging
+import csv
 from collections import defaultdict
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.domain.detection import normalize_verification_status
+from app.services.detection_service import get_all_user_records
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +21,44 @@ logger = logging.getLogger(__name__)
 # ── CSV export ─────────────────────────────────────────────────────────────────
 
 def generate_detections_csv() -> str:
-    """Generate a CSV string from detection_history.json (legacy export)."""
-    detection_file = Path("detection_history.json")
-    if not detection_file.exists():
-        return "Disease Name,Confidence,Severity,Field ID,Detection Date,Location,Email,Source\n"
-
-    import json
-    with open(detection_file, "r") as f:
-        all_detections = json.load(f)
-
-    if not all_detections:
-        return "Disease Name,Confidence,Severity,Field ID,Detection Date,Location,Email,Source\n"
+    """Generate the expert CSV export from canonical Firestore detections."""
+    records = get_all_user_records(limit=2_000)
+    all_detections = []
+    for record in records:
+        gps = record.get("gps_data") or {}
+        if isinstance(gps, str):
+            try:
+                import json
+                gps = json.loads(gps)
+            except (TypeError, ValueError):
+                gps = {}
+        if not isinstance(gps, dict):
+            gps = {}
+        detections = record.get("detections") or record.get("inference_results") or []
+        if isinstance(detections, str):
+            try:
+                import json
+                detections = json.loads(detections)
+            except (TypeError, ValueError):
+                detections = []
+        if not isinstance(detections, list):
+            detections = []
+        for item in detections:
+            if not isinstance(item, dict):
+                continue
+            all_detections.append({
+                "disease_name": item.get("class") or item.get("disease_name") or "Unknown",
+                "confidence": item.get("confidence") or 0,
+                "severity": item.get("severity") or record.get("severity") or "low",
+                "field_id": record.get("tree_id") or record.get("field_id") or "",
+                "detection_date": record.get("timestamp") or "",
+                "location": {
+                    "lat": gps.get("latitude", record.get("lat", "")),
+                    "lng": gps.get("longitude", record.get("lng", "")),
+                },
+                "email": record.get("email") or "",
+                "source": record.get("source") or "detection",
+            })
 
     disease_stats: dict = defaultdict(lambda: {"count": 0, "high": 0, "medium": 0, "low": 0, "total_confidence": 0})
     for detection in all_detections:
@@ -48,7 +77,9 @@ def generate_detections_csv() -> str:
             )
 
     buf = StringIO()
-    buf.write("Disease Name,Confidence,Severity,Field ID,Detection Date,Location,Email,Source\n")
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(["Disease Name", "Confidence", "Severity", "Field ID",
+                     "Detection Date", "Location", "Email", "Source"])
     for detection in all_detections:
         disease = detection.get("disease_name", "Unknown")
         confidence = float(detection.get("confidence", 0))
@@ -56,17 +87,21 @@ def generate_detections_csv() -> str:
         location_str = ""
         if isinstance(detection.get("location"), dict):
             location_str = f"{detection['location'].get('lat', '')},{detection['location'].get('lng', '')}"
-        buf.write(
-            f"{disease},{confidence:.4f},{severity},"
-            f"{detection.get('field_id', '')},{detection.get('detection_date', '')},"
-            f"{location_str},{detection.get('email', '')},detection\n"
-        )
+        writer.writerow([
+            disease, f"{confidence:.4f}", severity,
+            detection.get("field_id", ""), detection.get("detection_date", ""),
+            location_str, detection.get("email", ""), detection.get("source", "detection"),
+        ])
 
-    buf.write("\n=== INVENTORY SUMMARY ===\n\nDisease,Total Count,Avg Confidence,High,Medium,Low\n")
+    writer.writerow([])
+    writer.writerow(["=== INVENTORY SUMMARY ==="])
+    writer.writerow([])
+    writer.writerow(["Disease", "Total Count", "Avg Confidence", "High", "Medium", "Low"])
     total_detections = total_high = total_medium = total_low = total_conf = 0
     for disease in sorted(disease_stats, key=lambda x: disease_stats[x]["count"], reverse=True):
         stats = disease_stats[disease]
-        buf.write(f"{disease},{stats['count']},{stats.get('avg_confidence', 0)},{stats['high']},{stats['medium']},{stats['low']}\n")
+        writer.writerow([disease, stats["count"], stats.get("avg_confidence", 0),
+                         stats["high"], stats["medium"], stats["low"]])
         total_detections += stats["count"]
         total_high += stats["high"]
         total_medium += stats["medium"]
@@ -74,7 +109,8 @@ def generate_detections_csv() -> str:
         total_conf += stats["total_confidence"]
 
     avg = round(total_conf / total_detections, 4) if total_detections > 0 else 0
-    buf.write(f"\nTOTAL,{total_detections},{avg},{total_high},{total_medium},{total_low}\n")
+    writer.writerow([])
+    writer.writerow(["TOTAL", total_detections, avg, total_high, total_medium, total_low])
     return buf.getvalue()
 
 

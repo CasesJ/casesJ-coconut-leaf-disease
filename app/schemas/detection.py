@@ -1,8 +1,8 @@
 """
 app/schemas/detection.py — Detection response-related Pydantic shapes.
 
-Note: The SQLite-level DetectionRecord dataclass lives in
-hybrid_storage.local_storage. This module holds the HTTP-layer shapes.
+Firestore detection documents are normalized by the detection service. This
+module holds only the HTTP-layer response shapes.
 """
 from __future__ import annotations
 

@@ -26,6 +26,7 @@
       { "source": "/detect/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/detections/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/expert/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/media/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/monitoring/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/notifications/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/records/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
@@ -37,6 +38,8 @@
       { "source": "/classes", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/static/uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "/static/annotated_uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
+      { "source": "/annotated_uploads/**", "run": { "serviceId": "coconut-detector-api", "region": "asia-southeast1" } },
       { "source": "**", "destination": "/index.html" }
     ]
   }

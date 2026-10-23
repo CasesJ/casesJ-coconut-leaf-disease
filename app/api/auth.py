@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.core.security import verify_firebase_token
+from app.core.security import verify_verified_firebase_token
 from app.domain.expert import is_expert_identity
 from app.infrastructure.firebase.auth import verify_token
 from app.schemas.auth import LoginRequest, UserResponse
@@ -22,6 +22,8 @@ async def verify_user_token(request: LoginRequest, http_request: Request):
     await limiter.rolling(f"auth:{client_ip(http_request)}", AUTH_TOKEN_CHECKS_PER_MINUTE, 60)
     try:
         decoded = verify_token(request.token)
+        if decoded.get("token_verified_offline") or not decoded.get("uid"):
+            raise ValueError("Firebase ID token could not be verified")
         is_expert = is_expert_identity(decoded)
         return {
             "uid": decoded.get("uid"),
@@ -41,7 +43,7 @@ async def verify_user_token(request: LoginRequest, http_request: Request):
 
 
 @router.get("/user")
-async def get_current_user(decoded: dict = Depends(verify_firebase_token)):
+async def get_current_user(decoded: dict = Depends(verify_verified_firebase_token)):
     """Return info for the currently authenticated user."""
     is_expert = is_expert_identity(decoded)
     return {

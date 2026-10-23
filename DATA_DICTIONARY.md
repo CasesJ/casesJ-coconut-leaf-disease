@@ -29,8 +29,8 @@ Notifications are per-user and are stored in Firebase RTDB when available, with 
 
 ## Storage
 
-- `hybrid_storage.db` — local SQLite records
-- `detection_records/` — local JSON backups
-- `static/uploads/` — original uploads
-- `static/annotated_uploads/` — annotated images
-- `expert_audit_log.jsonl` — expert action audit events
+- users/{uid}/detections/{record_id} - authoritative Firestore detection document
+- image_assets - durable authenticated Cloudinary asset references
+- hybrid_storage.db and detection_records/ - retained historical SQLite and JSON data; not read by the application runtime
+- static/uploads/ and static/annotated_uploads/ - retained historical local images, served only through authenticated compatibility routes
+- expert_audit_log.jsonl - expert action audit events

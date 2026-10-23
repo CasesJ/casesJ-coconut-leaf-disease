@@ -2,11 +2,11 @@
 
 | Layer | Current role |
 |---|---|
-| SQLite | Local-first source for Detection Records |
-| JSON backup | Recoverable copies in `detection_records/` |
-| Firebase RTDB / Firestore | Remote synchronization when configured |
-| Static image folders | Original and annotated upload files |
+| Firestore | Authoritative detection records and expert queue |
+| Cloudinary | Authenticated storage for new image evidence |
+| Firebase RTDB | Notifications and legacy data only |
+| Local SQLite and JSON | Retained historical backups; not used by the application runtime |
 
-The app continues to save locally when Firebase is unavailable. Expert verification and expert recommendations update every available backend. Per-user notifications use RTDB when available and `user_notifications.json` as a fallback.
+The app fails record reads and writes when Firestore is unavailable; it does not save detections to SQLite or JSON. Expert verification and recommendations update the canonical Firestore record. Per-user notifications remain a separate service.
 
 Use `GET /health` for service status and `GET /detections/my-records` for the signed-in farmer’s records.

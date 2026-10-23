@@ -9,12 +9,14 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Optional
 
 import cv2
 import numpy as np
 from cv2 import IMREAD_COLOR, imdecode, imencode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from PIL import Image, UnidentifiedImageError
 
 from app.core.config import (
     IMAGE_INFERENCE_DAILY_LIMIT,
@@ -28,17 +30,19 @@ from app.core.config import (
     WS_MAX_FRAME_BYTES,
 )
 from app.core.rate_limit import limiter
-from app.core.security import verify_firebase_token
+from app.core.security import verify_verified_firebase_token
 from app.domain.detection import _extract_primary_disease, apply_record_defaults
 from app.domain.recommendation import build_recommendation_response
 from app.schemas.recommendation import FarmerRecommendationUpdate
 from app.services.detection_service import (
+    DetectionPersistenceError,
     find_record_for_user,
     save_detection_record,
     update_record_everywhere,
 )
 from app.services.farm_service import get_farm_center, set_initial_farm_center
 from app.services.inference_service import InferenceUnavailable, run_image_inference
+from app.services.media_service import present_detection_record
 
 router = APIRouter(tags=["detections"])
 logger = logging.getLogger(__name__)
@@ -66,8 +70,8 @@ async def detect_image(
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
     user_id = str(decoded.get("uid") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Token does not contain a user identity")
+    if not user_id or decoded.get("token_verified_offline"):
+        raise HTTPException(status_code=401, detail="Verified Firebase authentication is required")
     email = decoded.get("email", "unknown")
     is_offline = False
 
@@ -84,6 +88,16 @@ async def detect_image(
     contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image upload is too large")
+    try:
+        with Image.open(BytesIO(contents)) as source_image:
+            if source_image.format not in {"JPEG", "PNG"} or source_image.width * source_image.height > 40_000_000:
+                raise ValueError("Upload must be a JPEG or PNG image of at most 40 megapixels")
+            expected_content_type = "image/jpeg" if source_image.format == "JPEG" else "image/png"
+            source_image.verify()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
+    if file.content_type != expected_content_type:
+        raise HTTPException(status_code=400, detail="Image MIME type does not match its contents")
     metadata_reader = get_drone_gps() or init_drone_gps()
     image_metadata = metadata_reader.extract_image_metadata(contents, file.filename)
 
@@ -153,14 +167,21 @@ async def detect_image(
             "timestamp": datetime.now().isoformat(),
         }
         record_id = f"upload_{user_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
-        save_detection_record(
-            user_id=user_id, email=email, record_id=record_id,
-            detections=high_confidence_detections, gps_data=gps_data,
-            filename=file.filename, source="upload",
-            image_metadata=image_metadata,
-            original_bytes=contents, annotated_image=result["image"],
-            is_offline=is_offline,
-        )
+        try:
+            save_detection_record(
+                user_id=user_id, email=email, record_id=record_id,
+                detections=high_confidence_detections, gps_data=gps_data,
+                filename=file.filename, source="upload",
+                image_metadata=image_metadata,
+                original_bytes=contents, annotated_image=result["image"],
+                is_offline=is_offline,
+            )
+        except DetectionPersistenceError as exc:
+            logger.warning("New detection %s could not be durably saved: %s", record_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Image storage is temporarily unavailable. The detection was not saved.",
+            ) from exc
 
     return {
         "detections": all_detections,
@@ -186,21 +207,28 @@ async def detect_image(
 
 
 @router.get("/farm/location")
-async def get_my_farm_location(decoded: dict = Depends(verify_firebase_token)):
+async def get_my_farm_location(decoded: dict = Depends(verify_verified_firebase_token)):
     """Return the authenticated user's established farm centre."""
-    return {"farm_center": get_farm_center(str(decoded.get("uid") or "").strip())}
+    user_id = str(decoded.get("uid") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Verified Firebase sign-in is required")
+    return {"farm_center": get_farm_center(user_id)}
 
 
 @router.put("/detections/my-records/{record_id}/low-confidence-recommendation")
 async def save_farmer_low_confidence_recommendation(
     record_id: str,
     payload: FarmerRecommendationUpdate,
-    decoded: dict = Depends(verify_firebase_token),
+    decoded: dict = Depends(verify_verified_firebase_token),
 ):
     """Save a farmer review for a <50% confidence result."""
     user_id = str(decoded.get("uid") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Verified Firebase sign-in is required")
     record = find_record_for_user(user_id, record_id)
-    if not record:
+    if not record or str(record.get("user_id") or "") != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
     disease, confidence = _extract_primary_disease(record)
     if not disease:
@@ -233,7 +261,7 @@ async def save_farmer_low_confidence_recommendation(
 @router.get("/detections/my-records")
 def get_user_detections_endpoint(
     limit: int = 100,
-    decoded: dict = Depends(verify_firebase_token),
+    decoded: dict = Depends(verify_verified_firebase_token),
 ):
     """Get recent detection records for the logged-in user."""
     from app.services.detection_service import get_user_records  # noqa: PLC0415
@@ -243,6 +271,7 @@ def get_user_detections_endpoint(
     records = get_user_records(user_id, limit=safe_limit)
     for record in records:
         apply_record_defaults(record)
+    records = [present_detection_record(record) for record in records]
     return {
         "email": email,
         "total_records": len(records),
@@ -256,7 +285,6 @@ async def detect_stream(websocket: WebSocket):
     """Real-time webcam disease detection stream."""
     from model import detector  # noqa: PLC0415
     from drone_gps import get_current_drone_position  # noqa: PLC0415
-    from firebase_admin import db  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
     token = websocket.query_params.get("token")
@@ -266,8 +294,8 @@ async def detect_stream(websocket: WebSocket):
     try:
         decoded = verify_token(token)
         user_id = str(decoded.get("uid") or "").strip()
-        if not user_id:
-            raise ValueError("Token does not contain a user identity")
+        if decoded.get("token_verified_offline") or not user_id:
+            raise ValueError("A verified Firebase identity is required")
         user_email = decoded.get("email", "unknown")
     except Exception:
         await websocket.close(code=1008, reason="Invalid authentication token")
@@ -284,22 +312,41 @@ async def detect_stream(websocket: WebSocket):
     frame_buffer = deque(maxlen=2)
     frame_count = 0
     skip_count = 0
-    firebase_queue = deque(maxlen=50)
+    persistence_queue = deque(maxlen=50)
     last_firebase_save = time.time()
     latency_times: deque = deque(maxlen=30)
 
-    async def background_firebase_saver():
+    async def background_detection_saver():
         while True:
             try:
-                if firebase_queue:
-                    record = firebase_queue.popleft()
-                    if user_id:
-                        db.reference(f"users/{user_id}/drone_log").push(record)
+                if persistence_queue:
+                    record = persistence_queue.popleft()
+                    try:
+                        await asyncio.to_thread(
+                            save_detection_record,
+                            user_id=user_id,
+                            email=user_email,
+                            record_id=record["record_id"],
+                            detections=record["detections"],
+                            gps_data=record["gps_data"],
+                            filename=record["filename"],
+                            source="drone",
+                            image_metadata={},
+                            original_bytes=record["original_bytes"],
+                            annotated_image=record["annotated_image"],
+                            is_offline=False,
+                        )
+                    except DetectionPersistenceError as error:
+                        logger.warning("Streaming detection %s was not saved: %s",
+                                       record["record_id"], error)
+                    except Exception as error:
+                        logger.warning("Streaming detection persistence failed (%s)",
+                                       type(error).__name__)
                 await asyncio.sleep(0.1)
             except Exception:
                 await asyncio.sleep(0.5)
 
-    saver_task = asyncio.create_task(background_firebase_saver())
+    saver_task = asyncio.create_task(background_detection_saver())
 
     try:
         while True:
@@ -351,16 +398,30 @@ async def detect_stream(websocket: WebSocket):
                 if high_confidence_detections and user_id and (time.time() - last_firebase_save) > 1.0:
                     try:
                         gps_pos = get_current_drone_position()
-                        firebase_queue.append({
-                            "timestamp": datetime.now().isoformat(),
-                            "frame": frame_count,
-                            "detections": high_confidence_detections,
-                            "count": len(high_confidence_detections),
-                            "gps": gps_pos,
-                        })
-                        last_firebase_save = time.time()
+                        source_ok, source_buffer = imencode(
+                            ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92]
+                        )
+                        if source_ok:
+                            record_id = f"drone_{int(time.time() * 1000)}_{uuid.uuid4().hex[:12]}"
+                            if len(persistence_queue) < persistence_queue.maxlen:
+                                persistence_queue.append({
+                                    "record_id": record_id,
+                                    "filename": f"stream-frame-{frame_count}.jpg",
+                                    "detections": high_confidence_detections,
+                                    "gps_data": {
+                                        "latitude": (gps_pos or {}).get("latitude") if isinstance(gps_pos, dict) else None,
+                                        "longitude": (gps_pos or {}).get("longitude") if isinstance(gps_pos, dict) else None,
+                                        "source": "drone_stream",
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    },
+                                    "original_bytes": source_buffer.tobytes(),
+                                    "annotated_image": result["image"],
+                                })
+                                last_firebase_save = time.time()
+                            else:
+                                logger.warning("Streaming detection persistence queue is full")
                     except Exception:
-                        pass
+                        logger.warning("Streaming detection could not be queued for persistence")
 
                 _, buffer = imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 70])
                 encoded = base64.b64encode(buffer).decode("utf-8")

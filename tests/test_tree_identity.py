@@ -6,6 +6,7 @@ import json
 import math
 import sys
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -19,6 +20,7 @@ from app.infrastructure.firebase import cloud_storage
 from app.infrastructure.imaging import tree_reference as images
 from app.main import app
 from app.services import monitoring_service as store, tree_identity_service as identity
+from app.services import media_service
 
 CASE_PATH = "users/farmer-a/monitoring_cases/case-1"
 FOLLOW_PATH = CASE_PATH + "/follow_ups/old-follow-up"
@@ -142,24 +144,28 @@ def env(monkeypatch):
     app.dependency_overrides[verify_firebase_token] = lambda: dict(actor)
     assets, deleted, inference_calls = {}, [], []
 
-    def upload(reference, content):
-        assets[reference["id"]] = content
-        return {**reference, "storage_path": cloud_storage.tree_reference_path(reference), "storage_generation": "1"}
+    def upload_asset(content, content_type, category):
+        reference = {"provider": "cloudinary", "asset_id": uuid4().hex,
+                     "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+                     "resource_type": "image", "delivery_type": "authenticated",
+                     "version": 1, "format": "png" if content_type == "image/png" else "jpg",
+                     "content_type": content_type, "byte_size": len(content), "sha256": "test"}
+        assets[reference["public_id"]] = content
+        return reference
 
     def delete(reference):
-        deleted.append(reference["id"])
-        assets.pop(reference["id"], None)
+        deleted.append(reference["public_id"])
+        assets.pop(reference["public_id"], None)
 
     async def allowed(*args):
         pass
 
-    monkeypatch.setattr(api, "upload_private_tree_reference", upload)
-    monkeypatch.setattr(monitoring, "upload_private_tree_reference", upload)
-    monkeypatch.setattr(api, "delete_new_tree_reference", delete)
-    monkeypatch.setattr(monitoring, "delete_new_tree_reference", delete)
-    monkeypatch.setattr(api, "read_private_tree_reference", lambda ref: assets[ref["id"]])
-    monkeypatch.setattr(monitoring, "upload_monitoring_evidence", lambda *args: "https://storage.test/disease.jpg")
-    monkeypatch.setattr(monitoring, "delete_monitoring_evidence", lambda *args: deleted.append(args[3]))
+    monkeypatch.setattr(api, "upload_asset", upload_asset)
+    monkeypatch.setattr(monitoring, "upload_asset", upload_asset)
+    monkeypatch.setattr(api, "delete_asset", delete)
+    monkeypatch.setattr(monitoring, "delete_asset", delete)
+    monkeypatch.setattr(media_service, "download_asset",
+                        lambda ref: (assets[ref["public_id"]], ref["content_type"]))
     monkeypatch.setattr(api.limiter, "rolling", allowed)
     monkeypatch.setattr(api.limiter, "image_quota_24h", allowed)
 
@@ -198,7 +204,10 @@ def test_complete_workflow_preserves_history_and_separates_outcomes(env):
     tree_ref = response.json()
     assert tree_ref["gps_data"]["accuracy_m"] == 3
     assert "image_url" not in tree_ref and "token" not in json.dumps(tree_ref)
-    assert env.db.docs[CASE_PATH] == {**env.originals[CASE_PATH], "tree_reference": tree_ref}
+    stored_reference = env.db.docs[CASE_PATH]["tree_reference"]
+    assert stored_reference["id"] == tree_ref["id"]
+    assert stored_reference["image_asset"]["delivery_type"] == "authenticated"
+    assert "image_asset" not in tree_ref
     upload = follow_up(env, gps=True, tree_id="attacker-tree", farmer_id="someone-else", identity_review="confirmed")
     assert upload.status_code == 201, upload.text
     record = upload.json()
@@ -257,7 +266,8 @@ def test_reference_cannot_be_replaced(env):
     original = deepcopy(env.db.docs)
     assert baseline(env).status_code == 409
     assert env.db.docs == original
-    assert list(env.assets) == [first["id"]]
+    assert list(env.assets) == [env.db.docs[CASE_PATH]["tree_reference"]["image_asset"]["public_id"]]
+    assert "image_asset" not in first
 
 
 def test_review_history_revision_conflicts_and_outcome_independence(env):
@@ -359,7 +369,8 @@ def test_ambiguous_baseline_commit_never_deletes_possible_evidence(env, monkeypa
         raise RuntimeError("Commit response lost")
 
     monkeypatch.setattr(identity, "register_baseline", fail)
-    assert baseline(env).status_code == 503
+    response = baseline(env)
+    assert response.status_code == (201 if committed and not read_fails else 503)
     assert bool(env.deleted) == (not committed and not read_fails)
     monkeypatch.setattr(store, "get_case", get_case)
 
@@ -374,7 +385,8 @@ def test_ambiguous_follow_up_commit_preserves_referenced_photos(env, monkeypatch
         raise RuntimeError("Commit response lost")
 
     monkeypatch.setattr(store, "save_follow_up", fail)
-    assert follow_up(env).status_code == 503
+    response = follow_up(env)
+    assert response.status_code == (201 if committed and not read_fails else 503)
     assert bool(env.deleted) == (not committed and not read_fails)
     assert env.db.docs[FOLLOW_PATH] == env.originals[FOLLOW_PATH]
 
@@ -436,11 +448,16 @@ def test_private_storage_has_no_download_token_and_prevents_overwrites(monkeypat
 
 
 def test_partial_reference_storage_failure_keeps_history(env, monkeypatch):
-    def unavailable(*args):
-        raise RuntimeError("Private storage unavailable")
-    monkeypatch.setattr(monitoring, "upload_private_tree_reference", unavailable)
+    original_upload = monitoring.upload_asset
+    def unavailable(content, content_type, category):
+        if category == "whole-tree-reference":
+            raise RuntimeError("Cloudinary unavailable")
+        return original_upload(content, content_type, category)
+    monkeypatch.setattr(monitoring, "upload_asset", unavailable)
     assert follow_up(env).status_code == 503
-    assert env.deleted == ["annotated", "original"]
+    assert len(env.deleted) == 2
+    assert any("monitoring-annotated" in key for key in env.deleted)
+    assert any("monitoring-original" in key for key in env.deleted)
     assert env.db.docs == env.originals
 
 

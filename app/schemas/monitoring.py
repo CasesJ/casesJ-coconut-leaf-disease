@@ -151,10 +151,11 @@ class FollowUpRecord(BaseModel):
     created_at: str
     filename: str
     predictions: list[dict[str, Any]]
-    image_url: str
-    annotated_image_url: str
-    original_storage_path: str
-    annotated_storage_path: str
+    image_url: str | None = None
+    annotated_image_url: str | None = None
+    original_storage_path: str | None = None
+    annotated_storage_path: str | None = None
+    image_assets: dict[str, Any] = Field(default_factory=dict)
     gps_data: dict[str, Any] | None = None
     review_status: str = "pending_expert_review"
     preliminary_status: str = "needs_review"

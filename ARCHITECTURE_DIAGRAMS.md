@@ -8,15 +8,15 @@ Browser UI (static/index.html + static/app.js)
   |     |-- Recommendation service
   |     |-- Expert review, audit log, and notifications
   |     `-- PDF report generation
-  |-- SQLite local-first storage and JSON fallback
-  |-- Firebase RTDB / Firestore synchronization
+  |-- Firestore authoritative records (users/{uid}/detections/{record_id})
+  |-- Cloudinary authenticated image evidence
   `-- MapLibre GL disease map
 ```
 
 ```text
 Farmer upload -> inference -> Detection Record
                    |
-                   +-> confidence > 50%: auto-verified; show recommendation below the detection
+                   +-> confidence > 50%: show recommendation below the detection
                    `-> confidence <= 50%: no upload-screen recommendation; Needs Review queue
 
 Expert verification or expert recommendation -> verified record + audit event

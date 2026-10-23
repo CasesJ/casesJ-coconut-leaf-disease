@@ -1,14 +1,7 @@
-# Hybrid Storage
+# Retired Hybrid Storage
 
-CoconutAI is local-first. Detection records are written to SQLite through `hybrid_storage/` and may be synchronized to Firebase when credentials and connectivity are available.
+SQLite and JSON detection records are retained as historical backups; they are not migrated or deleted by the Firestore cutover. The SQLite adapter package, sync manager, and migration utility have been retired from the codebase. The FastAPI runtime does not open or create SQLite databases.
 
-## Components
+New detections are stored at users/{uid}/detections/{record_id}. Expert queues, farmer history, verification, recommendations, monitoring baselines, maps, and reports read canonical Firestore records. New evidence images use authenticated Cloudinary assets. Historical local images and Firebase Storage objects remain available through authenticated compatibility routes when a Firestore record references them.
 
-- `hybrid_storage/local_storage.py` — SQLite record access and local backup support.
-- `hybrid_storage/sync_manager.py` — synchronization workflow.
-- `hybrid_storage/firebase_sync.py` — Firebase integration.
-- `hybrid_storage/connectivity.py` — connectivity checks.
-
-`hybrid_storage.db` holds inference data, GPS details, verification state, and recommendation snapshots. Images are stored in `static/uploads/` and `static/annotated_uploads/`.
-
-Expert actions update verification and recommendation fields across available stores. Run the application normally with `uvicorn app.main:app --reload`; no separate storage service is required.
+Firestore and Cloudinary must be configured for record and image persistence. If either is unavailable, the affected write fails instead of saving a local-only record.

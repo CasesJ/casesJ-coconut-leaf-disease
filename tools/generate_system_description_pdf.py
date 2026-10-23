@@ -173,14 +173,14 @@ def build_pdf() -> Path:
         "For an uploaded image, the server checks that it is a valid image, reads any available image metadata, and runs the active YOLO26 v6 model.",
         "The system returns the detected labels, confidence scores, boxes around detections, and an annotated image.",
         "A saved upload starts as <b>pending verification</b>. The AI score does not verify the result by itself.",
-        "The system stores the record and its related image files. It tries Firestore first, can fall back to Firebase Realtime Database, and keeps local SQLite storage for offline or fallback use.",
+        "The system stores each detection record in the farmer's Firestore detections collection and stores new image evidence as authenticated Cloudinary assets. It does not fall back to local database storage.",
         "An Expert can review a record. When the Expert marks it verified, the system saves the verifier details, creates a recommendation snapshot, and creates an in-app notification for the record owner.",
         "The Farmer can view their records. The normal Farmer dashboard uses verified records for its main statistics.",
     ], styles, ordered=True)
 
     story.append(paragraph("Live camera and drone screen", styles["subheading"]))
     story.append(paragraph(
-        "The project includes a live WebSocket detection endpoint. The browser camera sends frames to the server, and the system returns annotated frames. When higher-confidence detections are found during a live session, the system can write a drone-log entry with the current GPS position when one is available. This is a live camera feature; it does not prove that a physical drone is connected or flying.",
+        "The project includes a live WebSocket detection endpoint. The browser camera sends frames to the server, and the system returns annotated frames. Higher-confidence detections from a live session are saved through the same Firestore and authenticated Cloudinary flow with GPS when available. This is a live camera feature; it does not prove that a physical drone is connected or flying.",
         styles["body"],
     ))
 
@@ -223,8 +223,8 @@ def build_pdf() -> Path:
         [paragraph("Python and FastAPI", styles["table"]), paragraph("Backend web API, image upload, detection, records, reporting, and WebSocket streaming.", styles["table"])],
         [paragraph("YOLO26 v6 and Ultralytics", styles["table"]), paragraph("The active detector loads local weights.pt and uses the Ultralytics backend for normal predictions.", styles["table"])],
         [paragraph("OpenVINO", styles["table"]), paragraph("The project contains OpenVINO code and dependency support, but the active detector is set to the Ultralytics backend in the current model code.", styles["table"])],
-        [paragraph("Firebase", styles["table"]), paragraph("Authentication plus cloud storage paths for Firestore and Realtime Database.", styles["table"])],
-        [paragraph("SQLite", styles["table"]), paragraph("Local record storage for offline or fallback use.", styles["table"])],
+        [paragraph("Firebase", styles["table"]), paragraph("Authentication and Firestore structured records.", styles["table"])],
+        [paragraph("Cloudinary", styles["table"]), paragraph("Authenticated storage and private retrieval for new image evidence.", styles["table"])],
         [paragraph("HTML, CSS, and JavaScript", styles["table"]), paragraph("The browser interface for login, upload, records, recommendations, notifications, and live camera controls.", styles["table"])],
         [paragraph("MapLibre GL", styles["table"]), paragraph("The browser map, map pins, heatmap, and overview map.", styles["table"])],
         [paragraph("ReportLab", styles["table"]), paragraph("PDF report generation for a user's detection records.", styles["table"])],
@@ -269,7 +269,7 @@ def build_pdf() -> Path:
         "An AI result is not automatically verified. Uploaded records remain pending until an Expert verifies them.",
         "The current code lets an Expert verify a record and save recommendations, but it does not provide a way to edit the AI disease label.",
         "Mapping depends on valid GPS information. Uploaded images without usable embedded coordinates are not placed on the map.",
-        "Cloud saving depends on Firebase availability. The application has Realtime Database and local SQLite fallback paths, but a deployment must still have correct Firebase settings.",
+        "Record and image persistence depend on Firestore and Cloudinary availability. The application does not use SQLite or JSON backups as a runtime fallback.",
         "The live camera feature depends on camera permission, browser support, network connection, server capacity, and a valid signed-in session.",
         "Recommendations are generated from configured machine-learning files, built-in content, or an Expert's saved record recommendation. They are support information, not a substitute for professional agricultural advice.",
     ], styles)

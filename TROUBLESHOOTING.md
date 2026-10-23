@@ -21,7 +21,8 @@
 
 ## Records or maps are missing
 
-- Check `hybrid_storage.db` and `detection_records/` for local records.
+- Confirm Firestore credentials, connectivity, and records under `users/{uid}/detections`.
+- A Firestore outage fails record reads and writes; the application does not switch to SQLite or JSON backups.
 - GPS fallback coordinates may be used when an image has no location metadata.
 - Confirm MapLibre and its tile service are reachable.
 

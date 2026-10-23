@@ -6,6 +6,7 @@ All functions here are side-effect-free: no database calls, no HTTP.
 import hashlib
 import json
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -91,9 +92,24 @@ def deduplicate_records(records: list[dict]) -> list[dict]:
         existing_verified = normalize_verification_status(existing) == VERIFIED_STATUS
         candidate_verified = normalize_verification_status(record) == VERIFIED_STATUS
         if candidate_verified and not existing_verified:
+            for field in ("image_assets", "image_url", "annotated_image_url",
+                          "original_storage_path", "annotated_storage_path"):
+                if not record.get(field) and existing.get(field):
+                    record[field] = deepcopy(existing[field])
             deduped[key] = record
         elif candidate_verified == existing_verified and str(record.get("verified_at") or record.get("timestamp") or "") > str(existing.get("verified_at") or existing.get("timestamp") or ""):
+            for field in ("image_assets", "image_url", "annotated_image_url",
+                          "original_storage_path", "annotated_storage_path"):
+                if not record.get(field) and existing.get(field):
+                    record[field] = deepcopy(existing[field])
             deduped[key] = record
+        else:
+            # A later local cache copy can win timestamp ordering even though
+            # only the Firestore record contains durable Cloudinary refs.
+            for field in ("image_assets", "image_url", "annotated_image_url",
+                          "original_storage_path", "annotated_storage_path"):
+                if not existing.get(field) and record.get(field):
+                    existing[field] = deepcopy(record[field])
     return list(deduped.values())
 
 

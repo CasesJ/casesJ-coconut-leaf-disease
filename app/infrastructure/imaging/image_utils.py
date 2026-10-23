@@ -1,56 +1,62 @@
-"""
-app/infrastructure/imaging/image_utils.py — Image file persistence utilities.
+"""Image encoding and durable evidence upload helpers."""
+from __future__ import annotations
 
-Saves original upload bytes (preserving EXIF/XMP) and writes OpenCV-annotated
-previews to the static directories.
-"""
-import logging
+from io import BytesIO
 
 import cv2
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
-from app.core.config import ANNOTATED_IMAGE_DIR, UPLOAD_IMAGE_DIR
-from app.infrastructure.firebase.cloud_storage import upload_image
+from app.infrastructure.cloudinary_storage import (
+    CloudinaryStorageError,
+    delete_asset,
+    upload_asset,
+)
 
-logger = logging.getLogger(__name__)
+
+def _image_content_type(content: bytes) -> str:
+    try:
+        with Image.open(BytesIO(content)) as image:
+            if image.format == "JPEG":
+                return "image/jpeg"
+            if image.format == "PNG":
+                return "image/png"
+    except (UnidentifiedImageError, OSError):
+        pass
+    raise CloudinaryStorageError("Detection original must be a JPEG or PNG image")
 
 
 def save_upload_image_assets(
     record_id: str,
     original_bytes: bytes,
     annotated_image: np.ndarray | None = None,
-) -> dict[str, str]:
-    """Persist the exact uploaded file plus the generated annotated preview.
+) -> dict:
+    """Upload source bytes and the annotated preview as authenticated assets.
 
-    The source image is written from its raw upload bytes, not re-encoded by
-    OpenCV, so EXIF/XMP metadata (including DJI flight and GPS data) is preserved.
+    Raw source bytes are preserved to retain EXIF/XMP, including drone GPS.
+    A partial upload is compensated by deleting only assets created here. The
+    function never writes local files or returns provider delivery URLs.
     """
-    image_urls: dict[str, str] = {}
+    if not record_id:
+        raise CloudinaryStorageError("Detection record identity is required")
 
-    cloud_original_url = upload_image(record_id, "original", original_bytes)
-    if cloud_original_url:
-        image_urls["image_url"] = cloud_original_url
-    else:
-        try:
-            original_path = UPLOAD_IMAGE_DIR / f"{record_id}.jpg"
-            original_path.write_bytes(original_bytes)
-            image_urls["image_url"] = f"/static/uploads/{record_id}.jpg"
-        except Exception as error:
-            logger.warning("Could not save original upload image for %s: %s", record_id, error)
+    uploaded: list[dict] = []
+    try:
+        original = upload_asset(original_bytes, _image_content_type(original_bytes), "detection-original")
+        uploaded.append(original)
+        assets = {"original": original}
 
-    if annotated_image is not None:
-        success, encoded = cv2.imencode(".jpg", annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        cloud_annotated_url = upload_image(record_id, "annotated", encoded.tobytes()) if success else None
-        if cloud_annotated_url:
-            image_urls["annotated_image_url"] = cloud_annotated_url
-        else:
-            try:
-                annotated_path = ANNOTATED_IMAGE_DIR / f"{record_id}.jpg"
-                if cv2.imwrite(str(annotated_path), annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 92]):
-                    image_urls["annotated_image_url"] = f"/static/annotated_uploads/{record_id}.jpg"
-                else:
-                    logger.warning("Could not write annotated image for %s", record_id)
-            except Exception as error:
-                logger.warning("Could not save annotated image for %s: %s", record_id, error)
-
-    return image_urls
+        if annotated_image is not None:
+            success, encoded = cv2.imencode(
+                ".jpg", annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 92]
+            )
+            if not success:
+                raise CloudinaryStorageError("Could not encode annotated image")
+            annotated = upload_asset(encoded.tobytes(), "image/jpeg", "detection-annotated")
+            uploaded.append(annotated)
+            assets["annotated"] = annotated
+        return {"image_assets": assets}
+    except Exception:
+        for reference in reversed(uploaded):
+            delete_asset(reference)
+        raise

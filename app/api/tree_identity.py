@@ -9,12 +9,12 @@ from starlette.concurrency import run_in_threadpool
 from app.api.monitoring import _ID, _expert, _farmer
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token
-from app.infrastructure.firebase.cloud_storage import (delete_new_tree_reference,
-    read_private_tree_reference, upload_private_tree_reference)
+from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
 from app.schemas.monitoring import TreeIdentityReview
 from app.services import monitoring_service as store
 from app.services import tree_identity_service as identity
+from app.services import media_service
 
 router = APIRouter(tags=["tree-identity"])
 logger = logging.getLogger(__name__)
@@ -40,16 +40,22 @@ async def register_tree_reference(farmer_id: str, case_id: str, file: UploadFile
     metadata = await run_in_threadpool(reference_metadata, case, uuid4().hex, expert_id,
                                       contents, content_type, file.filename or "")
     uploaded = None
+    asset = None
     try:
-        uploaded = await run_in_threadpool(upload_private_tree_reference, metadata, contents)
-        return await run_in_threadpool(identity.register_baseline, farmer_id, case_id, uploaded)
+        asset = await run_in_threadpool(upload_asset, contents, content_type, "whole-tree-reference")
+        uploaded = {**metadata, "image_asset": asset}
+        result = await run_in_threadpool(identity.register_baseline, farmer_id, case_id, uploaded)
+        return media_service.present_tree_reference(result)
     except Exception as exc:
-        if uploaded:
-            # Commit errors may be ambiguous: never delete a referenced object.
+        if asset:
+            # A transaction may commit while returning an error. Delete only
+            # after a successful read proves this exact asset was not stored.
             try:
                 persisted = await run_in_threadpool(store.get_case, farmer_id, case_id)
-                if persisted and (persisted.get("tree_reference") or {}).get("id") != uploaded["id"]:
-                    await run_in_threadpool(delete_new_tree_reference, uploaded)
+                current = (persisted or {}).get("tree_reference") or {}
+                if current.get("image_asset") == asset:
+                    return media_service.present_tree_reference(current)
+                await run_in_threadpool(delete_asset, asset)
             except Exception:
                 logger.warning("Unable to establish whether a new reference was committed")
         if isinstance(exc, identity.IdentityConflict):
@@ -89,11 +95,11 @@ def _media(farmer_id: str, case_id: str, reference_id: str, follow_up_id: str | 
             or reference["id"] != reference_id):
         raise HTTPException(404, "Whole-tree reference not found")
     try:
-        contents = read_private_tree_reference(reference)
+        contents, content_type = media_service.read_tree_reference(reference)
     except Exception as exc:
         logger.exception("Could not read private whole-tree evidence")
         raise HTTPException(503, "Whole-tree image is temporarily unavailable") from exc
-    return Response(contents, media_type=reference["content_type"], headers={
+    return Response(contents, media_type=content_type, headers={
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
         "Content-Disposition": "inline", "Vary": "Authorization"})
 

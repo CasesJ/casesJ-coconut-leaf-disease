@@ -17,13 +17,9 @@ from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MI
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
 from app.domain.expert import is_expert_identity
-from app.infrastructure.firebase.cloud_storage import (
-    delete_monitoring_evidence,
-    upload_monitoring_evidence,
-    upload_private_tree_reference,
-    delete_new_tree_reference,
-)
+from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
+from app.services import media_service
 from app.schemas.monitoring import (FollowUpRecord, FollowUpReview,
                                     FollowUpScheduleUpdate, MonitoringCaseCreate,
                                     PlannedTreatmentCreate, PlannedTreatmentRecord,
@@ -89,10 +85,11 @@ def create_monitoring_case(payload: MonitoringCaseCreate,
     if due and due <= _today_philippine():
         raise HTTPException(422, "Next follow-up date must be in the future")
     try:
-        return store.create_case(payload.farmer_id, payload.tree_id,
+        case = store.create_case(payload.farmer_id, payload.tree_id,
                                  payload.baseline_detection_id,
                                  due.isoformat() if due else None,
                                  expert_id, payload.follow_up_interval_days)
+        return media_service.present_monitoring_case(case)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
@@ -102,13 +99,15 @@ def create_monitoring_case(payload: MonitoringCaseCreate,
 
 @router.get("/monitoring/cases")
 def my_monitoring_cases(decoded: dict = Depends(verify_firebase_token)):
-    return {"cases": store.list_cases(_farmer(decoded))}
+    return {"cases": [media_service.present_monitoring_case(case)
+                       for case in store.list_cases(_farmer(decoded))]}
 
 
 @router.get("/expert/monitoring/cases")
 def all_monitoring_cases(decoded: dict = Depends(verify_firebase_token)):
     _expert(decoded)
-    return {"cases": store.list_expert_cases()}
+    return {"cases": [media_service.present_monitoring_case(case)
+                       for case in store.list_expert_cases()]}
 
 
 @router.get("/monitoring/cases/{case_id}")
@@ -117,7 +116,7 @@ def my_monitoring_case(case_id: str, decoded: dict = Depends(verify_firebase_tok
     case = store.get_case(_farmer(decoded), case_id)
     if not case:
         raise HTTPException(404, "Monitoring case not found")
-    return case
+    return media_service.present_monitoring_case(case)
 
 
 @router.get("/monitoring/cases/{case_id}/overview")
@@ -126,7 +125,7 @@ def my_monitoring_overview(case_id: str, decoded: dict = Depends(verify_firebase
     overview = store.get_overview(_farmer(decoded), case_id)
     if not overview:
         raise HTTPException(404, "Monitoring case not found")
-    return overview
+    return media_service.present_monitoring_overview(overview)
 
 
 @router.get("/monitoring/cases/{case_id}/planned-treatments")
@@ -238,7 +237,7 @@ def expert_monitoring_case(farmer_id: str, case_id: str,
     case = store.get_case(farmer_id, case_id)
     if not case:
         raise HTTPException(404, "Monitoring case not found")
-    return case
+    return media_service.present_monitoring_case(case)
 
 
 @router.get("/expert/monitoring/cases/{farmer_id}/{case_id}/overview")
@@ -251,7 +250,7 @@ def expert_monitoring_overview(farmer_id: str, case_id: str,
     overview = store.get_overview(farmer_id, case_id)
     if not overview:
         raise HTTPException(404, "Monitoring case not found")
-    return overview
+    return media_service.present_monitoring_overview(overview, expert=True)
 
 
 @router.get("/expert/monitoring/cases/{farmer_id}/{case_id}/treatment-applications")
@@ -271,7 +270,8 @@ def expert_follow_ups(farmer_id: str, case_id: str,
     _case_id(case_id)
     if not _ID.fullmatch(farmer_id) or not store.get_case(farmer_id, case_id):
         raise HTTPException(404, "Monitoring case not found")
-    return {"follow_ups": store.list_follow_ups(farmer_id, case_id)}
+    return {"follow_ups": [media_service.present_monitoring_follow_up(item, expert=True)
+                           for item in store.list_follow_ups(farmer_id, case_id)]}
 
 
 @router.put("/expert/monitoring/cases/{farmer_id}/{case_id}/schedule")
@@ -288,7 +288,7 @@ def reschedule_case(farmer_id: str, case_id: str, payload: FollowUpScheduleUpdat
                                           payload.follow_up_interval_days)
     if not updated:
         raise HTTPException(404, "Monitoring case not found")
-    return updated
+    return media_service.present_monitoring_case(updated)
 
 
 @router.put("/expert/monitoring/cases/{farmer_id}/{case_id}/follow-ups/{follow_up_id}/review")
@@ -307,7 +307,7 @@ def confirm_follow_up(farmer_id: str, case_id: str, follow_up_id: str,
                                       payload.next_follow_up_date.isoformat() if payload.next_follow_up_date else None)
     if not reviewed:
         raise HTTPException(404, "Follow-up not found")
-    return reviewed
+    return media_service.present_monitoring_follow_up(reviewed, expert=True)
 
 
 @router.get("/monitoring/cases/{case_id}/follow-ups")
@@ -316,7 +316,8 @@ def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
     farmer_id = _farmer(decoded)
     if not store.get_case(farmer_id, case_id):
         raise HTTPException(404, "Monitoring case not found")
-    return {"follow_ups": store.list_follow_ups(farmer_id, case_id)}
+    return {"follow_ups": [media_service.present_monitoring_follow_up(item)
+                           for item in store.list_follow_ups(farmer_id, case_id)]}
 
 
 @router.post("/monitoring/cases/{case_id}/follow-ups", status_code=201)
@@ -387,28 +388,25 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     gps_data = ({"latitude": gps.latitude, "longitude": gps.longitude,
                  "accuracy": gps.accuracy, "source": gps.source} if gps else None)
     follow_up_id = uuid4().hex
-    uploaded_evidence: list[tuple[str, str]] = []
+    uploaded_evidence: list[dict] = []
     tree_reference = None
 
     def cleanup_new_evidence() -> None:
-        # Each identifier is generated for this request. Cleanup uses the exact
-        # object key, never a prefix, and only after an object was uploaded.
-        for kind, mime_type in reversed(uploaded_evidence):
-            delete_monitoring_evidence(farmer_id, case_id, follow_up_id, kind, mime_type)
-        if tree_reference:
-            delete_new_tree_reference(tree_reference)
+        # References are unique to this request; cleanup is exact-ID only.
+        for reference in reversed(uploaded_evidence):
+            delete_asset(reference)
 
     try:
-        original_url = upload_monitoring_evidence(farmer_id, case_id, follow_up_id,
-                                                  "original", contents, content_type)
-        uploaded_evidence.append(("original", content_type))
-        annotated_url = upload_monitoring_evidence(farmer_id, case_id, follow_up_id,
-                                                   "annotated", annotated.tobytes(), "image/jpeg")
-        uploaded_evidence.append(("annotated", "image/jpeg"))
+        original_asset = upload_asset(contents, content_type, "monitoring-original")
+        uploaded_evidence.append(original_asset)
+        annotated_asset = upload_asset(annotated.tobytes(), "image/jpeg", "monitoring-annotated")
+        uploaded_evidence.append(annotated_asset)
         if tree_contents is not None:
             metadata = reference_metadata(case, uuid4().hex, farmer_id, tree_contents,
                                           tree_mime, tree_reference_file.filename or "", follow_up_id)
-            tree_reference = upload_private_tree_reference(metadata, tree_contents)
+            tree_asset = upload_asset(tree_contents, tree_mime, "whole-tree-reference")
+            uploaded_evidence.append(tree_asset)
+            tree_reference = {**metadata, "image_asset": tree_asset}
     except Exception as exc:
         cleanup_new_evidence()
         logger.exception("Could not upload follow-up evidence")
@@ -422,26 +420,35 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         treatment_application_id=treatment_application_id,
         created_at=_audit_timestamp(),
         filename=file.filename or "", predictions=predictions,
-        image_url=original_url, annotated_image_url=annotated_url,
-        original_storage_path=(f"monitoring/{farmer_id}/{case_id}/{follow_up_id}/"
-                               f"original{'.png' if content_type == 'image/png' else '.jpg'}"),
-        annotated_storage_path=f"monitoring/{farmer_id}/{case_id}/{follow_up_id}/annotated.jpg",
+        image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/original",
+        annotated_image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/annotated",
+        original_storage_path=None,
+        annotated_storage_path=None,
+        image_assets={"original": original_asset, "annotated": annotated_asset},
         gps_data=gps_data, preliminary_status=preliminary_status,
         tree_reference=tree_reference,
         identity_baseline_reference_id=(case.get("tree_reference") or {}).get("id"),
     ).model_dump(mode="json")
     try:
         store.save_follow_up(farmer_id, case_id, record)
-        return record
+        return media_service.present_monitoring_follow_up(record)
     except Exception as exc:
         # A failed Firestore commit can be ambiguous. Remove the new assets
         # only when a follow-up read succeeds and proves no record was stored.
+        existing = None
         persistence_absent = False
         try:
-            persistence_absent = store.get_follow_up(farmer_id, case_id, follow_up_id) is None
+            existing = store.get_follow_up(farmer_id, case_id, follow_up_id)
+            persistence_absent = existing is None
         except Exception:
             logger.warning("Could not verify follow-up persistence after a write failure")
-        if persistence_absent:
+        if isinstance(existing, dict) and (
+            existing.get("image_assets") == record.get("image_assets")
+            and (existing.get("tree_reference") or {}).get("id")
+            == (record.get("tree_reference") or {}).get("id")
+        ):
+            return media_service.present_monitoring_follow_up(record)
+        if persistence_absent or isinstance(existing, dict):
             cleanup_new_evidence()
         logger.exception("Could not persist follow-up evidence")
         raise HTTPException(503, "Follow-up storage unavailable") from exc

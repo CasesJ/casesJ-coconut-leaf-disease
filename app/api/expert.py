@@ -13,11 +13,11 @@ from app.core.config import (
     PENDING_VERIFICATION_STATUS,
     VERIFIED_STATUS,
 )
-from app.core.security import verify_firebase_token
+from app.core.security import verify_verified_firebase_token as verify_firebase_token
 from app.domain.detection import _extract_primary_disease
 from app.domain.expert import (
     append_expert_audit_event,
-    is_expert_identity,
+    is_authorized_expert_identity,
     normalize_disease_key,
     read_expert_audit_events,
 )
@@ -29,17 +29,19 @@ from app.domain.recommendation import (
 )
 from app.schemas.expert import ExpertRecommendationUpdate, VerificationUpdate
 from app.services.detection_service import (
+    DetectionStoreUnavailableError,
     find_record_for_user,
     get_all_user_records,
     update_record_everywhere,
 )
+from app.services.media_service import present_detection_record
 
 router = APIRouter(prefix="/expert", tags=["expert"])
 logger = logging.getLogger(__name__)
 
 
 def _require_expert(decoded: dict) -> None:
-    if not is_expert_identity(decoded):
+    if not is_authorized_expert_identity(decoded):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Expert access required")
 
 
@@ -66,7 +68,8 @@ def get_expert_records(
         "role": "expert", "email": decoded.get("email"),
         "total_records": len(all_records), "pending_records": pending_count,
         "verified_records": verified_count, "filter": status_value,
-        "limit": safe_limit, "records": filtered,
+        "limit": safe_limit,
+        "records": [present_detection_record(record, expert=True) for record in filtered],
     }
 
 
@@ -82,7 +85,8 @@ def get_pending_records(
         r for r in get_all_user_records(limit=safe_limit)
         if r.get("verification_status") == PENDING_VERIFICATION_STATUS
     ]
-    return {"role": "expert", "total_records": len(records), "limit": safe_limit, "records": records}
+    return {"role": "expert", "total_records": len(records), "limit": safe_limit,
+            "records": [present_detection_record(record, expert=True) for record in records]}
 
 
 @router.post("/records/{user_id}/{record_id}/verify")
@@ -244,8 +248,18 @@ async def update_expert_recommendation(
             "recommendation_snapshot": expert_snapshot,
             "recommendation_source": "expert_override",
         })
+    except DetectionStoreUnavailableError:
+        logger.warning("Firestore was unavailable while saving expert recommendation")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Recommendation storage is temporarily unavailable") from None
     except Exception as error:
-        logger.warning("Could not save expert recommendation for %s: %s", target_record_id, error)
+        logger.warning("Expert recommendation write failed (%s)", type(error).__name__)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Recommendation could not be saved") from None
+
+    if not direct_record_synced:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Selected record was not found")
 
     if direct_record_synced:
         create_user_notification(
@@ -292,7 +306,7 @@ def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_fireba
         event["upload"] = {
             "user_id": uid, "email": str(record.get("email") or ""),
             "filename": str(record.get("filename") or record.get("image_path") or ""),
-            "image_url": str(record.get("image_url") or ""),
-            "annotated_image_url": str(record.get("annotated_image_url") or ""),
+            "image_url": present_detection_record(record, expert=True).get("image_url", ""),
+            "annotated_image_url": present_detection_record(record, expert=True).get("annotated_image_url", ""),
         }
     return {"events": events, "limit": safe_limit}

@@ -16,6 +16,7 @@ from app.core.logging import configure_logging
 from app.core.config import CORS_ALLOWED_ORIGINS
 from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports
 from app.api import tree_identity
+from app.api import media
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -100,9 +101,6 @@ def create_app() -> FastAPI:
             response.headers["Expires"] = "0"
         return response
 
-    # Keep the historic /static URLs for generated upload previews.
-    application.mount("/static", StaticFiles(directory="static"), name="static")
-
     # Routers
     application.include_router(auth.router)
     application.include_router(recommendations.router)
@@ -110,11 +108,16 @@ def create_app() -> FastAPI:
     application.include_router(expert.router)
     application.include_router(monitoring.router)
     application.include_router(tree_identity.router)
+    application.include_router(media.router)
     application.include_router(notifications.router)
     application.include_router(records.router)
     application.include_router(reports.router)
     application.include_router(drone.router)
     application.include_router(health.router)
+
+    # API media guards must precede this mount. In particular, historic
+    # /static/uploads URLs now require Firebase ownership or expert access.
+    application.mount("/static", StaticFiles(directory="static"), name="static")
 
     # Firebase Hosting exposes the static directory as the site root.  Serving
     # it here too keeps the same asset URLs working during local development.

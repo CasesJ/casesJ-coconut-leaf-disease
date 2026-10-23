@@ -56,10 +56,10 @@ that Cloud Run service. The live site will be:
 
 ## Notes
 
-- Cloud Run has an ephemeral filesystem. The application already sends image
-  assets to Firebase Storage when valid service-account credentials are set;
-  do not rely on the local SQLite database or local upload folders for
-  production persistence.
+- Cloud Run has an ephemeral filesystem. New detection and monitoring image
+  assets use authenticated Cloudinary storage, and structured records use
+  Firestore. Do not rely on local SQLite or upload folders for production
+  persistence. Historical Firebase Storage references are read-only compatibility paths.
 - The Cloud Run service is public so Firebase Hosting can proxy to it. The app
   protects user operations with Firebase ID-token verification.
 - Redeploy after a code change with the same two commands in step 3.

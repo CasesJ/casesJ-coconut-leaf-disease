@@ -12,7 +12,7 @@
 
 1. A farmer uploads a coconut-leaf image.
 2. YOLO26 v6 returns detections, confidence scores, and an annotated image.
-3. Reviewable detections (currently `>= 5%`) are stored locally first and synchronized to Firebase when available.
+3. Reviewable detections (currently `>= 5%`) are stored in the farmer's Firestore detection collection with authenticated Cloudinary image references.
 4. Every upload starts as `pending_verification`, regardless of its primary confidence, and requires expert verification.
 5. A recommendation is shown below the upload result only when the primary disease confidence is **50% or higher**.
 6. Experts can review every pending upload; the **Needs Review** filter prioritizes results at 50% or below.
@@ -34,8 +34,8 @@
 | FastAPI | Web UI and REST API |
 | YOLO26 v6 | Coconut disease inference |
 | Firebase Auth | Email/password sign-in and role identity |
-| Firebase RTDB / Firestore | Optional remote synchronization |
-| SQLite (`hybrid_storage.db`) | Local-first detection storage |
+| Firebase Firestore | Authoritative detection, expert-review, and monitoring records |
+| Cloudinary | Authenticated image evidence storage |
 | MapLibre GL | Disease location map |
 
 ## Important endpoints

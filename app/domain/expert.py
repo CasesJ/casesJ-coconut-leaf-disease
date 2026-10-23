@@ -47,6 +47,20 @@ def is_expert_identity(decoded: dict | None) -> bool:
     return False
 
 
+def is_authorized_expert_identity(decoded: dict | None) -> bool:
+    """Require verified email for email-based expert allowlist matches.
+
+    Signed expert role claims and configured expert UIDs remain valid identity
+    signals. An unverified email address alone must not grant expert access.
+    """
+    if not decoded:
+        return False
+    identity = decoded
+    if decoded.get("email_verified") is not True:
+        identity = {**decoded, "email": None}
+    return is_expert_identity(identity)
+
+
 def normalize_disease_key(disease_name: str) -> str:
     """Create a stable dictionary key for recommendation overrides."""
     return str(disease_name or "").strip().lower().replace(" ", "_")

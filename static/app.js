@@ -408,20 +408,19 @@ function setExpertRecommendationPreview(imageUrls, imageLabel) {
   }
 
   let currentUrl = 0;
-  const loadImage = () => {
-    image.onload = () => {
+  const loadImage = async () => {
+    const loaded = await window.setPrivateImageSource(image, urls[currentUrl]);
+    if (loaded) {
       image.classList.remove('hidden');
       empty.classList.add('hidden');
-    };
-    image.onerror = () => {
+    } else {
       currentUrl += 1;
       if (currentUrl < urls.length) {
-        image.src = urls[currentUrl];
+        void loadImage();
       } else {
         showUnavailable();
       }
-    };
-    image.src = urls[currentUrl];
+    }
   };
 
   image.alt = imageLabel ? `Uploaded image: ${imageLabel}` : 'Selected uploaded image';
@@ -694,7 +693,7 @@ function openDetectionModal(record) {
   const image = record.annotated_image_url || record.image_url || '';
   const verification = formatVerificationStatus(record.verification_status).label;
   content.innerHTML = `
-    ${image ? `<img class="record-modal-image" src="${image}" alt="Annotated detection result">` : ''}
+    ${image ? `<img class="record-modal-image" data-private-src="${escapeHtml(image)}" alt="Annotated detection result">` : ''}
     <div class="detail-card">
       <div class="detail-label">Disease / Status</div>
       <div class="detail-value">${record.isHealthy ? 'Healthy tree' : diseaseName}</div>
@@ -734,7 +733,7 @@ window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedL
   const imageLabel = decodeURIComponent(encodedLabel || 'Detection image');
   title.textContent = 'Detection Image';
   subtitle.textContent = imageLabel;
-  content.innerHTML = `<img src="${imageUrl}" alt="${imageLabel}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
+  content.innerHTML = `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
   modal.classList.remove('hidden');
 };
 
@@ -743,7 +742,7 @@ window.openExpertImageResult = function openExpertImageResult(encodedOriginal, e
   if (!modal || !title || !subtitle || !content) return;
   const original = decodeURIComponent(encodedOriginal || ''), annotated = decodeURIComponent(encodedAnnotated || ''), label = decodeURIComponent(encodedLabel || 'Detection image');
   title.textContent = 'Annotated Detection Result'; subtitle.textContent = label;
-  content.innerHTML = annotated ? `<img src="${escapeHtml(annotated)}" alt="Annotated result for ${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;">` : '<p style="padding:18px;color:var(--text3);font-size:12px;">No annotated result is available for this record.</p>';
+  content.innerHTML = annotated ? `<img data-private-src="${escapeHtml(annotated)}" alt="Annotated result for ${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;">` : '<p style="padding:18px;color:var(--text3);font-size:12px;">No annotated result is available for this record.</p>';
   modal.classList.remove('hidden');
 };
 
@@ -861,7 +860,7 @@ function exportDashboardRecords() {
   }
 
   // Update: Since we moved to analytics dashboard, fetch records directly
-  const endpoint = currentUserIsExpert ? '/expert/records' : '/records?user_id=' + currentUser.uid;
+  const endpoint = currentUserIsExpert ? '/expert/records' : '/records';
   fetch(endpoint, {
     headers: { 'Authorization': 'Bearer ' + currentToken }
   })
@@ -2804,7 +2803,7 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
       const thumbnail = document.createElement(imageUrl ? 'img' : 'div');
       thumbnail.className = `history-thumbnail${imageUrl ? '' : ' history-thumbnail-empty'}`;
       if (imageUrl) {
-        thumbnail.src = imageUrl;
+        thumbnail.dataset.privateSrc = imageUrl;
         thumbnail.alt = record?.filename || 'Detection image';
       } else {
         thumbnail.textContent = 'Image unavailable';
@@ -2974,7 +2973,7 @@ function renderRecordCard(record, idx, options = {}) {
     ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
          <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Image Preview</div>
          <button type="button" onclick="openRecordImageModal('${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer;">
-           <img src="${previewImage}" alt="${imageLabel}" style="width:100%;max-height:280px;object-fit:cover;display:block;background:#eef6f1;" />
+           <img data-private-src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" style="width:100%;max-height:280px;object-fit:cover;display:block;background:#eef6f1;" />
          </button>
        </div>`
     : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
@@ -3124,7 +3123,7 @@ function renderExpertRecordsTable(records) {
     const userId = String(record.user_id || '').replace(/'/g, '&#39;');
     const diseaseArg = String(disease).replace(/'/g, '&#39;');
     const imageCell = previewImage
-      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
+      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" data-private-src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
       ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeURIComponent(record.image_url || '')}', '${encodeURIComponent(annotatedImage)}', '${encodeURIComponent(imageLabel)}')">Recommendation</button></div>`

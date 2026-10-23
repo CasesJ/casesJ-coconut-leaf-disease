@@ -11,6 +11,8 @@ websockets>=12.0
 # ─── Firebase & Cloud ──────────────────────────────────────────────────────
 firebase-admin>=6.0.0
 google-cloud-firestore>=2.13.0
+cloudinary==1.46.3
+requests>=2.31.0
 
 # ─── Authentication & Security ─────────────────────────────────────────────
 python-jose[cryptography]>=3.3.0
@@ -50,5 +52,3 @@ pytest-cov>=4.1.0
 black>=23.0.0
 flake8>=6.1.0
 mypy>=1.6.0
-
-# Note: sqlite3 is built-in with Python 3.7+
