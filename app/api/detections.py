@@ -175,6 +175,7 @@ async def detect_image(
                 image_metadata=image_metadata,
                 original_bytes=contents, annotated_image=result["image"],
                 is_offline=is_offline,
+                image_dimensions={"width": int(image.shape[1]), "height": int(image.shape[0])},
             )
         except DetectionPersistenceError as exc:
             logger.warning("New detection %s could not be durably saved: %s", record_id, exc)
@@ -202,6 +203,7 @@ async def detect_image(
         "gps_lat": lat, "gps_lng": lng, "gps_accuracy": gps_accuracy,
         "gps_source": gps_source, "gps_metadata_found": lat is not None and lng is not None,
         "image_metadata": image_metadata,
+        "image_dimensions": {"width": int(image.shape[1]), "height": int(image.shape[0])},
         "farm_center": farm_center,
     }
 
@@ -335,6 +337,7 @@ async def detect_stream(websocket: WebSocket):
                             original_bytes=record["original_bytes"],
                             annotated_image=record["annotated_image"],
                             is_offline=False,
+                            image_dimensions=record["image_dimensions"],
                         )
                     except DetectionPersistenceError as error:
                         logger.warning("Streaming detection %s was not saved: %s",
@@ -416,6 +419,10 @@ async def detect_stream(websocket: WebSocket):
                                     },
                                     "original_bytes": source_buffer.tobytes(),
                                     "annotated_image": result["image"],
+                                    "image_dimensions": {
+                                        "width": int(image.shape[1]),
+                                        "height": int(image.shape[0]),
+                                    },
                                 })
                                 last_firebase_save = time.time()
                             else:

@@ -455,8 +455,8 @@ def test_partial_reference_storage_failure_keeps_history(env, monkeypatch):
         return original_upload(content, content_type, category)
     monkeypatch.setattr(monitoring, "upload_asset", unavailable)
     assert follow_up(env).status_code == 503
-    assert len(env.deleted) == 2
-    assert any("monitoring-annotated" in key for key in env.deleted)
+    assert len(env.deleted) == 1
+    assert not any("monitoring-annotated" in key for key in env.deleted)
     assert any("monitoring-original" in key for key in env.deleted)
     assert env.db.docs == env.originals
 

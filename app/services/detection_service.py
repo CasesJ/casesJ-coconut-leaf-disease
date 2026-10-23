@@ -6,8 +6,11 @@ from copy import deepcopy
 from threading import RLock
 from time import monotonic
 from typing import Optional
+from io import BytesIO
+import math
 
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 from app.domain.detection import _serialize_detection_payload, apply_record_defaults
 from app.infrastructure.imaging.image_utils import save_upload_image_assets
@@ -27,6 +30,54 @@ class DetectionPersistenceError(RuntimeError):
 EXPERT_RECORDS_CACHE_TTL_SECONDS = 45
 _expert_records_cache: dict[str, object] = {"records": None, "limit": 0, "loaded_at": 0.0}
 _expert_records_cache_lock = RLock()
+
+
+def _image_size(image_bytes: bytes, dimensions: dict | None) -> tuple[int, int] | None:
+    """Return validated source dimensions, deriving them when not supplied."""
+    if isinstance(dimensions, dict):
+        try:
+            width, height = int(dimensions.get("width")), int(dimensions.get("height"))
+            if width > 0 and height > 0:
+                return width, height
+        except (TypeError, ValueError, OverflowError):
+            pass
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            width, height = image.size
+            if width > 0 and height > 0:
+                return int(width), int(height)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+    return None
+
+
+def _annotated_detections(detections: list[dict], dimensions: tuple[int, int] | None) -> list[dict]:
+    """Preserve model boxes and add normalized xyxy coordinates when possible."""
+    normalized_detections: list[dict] = []
+    width, height = dimensions or (0, 0)
+    for detection in detections:
+        if not isinstance(detection, dict):
+            continue
+        value = deepcopy(detection)
+        box = value.get("bbox")
+        if dimensions and isinstance(box, (list, tuple)) and len(box) == 4:
+            try:
+                x1, y1, x2, y2 = (float(coordinate) for coordinate in box)
+                if all(math.isfinite(coordinate) for coordinate in (x1, y1, x2, y2)):
+                    x1 = min(max(x1, 0.0), float(width))
+                    x2 = min(max(x2, 0.0), float(width))
+                    y1 = min(max(y1, 0.0), float(height))
+                    y2 = min(max(y2, 0.0), float(height))
+                    if x2 > x1 and y2 > y1:
+                        value["bbox_normalized"] = [
+                            round(x1 / width, 8), round(y1 / height, 8),
+                            round(x2 / width, 8), round(y2 / height, 8),
+                        ]
+                        value["bbox_format"] = "xyxy"
+            except (TypeError, ValueError, OverflowError):
+                pass
+        normalized_detections.append(value)
+    return normalized_detections
 
 
 def invalidate_expert_records_cache() -> None:
@@ -216,6 +267,7 @@ def save_detection_record(
     original_bytes: bytes,
     annotated_image: Optional[np.ndarray],
     is_offline: bool,
+    image_dimensions: dict | None = None,
 ) -> bool:
     """Persist authenticated Cloudinary image references and a Firestore record.
 
@@ -231,18 +283,26 @@ def save_detection_record(
     if document is None:
         raise DetectionPersistenceError("Detection identity is invalid")
 
+    dimensions = _image_size(original_bytes, image_dimensions)
+    stored_detections = _annotated_detections(detections, dimensions)
     detection_record = _serialize_detection_payload(
         record_id=record_id,
         user_id=user_id,
         email=email,
-        detections=detections,
+        detections=stored_detections,
         gps_data=gps_data,
         filename=filename,
         source=source,
         image_metadata=image_metadata,
     )
+    if dimensions:
+        detection_record["image_dimensions"] = {"width": dimensions[0], "height": dimensions[1]}
+        detection_record["annotation_format"] = "xyxy-normalized-v1"
     try:
-        image_fields = save_upload_image_assets(record_id, original_bytes, annotated_image)
+        # ``annotated_image`` is accepted for call compatibility; only the
+        # original source bytes are persisted to Cloudinary.
+        del annotated_image
+        image_fields = save_upload_image_assets(record_id, original_bytes)
     except CloudinaryStorageError:
         raise DetectionPersistenceError("Cloudinary image upload failed") from None
     detection_record.update(image_fields)

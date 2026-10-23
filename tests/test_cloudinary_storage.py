@@ -1,4 +1,6 @@
 """Offline Cloudinary adapter and partial-upload regression tests."""
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from io import BytesIO
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -19,7 +21,7 @@ def cloudinary_config(monkeypatch):
     monkeypatch.setattr(store.config, "CLOUDINARY_CLOUD_NAME", "test-cloud")
     monkeypatch.setattr(store.config, "CLOUDINARY_API_KEY", "server-key")
     monkeypatch.setattr(store.config, "CLOUDINARY_API_SECRET", "server-secret")
-    monkeypatch.setattr(store.config, "CLOUDINARY_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(store.config, "CLOUDINARY_READ_TIMEOUT_SECONDS", 2)
     monkeypatch.setattr(store, "_CONFIGURED_VALUES", None)
 
 
@@ -52,21 +54,22 @@ def test_upload_uses_authenticated_type_and_returns_only_durable_reference(monke
     assert "secure_url" not in reference and "api_secret" not in str(reference)
 
 
-def test_partial_detection_upload_deletes_only_completed_cloudinary_assets(monkeypatch):
-    uploaded, deleted = [], []
+def test_detection_persists_only_one_authenticated_original_asset(monkeypatch):
+    uploads = []
 
     def upload(content, content_type, category):
-        if category == "detection-annotated":
-            raise store.CloudinaryStorageError("offline")
         reference = {"provider": "cloudinary", "public_id": f"neuralcoco/{category}/{uuid4().hex}"}
-        uploaded.append(reference)
+        uploads.append((content, content_type, category, reference))
         return reference
 
     monkeypatch.setattr(image_utils, "upload_asset", upload)
-    monkeypatch.setattr(image_utils, "delete_asset", lambda ref: deleted.append(ref) or True)
-    with pytest.raises(store.CloudinaryStorageError):
-        image_utils.save_upload_image_assets("record-1", _jpeg(), np.zeros((8, 8, 3), dtype=np.uint8))
-    assert deleted == uploaded
+    fields = image_utils.save_upload_image_assets(
+        "record-1", _jpeg(), np.zeros((8, 8, 3), dtype=np.uint8)
+    )
+
+    assert len(uploads) == 1
+    assert uploads[0][1:] == ("image/jpeg", "detection-original", fields["image_assets"]["original"])
+    assert set(fields["image_assets"]) == {"original"}
 
 
 def test_failed_cloudinary_upload_is_sanitized_and_compensated(
@@ -158,6 +161,118 @@ def test_private_download_failure_logs_status_and_redacts_signed_url(
     assert "http_status=403" in caplog.text
     assert "https://" not in caplog.text
     assert "signature=private" not in caplog.text
+
+
+def test_private_download_retries_timeout_and_transient_503(monkeypatch, cloudinary_config):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "e" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg"}
+    requested = []
+    sleeps = []
+    unavailable = SimpleNamespace(
+        status_code=503,
+        raise_for_status=lambda: (_ for _ in ()).throw(requests.HTTPError("503 unavailable")),
+        close=lambda: None,
+    )
+    recovered = SimpleNamespace(
+        status_code=200,
+        iter_content=lambda chunk_size: [b"image-body"],
+        raise_for_status=lambda: None,
+        close=lambda: None,
+    )
+    responses = [requests.ReadTimeout("read timed out"), unavailable, recovered]
+
+    def get(url, **options):
+        requested.append((url, options))
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *args, **kwargs:
+                        "https://api.cloudinary.com/v1_1/test-cloud/image/download?signature=temporary")
+    monkeypatch.setattr(store.requests, "get", get)
+    monkeypatch.setattr(store.time, "sleep", sleeps.append)
+
+    assert store.download_asset(reference) == (b"image-body", "image/jpeg")
+    assert len(requested) == 3
+    assert all(options["timeout"] == (5, 2) for _, options in requested)
+    assert sleeps == [0.2, 0.5]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_private_download_does_not_retry_permanent_http_failures(
+        monkeypatch, cloudinary_config, status):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "f" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg"}
+    calls = []
+    response = SimpleNamespace(
+        status_code=status,
+        raise_for_status=lambda: (_ for _ in ()).throw(requests.HTTPError(
+            f"{status} provider response", response=SimpleNamespace(status_code=status))),
+        close=lambda: None,
+    )
+    monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *args, **kwargs:
+                        "https://api.cloudinary.com/v1_1/test-cloud/image/download?signature=temporary")
+    monkeypatch.setattr(store.requests, "get", lambda *args, **kwargs:
+                        calls.append(1) or response)
+
+    with pytest.raises(store.CloudinaryStorageError, match="temporarily unavailable"):
+        store.download_asset(reference)
+    assert calls == [1]
+
+
+def test_private_download_stops_after_bounded_timeout_retries(
+        monkeypatch, cloudinary_config):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "2" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg"}
+    calls = []
+    monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *args, **kwargs:
+                        "https://api.cloudinary.com/v1_1/test-cloud/image/download?signature=temporary")
+    monkeypatch.setattr(store.requests, "get", lambda *args, **kwargs:
+                        calls.append(1) or (_ for _ in ()).throw(requests.ReadTimeout("read timed out")))
+    monkeypatch.setattr(store.time, "sleep", lambda _: None)
+
+    with pytest.raises(store.CloudinaryStorageError, match="temporarily unavailable"):
+        store.download_asset(reference)
+    assert len(calls) == 3
+
+
+def test_private_download_coalesces_simultaneous_requests(monkeypatch, cloudinary_config):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "1" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg"}
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    response = SimpleNamespace(
+        status_code=200,
+        iter_content=lambda chunk_size: [b"same-private-image"],
+        raise_for_status=lambda: None,
+        close=lambda: None,
+    )
+
+    def get(*args, **kwargs):
+        calls.append(1)
+        started.set()
+        assert release.wait(timeout=2)
+        return response
+
+    monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *args, **kwargs:
+                        "https://api.cloudinary.com/v1_1/test-cloud/image/download?signature=temporary")
+    monkeypatch.setattr(store.requests, "get", get)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = [pool.submit(store.download_asset, reference) for _ in range(6)]
+        assert started.wait(timeout=1)
+        # Let the other requests join the in-flight download before it completes.
+        assert release.wait(timeout=0.05) is False
+        release.set()
+        assert [result.result(timeout=2) for result in results] == [
+            (b"same-private-image", "image/jpeg")
+        ] * 6
+    assert len(calls) == 1
 
 
 def test_authenticated_download_uses_backend_signed_api_request(monkeypatch, cloudinary_config):

@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from PIL import Image, ImageDraw, ImageFont
 
 from app.core import config
 from app.infrastructure.cloudinary_storage import download_asset
@@ -175,11 +179,86 @@ def _read_one(record: dict, kind: str, record_id: str, *,
 
 def read_detection_image(record: dict, kind: str) -> tuple[bytes, str]:
     record_id = str(record.get("id") or record.get("record_id") or "")
-    return _read_one(
-        record, kind, record_id,
-        url_field="annotated_image_url" if kind == "annotated" else "image_url",
-        path_field="annotated_storage_path" if kind == "annotated" else "original_storage_path",
-    )
+    try:
+        return _read_one(
+            record, kind, record_id,
+            url_field="annotated_image_url" if kind == "annotated" else "image_url",
+            path_field="annotated_storage_path" if kind == "annotated" else "original_storage_path",
+        )
+    except MediaNotFound:
+        if kind != "annotated":
+            raise
+        original, content_type = _read_one(
+            record, "original", record_id,
+            url_field="image_url", path_field="original_storage_path",
+        )
+        return _render_annotated_preview(record, original), "image/jpeg"
+
+
+def _render_annotated_preview(record: dict, original: bytes) -> bytes:
+    """Build a temporary annotated image for legacy URL consumers and downloads."""
+    try:
+        with Image.open(BytesIO(original)) as source:
+            image = source.convert("RGB")
+            image.load()
+    except Exception:
+        raise MediaUnavailable("Original image cannot be annotated") from None
+
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    detections = record.get("detections") or record.get("inference_results") or record.get("predictions") or []
+    if isinstance(detections, str):
+        try:
+            import json
+            detections = json.loads(detections)
+        except Exception:
+            detections = []
+    if not isinstance(detections, list):
+        detections = []
+    font = ImageFont.load_default()
+    thickness = max(2, round(min(width, height) * 0.004))
+    for detection in detections:
+        if not isinstance(detection, dict):
+            continue
+        normalized = detection.get("bbox_normalized")
+        coordinates = normalized if isinstance(normalized, (list, tuple)) and len(normalized) == 4 else detection.get("bbox")
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) != 4:
+            continue
+        try:
+            values = [float(value) for value in coordinates]
+            if not all(math.isfinite(value) for value in values):
+                continue
+            if coordinates is normalized:
+                values = [value * (width if index % 2 == 0 else height)
+                          for index, value in enumerate(values)]
+            x1, y1, x2, y2 = values
+            x1, x2 = sorted((max(0, min(width - 1, round(x1))), max(0, min(width - 1, round(x2)))))
+            y1, y2 = sorted((max(0, min(height - 1, round(y1))), max(0, min(height - 1, round(y2)))))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            color = (226, 67, 58)
+            for offset in range(thickness):
+                draw.rectangle((x1 + offset, y1 + offset, x2 - offset, y2 - offset),
+                               outline=color)
+            label = str(detection.get("class") or detection.get("label") or "Detection")[:100]
+            try:
+                confidence = float(detection.get("confidence"))
+                if math.isfinite(confidence):
+                    label += f" {round(confidence * 100)}%"
+            except (TypeError, ValueError, OverflowError):
+                pass
+            left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
+            label_width, label_height = right - left, bottom - top
+            label_y = max(0, y1 - label_height - 8)
+            draw.rectangle((x1, label_y, min(width, x1 + label_width + 8),
+                            min(height, label_y + label_height + 6)), fill=color)
+            draw.text((x1 + 4, label_y + 2), label, fill=(255, 255, 255), font=font)
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=90, optimize=True)
+    return output.getvalue()
 
 
 def _expected_legacy_storage_paths(record: dict, kind: str, record_id: str) -> set[str]:
@@ -207,7 +286,10 @@ def _expected_legacy_storage_paths(record: dict, kind: str, record_id: str) -> s
 
 
 def read_monitoring_image(record: dict, kind: str) -> tuple[bytes, str]:
-    return read_detection_image(record, kind)
+    value = dict(record)
+    if not value.get("detections") and isinstance(value.get("predictions"), list):
+        value["detections"] = value["predictions"]
+    return read_detection_image(value, kind)
 
 
 def read_tree_reference(reference: dict) -> tuple[bytes, str]:
@@ -231,17 +313,27 @@ def read_tree_reference(reference: dict) -> tuple[bytes, str]:
 
 def has_record_image(record: dict, kind: str) -> bool:
     assets = record.get("image_assets")
-    if isinstance(assets, dict) and isinstance(assets.get(kind), dict):
+    asset = assets.get(kind) if isinstance(assets, dict) else None
+    if isinstance(asset, dict) and asset.get("provider") == "cloudinary":
         return True
     field = "annotated_image_url" if kind == "annotated" else "image_url"
     path_field = "annotated_storage_path" if kind == "annotated" else "original_storage_path"
-    if record.get(field) or record.get(path_field):
-        return True
     record_id = str(record.get("id") or "")
-    return (_local_file(record.get("image_url" if kind == "original" else "annotated_image_url")
-                        or record.get("original_storage_path" if kind == "original" else "annotated_storage_path"),
-                        kind, record_id) is not None
-            or _local_file(record.get("image_path"), kind, record_id, allow_leaf=False) is not None)
+    allowed_paths = _expected_legacy_storage_paths(record, kind, record_id)
+    url = record.get(field)
+    firebase_location = _firebase_location(url)
+    if firebase_location and firebase_location[1] in allowed_paths:
+        return True
+    storage_path = record.get(path_field)
+    if (isinstance(storage_path, str)
+            and storage_path.startswith(("detections/", "monitoring/", "monitoring_identity/"))
+            and storage_path in allowed_paths):
+        return True
+    available = (_local_file(url or storage_path, kind, record_id) is not None
+                 or _local_file(record.get("image_path"), kind, record_id, allow_leaf=False) is not None)
+    if available:
+        return True
+    return False
 
 
 def present_detection_record(record: dict, *, expert: bool = False) -> dict:

@@ -151,6 +151,8 @@ class FollowUpRecord(BaseModel):
     created_at: str
     filename: str
     predictions: list[dict[str, Any]]
+    image_dimensions: dict[str, int] | None = None
+    annotation_format: str | None = None
     image_url: str | None = None
     annotated_image_url: str | None = None
     original_storage_path: str | None = None

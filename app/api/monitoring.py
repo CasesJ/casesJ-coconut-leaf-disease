@@ -19,6 +19,7 @@ from app.core.security import verify_verified_firebase_token as verify_firebase_
 from app.domain.expert import is_expert_identity
 from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
+from app.services.detection_service import _annotated_detections
 from app.services import media_service
 from app.schemas.monitoring import (FollowUpRecord, FollowUpReview,
                                     FollowUpScheduleUpdate, MonitoringCaseCreate,
@@ -379,10 +380,9 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
             503,
             "Disease analysis is temporarily unavailable. The follow-up was not saved.",
         ) from exc
-    predictions = result["detections"]
-    success, annotated = cv2.imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not success:
-        raise HTTPException(500, "Could not encode annotated image")
+    image_height, image_width = decoded_image.shape[:2]
+    image_dimensions = {"width": int(image_width), "height": int(image_height)}
+    predictions = _annotated_detections(result["detections"], (image_width, image_height))
     gps_reader = DroneGPS()
     gps = gps_reader.extract_gps_from_image(contents, file.filename or "")
     gps_data = ({"latitude": gps.latitude, "longitude": gps.longitude,
@@ -399,8 +399,6 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     try:
         original_asset = upload_asset(contents, content_type, "monitoring-original")
         uploaded_evidence.append(original_asset)
-        annotated_asset = upload_asset(annotated.tobytes(), "image/jpeg", "monitoring-annotated")
-        uploaded_evidence.append(annotated_asset)
         if tree_contents is not None:
             metadata = reference_metadata(case, uuid4().hex, farmer_id, tree_contents,
                                           tree_mime, tree_reference_file.filename or "", follow_up_id)
@@ -420,11 +418,13 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         treatment_application_id=treatment_application_id,
         created_at=_audit_timestamp(),
         filename=file.filename or "", predictions=predictions,
+        image_dimensions=image_dimensions,
+        annotation_format="xyxy-normalized-v1",
         image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/original",
         annotated_image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/annotated",
         original_storage_path=None,
         annotated_storage_path=None,
-        image_assets={"original": original_asset, "annotated": annotated_asset},
+        image_assets={"original": original_asset},
         gps_data=gps_data, preliminary_status=preliminary_status,
         tree_reference=tree_reference,
         identity_baseline_reference_id=(case.get("tree_reference") or {}).get("id"),

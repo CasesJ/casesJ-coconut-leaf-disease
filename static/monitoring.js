@@ -231,6 +231,16 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const advice = overview.treatment?.recommendation_snapshot || {};
   const original = monitoringImageUrl(overview.baseline?.image_url || overview.baseline?.annotated_image_url);
   const after = monitoringImageUrl(selected?.image_url || selected?.annotated_image_url);
+  const originalPreview = original
+    ? (window.DetectionOverlay?.frameHtml(original, overview.baseline || {}, {
+      className: 'monitor-detection-preview', alt: 'Baseline disease image',
+    }) || '<img data-private-src="' + original + '" alt="Baseline disease image">')
+    : '';
+  const afterPreview = after
+    ? (window.DetectionOverlay?.frameHtml(after, selected || {}, {
+      className: 'monitor-detection-preview', alt: 'Latest follow-up image',
+    }) || '<img data-private-src="' + after + '" alt="Latest follow-up image">')
+    : '';
   const fallback = '<div class="monitor-image-fallback">Image unavailable</div>';
   const outcomeReview = selected ? (selected.review_status === 'expert_confirmed'
     ? `Treatment outcome confirmed: ${monitoringStatus(selected.confirmed_outcome)}` : 'Treatment outcome needs review') : 'No follow-up yet';
@@ -316,8 +326,8 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
     <div class="monitor-head"><div><p class="monitor-case-label">${monitoringText(item.tree_id)} · ${monitoringText(item.disease)}</p><h2>Care record</h2>
     <p class="monitor-muted" style="margin-top:5px;">Baseline ${monitoringDate(overview.baseline?.timestamp || item.created_at)} · ${followUps.length} follow-up${followUps.length === 1 ? '' : 's'} recorded</p></div>
     <div class="monitor-next-check"><span class="monitor-pill ${due.cls}">${monitoringText(due.text)}</span><small>Next check · ${monitoringDate(item.next_follow_up_date)}</small></div></div>
-    <div class="monitor-comparison"><figure>${original ? `<img data-private-src="${original}" alt="Baseline disease image for ${monitoringText(item.tree_id)}">` : fallback}<figcaption>Baseline image</figcaption></figure>
-    <figure>${after ? `<img data-private-src="${after}" alt="Latest follow-up image for ${monitoringText(item.tree_id)}">` : fallback}<figcaption>${selected ? `Latest inspection · ${monitoringDate(selected.created_at)}` : 'Awaiting first inspection'}</figcaption></figure></div>
+    <div class="monitor-comparison"><figure>${original ? `${originalPreview}` : fallback}<figcaption>Baseline image</figcaption></figure>
+    <figure>${after ? `${afterPreview}` : fallback}<figcaption>${selected ? `Latest inspection · ${monitoringDate(selected.created_at)}` : 'Awaiting first inspection'}</figcaption></figure></div>
     <p class="monitor-observation"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>${monitoringText(review)}. Use the image comparison as inspection evidence; model confidence does not establish severity or recovery.</span></p></section>
     <div class="monitor-detail-grid"><section class="monitor-card"><h3 class="monitor-section-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V10M12 10C7.6 10 5.6 7.3 5.6 4.6 9.1 4.5 11.3 6.6 12 10zm0 0c4.4 0 6.4-2.7 6.4-5.4C14.9 4.5 12.7 6.6 12 10zM7 20h10"/></svg>Recorded treatment plan</h3><p class="monitor-muted" style="margin-top:7px;">Saved with the verified baseline · ${monitoringDate(overview.treatment?.recorded_at)} · ${monitoringText(advice.model_used || advice.source || 'Record snapshot')}</p>
     <p class="monitor-treatment-copy">${monitoringText(advice.recommendations?.treatment || 'No treatment text is available for this care record.')}</p>

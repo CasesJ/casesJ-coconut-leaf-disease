@@ -383,10 +383,17 @@ function openExpertRecommendationEditor() {
   document.body.classList.add('expert-recommendation-open');
 }
 
-function setExpertRecommendationPreview(imageUrls, imageLabel) {
+function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
   const image = document.getElementById('expert-recommendation-image');
   const empty = document.getElementById('expert-recommendation-image-empty');
+  const frame = document.getElementById('expert-recommendation-frame');
   if (!image || !empty) return;
+  if (frame) {
+    frame.dataset.overlayDetections = JSON.stringify(Array.isArray(record?.detections) ? record.detections : []);
+    frame.dataset.overlayDimensions = JSON.stringify(record?.image_dimensions || {});
+    delete frame.dataset.overlayReady;
+    window.DetectionOverlay?.mount(frame);
+  }
 
   // Prefer the original upload, but use the annotated result if that asset is
   // unavailable.  This keeps an expert from losing the visual evidence when a
@@ -722,28 +729,83 @@ function closeDetectionModal() {
   if (modal) modal.classList.add('hidden');
 }
 
-window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedLabel) {
+function showDetectionImagesModal(record, imageLabel) {
   const modal = document.getElementById('record-modal');
   const title = document.getElementById('record-modal-title');
   const subtitle = document.getElementById('record-modal-subtitle');
   const content = document.getElementById('record-modal-content');
   if (!modal || !title || !subtitle || !content) return;
 
-  const imageUrl = decodeURIComponent(encodedUrl || '');
-  const imageLabel = decodeURIComponent(encodedLabel || 'Detection image');
-  title.textContent = 'Detection Image';
-  subtitle.textContent = imageLabel;
-  content.innerHTML = `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;" />`;
+  const originalUrl = record?.image_url || '';
+  const annotatedUrl = record?.annotated_image_url || '';
+  const detections = Array.isArray(record?.detections) ? record.detections : [];
+  const payload = { ...record, detections };
+  const label = imageLabel || record?.filename || 'Detection image';
+  title.textContent = 'Detection Image Preview';
+  subtitle.textContent = label;
+  content.innerHTML = `<div class="detection-image-tabs" role="group" aria-label="Image preview mode"><button type="button" data-image-mode="original" aria-pressed="false">Original image</button><button type="button" data-image-mode="annotated" aria-pressed="true">Annotated preview</button></div><div id="detection-image-modal-stage"></div>`;
+  const stage = content.querySelector('#detection-image-modal-stage');
+  const renderMode = mode => {
+    const useStoredAnnotated = mode === 'annotated' && annotatedUrl;
+    const imageUrl = useStoredAnnotated ? annotatedUrl : (originalUrl || annotatedUrl);
+    const imageRecord = mode === 'annotated' && !useStoredAnnotated
+      ? payload
+      : { ...payload, detections: [] };
+    stage.innerHTML = window.DetectionOverlay?.frameHtml(imageUrl, imageRecord, {
+      className: 'detection-image-modal-frame',
+      alt: mode === 'annotated' ? `Annotated detection preview for ${label}` : label,
+    }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;" />`;
+    window.DetectionOverlay?.mount(stage);
+    window.loadPrivateMediaImages?.(stage);
+  };
+  content.querySelectorAll('[data-image-mode]').forEach(button => {
+    button.addEventListener('click', () => {
+      content.querySelectorAll('[data-image-mode]').forEach(tab => {
+        tab.setAttribute('aria-pressed', String(tab === button));
+      });
+      renderMode(button.dataset.imageMode);
+    });
+  });
+  renderMode('annotated');
   modal.classList.remove('hidden');
+}
+
+function encodeInlineValue(value) {
+  return encodeURIComponent(String(value ?? '')).replace(/'/g, '%27');
+}
+
+function encodedRecordImagePayload(record) {
+  const payload = {
+    image_url: record?.image_url || '',
+    annotated_image_url: record?.annotated_image_url || '',
+    detections: Array.isArray(record?.detections) ? record.detections : [],
+    image_dimensions: record?.image_dimensions || null,
+    filename: record?.filename || record?.image_path || '',
+  };
+  return encodeInlineValue(JSON.stringify(payload));
+}
+
+window.openDetectionImagesModal = function openDetectionImagesModal(encodedRecord, encodedLabel) {
+  let record = {};
+  try { record = JSON.parse(decodeURIComponent(encodedRecord || '{}')); } catch (_) { record = {}; }
+  let label = 'Detection image';
+  try { label = decodeURIComponent(encodedLabel || '') || record.filename || label; } catch (_) { /* keep default */ }
+  showDetectionImagesModal(record, label);
 };
 
-window.openExpertImageResult = function openExpertImageResult(encodedOriginal, encodedAnnotated, encodedLabel) {
-  const modal = document.getElementById('record-modal'), title = document.getElementById('record-modal-title'), subtitle = document.getElementById('record-modal-subtitle'), content = document.getElementById('record-modal-content');
-  if (!modal || !title || !subtitle || !content) return;
-  const original = decodeURIComponent(encodedOriginal || ''), annotated = decodeURIComponent(encodedAnnotated || ''), label = decodeURIComponent(encodedLabel || 'Detection image');
-  title.textContent = 'Annotated Detection Result'; subtitle.textContent = label;
-  content.innerHTML = annotated ? `<img data-private-src="${escapeHtml(annotated)}" alt="Annotated result for ${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#eef6f1;">` : '<p style="padding:18px;color:var(--text3);font-size:12px;">No annotated result is available for this record.</p>';
-  modal.classList.remove('hidden');
+window.openRecordImageModal = function openRecordImageModal(encodedUrl, encodedLabel) {
+  const imageUrl = decodeURIComponent(encodedUrl || '');
+  const imageLabel = decodeURIComponent(encodedLabel || 'Detection image');
+  showDetectionImagesModal({ image_url: imageUrl, detections: [] }, imageLabel);
+};
+
+window.openExpertImageResult = function openExpertImageResult(encodedOriginal, encodedAnnotated, encodedLabel, encodedRecord = '') {
+  let record = {};
+  try { record = JSON.parse(decodeURIComponent(encodedRecord || '{}')); } catch (_) { record = {}; }
+  record.image_url ||= decodeURIComponent(encodedOriginal || '');
+  record.annotated_image_url ||= decodeURIComponent(encodedAnnotated || '');
+  const label = decodeURIComponent(encodedLabel || 'Detection image');
+  showDetectionImagesModal(record, label);
 };
 
 // UI preferences are intentionally local: they refine presentation without changing
@@ -2013,6 +2075,7 @@ async function detectImages(files) {
   const resultArea = document.getElementById('result-area');
   const recsArea = document.getElementById('recommendations-area');
   const batchResults = document.getElementById('batch-results');
+  releaseBatchPreviewUrls();
   if (uploadLoading) uploadLoading.classList.add('on');
   if (resultArea) resultArea.style.display = 'none';
   if (recsArea) {
@@ -2062,7 +2125,10 @@ async function detectImages(files) {
 }
 
 function renderBatchUpload(items) {
-  batchUploadResults = items;
+  batchUploadResults = items.map(item => ({
+    ...item,
+    originalObjectUrl: URL.createObjectURL(item.file),
+  }));
   activeBatchResultIndex = items.length - 1;
   showBatchResult(activeBatchResultIndex);
 
@@ -2088,7 +2154,7 @@ function showBatchResult(index) {
   if (!batchUploadResults.length) return;
   activeBatchResultIndex = Math.max(0, Math.min(index, batchUploadResults.length - 1));
   const item = batchUploadResults[activeBatchResultIndex];
-  renderUpload(item.result);
+  renderUpload(item.result, item.file, item.originalObjectUrl);
 
   const previousButton = document.getElementById('result-prev');
   const nextButton = document.getElementById('result-next');
@@ -2153,7 +2219,7 @@ async function detectImage(file){
   }
   return data;
 }
-function renderUpload(data){
+function renderUpload(data, originalFile = null, originalObjectUrl = '') {
   const resultImg = document.getElementById('result-img');
   const feedToolbar = document.querySelector('.feed-toolbar');
   const uploadDrop = document.getElementById('upload-drop');
@@ -2167,9 +2233,35 @@ function renderUpload(data){
     return;
   }
   
-  if (resultImg && data.annotated_image_base64) {
-    resultImg.src='data:image/jpeg;base64,'+data.annotated_image_base64;
+  const previewFrame = document.getElementById('result-image-frame');
+  const originalMode = document.getElementById('result-mode-original');
+  const annotatedMode = document.getElementById('result-mode-annotated');
+  const detections = Array.isArray(data.detections) ? data.detections : [];
+  const imageUrl = originalObjectUrl || (originalFile ? URL.createObjectURL(originalFile) : '');
+  if (previewFrame) {
+    previewFrame.dataset.overlayDetections = JSON.stringify(detections);
+    previewFrame.dataset.overlayDimensions = JSON.stringify(data.image_dimensions || {});
+    delete previewFrame.dataset.overlayReady;
   }
+  const setPreviewMode = mode => {
+    const annotated = mode === 'annotated';
+    if (resultImg) {
+      resultImg.src = imageUrl || (data.annotated_image_base64 ? 'data:image/jpeg;base64,' + data.annotated_image_base64 : '');
+      resultImg.alt = annotated ? 'Annotated detection preview' : 'Original uploaded image';
+    }
+    if (previewFrame) {
+      previewFrame.dataset.overlayDetections = JSON.stringify(annotated ? detections : []);
+      delete previewFrame.dataset.overlayReady;
+      window.DetectionOverlay?.mount(previewFrame);
+    }
+    if (originalMode) originalMode.setAttribute('aria-pressed', String(!annotated));
+    if (annotatedMode) annotatedMode.setAttribute('aria-pressed', String(annotated));
+    const footer = document.getElementById('result-image-label');
+    if (footer) footer.textContent = annotated ? 'Annotated detection preview' : 'Original uploaded image';
+  };
+  if (originalMode) originalMode.onclick = () => setPreviewMode('original');
+  if (annotatedMode) annotatedMode.onclick = () => setPreviewMode('annotated');
+  setPreviewMode('annotated');
   if (feedToolbar) feedToolbar.style.display='none';
   if (uploadDrop) uploadDrop.style.display='none';
   if (resultArea) resultArea.style.display='block';
@@ -2232,10 +2324,17 @@ function clearUploadResults(){
     batchResults.style.display = 'none';
     batchResults.innerHTML = '';
   }
+  releaseBatchPreviewUrls();
   batchUploadResults = [];
   activeBatchResultIndex = 0;
   if (previousButton) previousButton.style.display = 'none';
   if (nextButton) nextButton.style.display = 'none';
+}
+
+function releaseBatchPreviewUrls() {
+  batchUploadResults.forEach(item => {
+    if (item.originalObjectUrl) URL.revokeObjectURL(item.originalObjectUrl);
+  });
 }
 
 async function fetchRecommendation(disease, confidence){
@@ -2790,7 +2889,7 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
     const imageUrl = record.image_url || record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Detection image';
     const actions = imageUrl
-      ? `<div class="history-actions"><button class="btn btn-o" type="button" onclick="openRecordImageModal('${encodeURIComponent(imageUrl)}', '${encodeURIComponent(imageLabel)}')">View image</button></div>`
+      ? `<div class="history-actions"><button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button></div>`
       : '';
     return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
   }).join('') : '<div class="no-records">No verified disease records available.</div>';
@@ -2971,9 +3070,9 @@ function renderRecordCard(record, idx, options = {}) {
   const imageLabel = record.filename || record.image_path || 'Unknown image';
   const imagePreviewHtml = previewImage
     ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
-         <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Image Preview</div>
-         <button type="button" onclick="openRecordImageModal('${encodeURIComponent(previewImage)}', '${encodeURIComponent(imageLabel)}')" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer;">
-           <img data-private-src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" style="width:100%;max-height:280px;object-fit:cover;display:block;background:#eef6f1;" />
+         <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Annotated Image Preview</div>
+         <button type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer;">
+           ${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel }) || `<img data-private-src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" />`}
          </button>
        </div>`
     : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
@@ -3123,10 +3222,10 @@ function renderExpertRecordsTable(records) {
     const userId = String(record.user_id || '').replace(/'/g, '&#39;');
     const diseaseArg = String(disease).replace(/'/g, '&#39;');
     const imageCell = previewImage
-      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeURIComponent(record.image_url || '')}','${encodeURIComponent(annotatedImage)}','${encodeURIComponent(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" data-private-src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}"></button>`
+      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeInlineValue(record.image_url || '')}','${encodeInlineValue(annotatedImage)}','${encodeInlineValue(imageLabel)}','${encodedRecordImagePayload(record)}')" style="border:0;background:transparent;padding:0;cursor:pointer;">${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { className: 'expert-record-thumb-frame', alt: `View ${imageLabel}` }) || `<img class="expert-record-thumb" data-private-src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}">`}</button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
-      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeURIComponent(record.image_url || '')}', '${encodeURIComponent(annotatedImage)}', '${encodeURIComponent(imageLabel)}')">Recommendation</button></div>`
+      ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeInlineValue(record.image_url || '')}', '${encodeInlineValue(annotatedImage)}', '${encodeInlineValue(imageLabel)}')">Recommendation</button></div>`
       : '<span class="expert-table-muted">Verified</span>';
 
     return `<tr>
@@ -3309,6 +3408,13 @@ async function loadUserRecords({ force = false } = {}) {
       const recommendationPanel = status.cls === 'verified'
         ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';
+      const imageUrl = record.image_url || record.annotated_image_url || '';
+      const imageLabel = record.filename || record.image_path || 'Detection image';
+      const imagePreview = imageUrl
+        ? `<button type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" aria-label="View ${escapeHtml(imageLabel)}" style="display:block;width:min(100%,360px);margin-top:10px;padding:0;border:0;border-radius:9px;overflow:hidden;background:#eef6f1;cursor:zoom-in;">
+             ${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" />`}
+           </button>`
+        : '';
       
       return `
         <div class="record-item">
@@ -3321,6 +3427,7 @@ async function loadUserRecords({ force = false } = {}) {
             ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
             <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
+          ${imagePreview}
           ${locationDisplay}
           ${recommendationPanel}
         </div>
@@ -3624,7 +3731,7 @@ window.editExpertRecommendation = async function editExpertRecommendation(diseas
     selectedRecord?.annotated_image_url,
   ];
   const imageLabel = decodeURIComponent(encodedImageLabel || '') || selectedRecord?.filename || selectedRecord?.image_path || '';
-  setExpertRecommendationPreview(imageUrls, imageLabel);
+  setExpertRecommendationPreview(imageUrls, imageLabel, selectedRecord);
   await loadExpertRecommendation(diseaseName, confidence, { userId, recordId });
 };
 

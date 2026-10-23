@@ -99,7 +99,8 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     saved = []
     uploads = []
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.82}],
+        predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.82,
+                                                      "bbox": [0, 0, 16, 16]}],
                                      "image": image})))
 
     def fake_upload(content, content_type, category):
@@ -116,9 +117,12 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     monkeypatch.setattr(monitoring.store, "save_follow_up", lambda farmer, case, record: saved.append(record))
     response = _upload(client, source)
     assert response.status_code == 201, response.text
+    assert len(uploads) == 1
     assert uploads[0] == ("monitoring-original", source, "image/jpeg")
-    assert uploads[1][0] == "monitoring-annotated"
-    assert saved[0]["predictions"] == [{"class": "Bud Rot", "confidence": 0.82}]
+    assert saved[0]["predictions"][0]["class"] == "Bud Rot"
+    assert saved[0]["predictions"][0]["bbox_normalized"] == [0, 0, 1, 1]
+    assert saved[0]["image_dimensions"] == {"width": 16, "height": 16}
+    assert saved[0]["annotation_format"] == "xyxy-normalized-v1"
     assert saved[0]["baseline_detection_id"] == "upload-1"
     assert saved[0]["review_status"] == "pending_expert_review"
     assert saved[0]["gps_data"] is None
@@ -126,7 +130,7 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     assert saved[0]["image_url"] and saved[0]["annotated_image_url"]
     assert saved[0]["original_storage_path"] is None
     assert saved[0]["annotated_storage_path"] is None
-    assert set(saved[0]["image_assets"]) == {"original", "annotated"}
+    assert set(saved[0]["image_assets"]) == {"original"}
     assert "api.cloudinary.com" not in response.text
     assert "severity" not in saved[0] and "recovery" not in saved[0]
 
@@ -151,7 +155,7 @@ def test_failed_inference_is_not_saved_as_a_no_detection(client, monkeypatch):
     assert saved == []
 
 
-def test_partial_storage_failure_cleans_only_current_request_objects(client, monkeypatch):
+def test_original_storage_failure_does_not_save_follow_up(client, monkeypatch):
     uploaded = []
     deleted = []
 
@@ -161,8 +165,8 @@ def test_partial_storage_failure_cleans_only_current_request_objects(client, mon
 
     def partial_upload(content, content_type, category):
         uploaded.append((category, content_type))
-        if category == "monitoring-annotated":
-            raise RuntimeError("annotated upload unavailable")
+        if category == "monitoring-original":
+            raise RuntimeError("original upload unavailable")
         return {"provider": "cloudinary", "asset_id": uuid4().hex,
                 "public_id": f"neuralcoco/{category}/{uuid4().hex}",
                 "resource_type": "image", "delivery_type": "authenticated",
@@ -177,9 +181,8 @@ def test_partial_storage_failure_cleans_only_current_request_objects(client, mon
     response = _upload(client, _image())
 
     assert response.status_code == 503
-    assert [entry[0] for entry in uploaded] == ["monitoring-original", "monitoring-annotated"]
-    assert len(deleted) == 1
-    assert deleted[0]["public_id"].startswith("neuralcoco/monitoring-original/")
+    assert [entry[0] for entry in uploaded] == ["monitoring-original"]
+    assert deleted == []
 
 
 def test_case_creation_requires_expert(client, monkeypatch):

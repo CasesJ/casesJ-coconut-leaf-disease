@@ -1,9 +1,84 @@
 /* Authenticated image delivery for owner-checked FastAPI media endpoints. */
 (() => {
-  const objectUrls = new Set();
+  const objectUrls = new Map();
   const pending = new WeakMap();
+  const imageLoadHandlers = new WeakMap();
   let activeUid = null;
   let observer = null;
+  let nextImageId = 0;
+
+  function diagnostic(event, image, details = {}) {
+    image.dataset.privateDebugId ||= `image-${++nextImageId}`;
+    console.info('[private-media]', event, {
+      imageId: image.dataset.privateDebugId,
+      state: image.dataset.privateState || 'created',
+      ...details,
+    });
+  }
+
+  function routeKind(path) {
+    if (path.startsWith('/expert/media/')) return 'expert';
+    if (path.startsWith('/media/')) return 'farmer';
+    if (path.startsWith('/static/')) return 'legacy';
+    return 'unknown';
+  }
+
+  function removeImageLoadHandlers(image) {
+    const handlers = imageLoadHandlers.get(image);
+    if (!handlers) return;
+    image.removeEventListener('load', handlers.onLoad);
+    image.removeEventListener('error', handlers.onError);
+    imageLoadHandlers.delete(image);
+  }
+
+  function revokeObjectUrl(url, reason, image = objectUrls.get(url)) {
+    if (!url) return;
+    if (image) {
+      diagnostic('object-url:revoke', image, {
+        reason,
+        connected: image.isConnected,
+        stillAssigned: image.src === url,
+        complete: Boolean(image.complete),
+        naturalWidth: image.naturalWidth || 0,
+      });
+    }
+    URL.revokeObjectURL(url);
+    objectUrls.delete(url);
+  }
+
+  function watchImageLoad(image, objectUrl) {
+    removeImageLoadHandlers(image);
+    const onLoad = () => {
+      const dimensions = {
+        width: image.naturalWidth || 0,
+        height: image.naturalHeight || 0,
+        complete: Boolean(image.complete),
+      };
+      image.dataset.privateState = dimensions.width > 0 ? 'loaded' : 'image-error';
+      if (dimensions.width > 0) {
+        diagnostic('image:load', image, dimensions);
+      } else {
+        image.dataset.privateError = 'decode';
+        image.alt = 'Image unavailable (invalid image data)';
+        diagnostic('image:error', image, { reason: 'zero-natural-width', ...dimensions });
+      }
+      removeImageLoadHandlers(image);
+    };
+    const onError = () => {
+      image.dataset.privateState = 'image-error';
+      image.dataset.privateError = 'decode';
+      image.alt = 'Image unavailable (invalid image data)';
+      diagnostic('image:error', image, {
+        reason: 'browser-decode-failed',
+        complete: Boolean(image.complete),
+        naturalWidth: image.naturalWidth || 0,
+      });
+      removeImageLoadHandlers(image);
+    };
+    image.addEventListener('load', onLoad, { once: true });
+    image.addEventListener('error', onError, { once: true });
+  imageLoadHandlers.set(image, { onLoad, onError });
+  }
 
   function signedInUser() {
     try { return window.firebase?.auth?.().currentUser || null; } catch (_) { return null; }
@@ -11,11 +86,12 @@
 
   function clearPrivateMedia() {
     observer?.disconnect();
-    objectUrls.forEach((url) => URL.revokeObjectURL(url));
-    objectUrls.clear();
+    [...objectUrls.entries()].forEach(([url, image]) => revokeObjectUrl(url, 'auth-reset', image));
     document.querySelectorAll('img[data-private-src]').forEach((image) => {
+      removeImageLoadHandlers(image);
       image.removeAttribute('src');
       delete image.dataset.privateObjectUrl;
+      image.dataset.privateState = 'auth-reset';
     });
     if (observer) document.querySelectorAll('img[data-private-src]').forEach((image) => observer.observe(image));
     activeUid = null;
@@ -25,57 +101,131 @@
     observer?.unobserve(image);
     const objectUrl = image.dataset.privateObjectUrl;
     if (objectUrl) {
-      URL.revokeObjectURL(objectUrl);
-      objectUrls.delete(objectUrl);
+      revokeObjectUrl(objectUrl, 'image-node-removed', image);
       delete image.dataset.privateObjectUrl;
     }
+    removeImageLoadHandlers(image);
     image.removeAttribute('src');
+    image.dataset.privateState = 'released';
     pending.delete(image);
+  }
+
+  function markUnavailable(image, reason, label) {
+    image.dataset.privateAlt ||= image.alt;
+    image.dataset.privateError = reason;
+    image.dataset.privateState = 'unavailable';
+    image.alt = label;
+    image.removeAttribute('src');
   }
 
   async function setPrivateImageSource(image, path) {
     if (!(image instanceof HTMLImageElement)) return false;
     const url = String(path || '').trim();
-    if (!url || !url.startsWith('/') || url.startsWith('//')
+    if (!url) {
+      markUnavailable(image, 'missing-url', 'No image reference available');
+      console.warn('[private-media] Image record has no media URL');
+      return false;
+    }
+    if (!url.startsWith('/') || url.startsWith('//')
         || !/^\/(media|expert\/media|static\/uploads|static\/annotated_uploads)\//.test(url)) {
-      image.removeAttribute('src');
+      markUnavailable(image, 'unsupported-url', 'Image URL is not a protected media route');
+      console.warn('[private-media] Refused a media URL outside the protected API');
       return false;
     }
     const user = signedInUser();
     if (!user) {
-      image.removeAttribute('src');
+      markUnavailable(image, 'not-signed-in', 'Sign in to view this image');
+      diagnostic('fetch:skipped', image, { reason: 'firebase-user-unavailable', route: routeKind(url) });
       return false;
     }
     if (activeUid && activeUid !== user.uid) clearPrivateMedia();
     activeUid = user.uid;
+    image.dataset.privateAlt ||= image.alt;
+    image.alt = image.dataset.privateAlt;
+    delete image.dataset.privateError;
     observer?.unobserve(image);
     image.dataset.privateSrc = url;
     const previous = pending.get(image);
     if (previous?.path === url) return previous.promise;
     if (image.dataset.privateObjectUrl) {
-      URL.revokeObjectURL(image.dataset.privateObjectUrl);
-      objectUrls.delete(image.dataset.privateObjectUrl);
+      revokeObjectUrl(image.dataset.privateObjectUrl, 'source-replaced', image);
       delete image.dataset.privateObjectUrl;
     }
+    removeImageLoadHandlers(image);
     image.removeAttribute('src');
+    image.dataset.privateState = 'fetching';
     const promise = (async () => {
+      let objectUrl = null;
       try {
-        const token = await user.getIdToken();
-        const response = await fetch(url, {
+        const fetchWithToken = token => fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
           cache: 'no-store',
         });
-        if (!response.ok) return false;
+        const token = await user.getIdToken();
+        diagnostic('fetch:start', image, { route: routeKind(url), tokenPresent: Boolean(token) });
+        let response = await fetchWithToken(token);
+        if (response.status === 401) {
+          diagnostic('fetch:refresh-token', image, { route: routeKind(url) });
+          response = await fetchWithToken(await user.getIdToken(true));
+        }
         const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-        if (!['image/jpeg', 'image/png'].includes(contentType)) return false;
+        diagnostic('fetch:response', image, { route: routeKind(url), status: response.status, contentType });
+        if (!response.ok) {
+          image.dataset.privateError = String(response.status);
+          image.dataset.privateState = 'fetch-error';
+          image.alt = `Image unavailable (HTTP ${response.status})`;
+          console.warn('[private-media] Protected image request failed', {
+            imageId: image.dataset.privateDebugId, status: response.status, route: routeKind(url),
+          });
+          return false;
+        }
+        if (!['image/jpeg', 'image/png'].includes(contentType)) {
+          image.dataset.privateError = `content-type:${contentType || 'missing'}`;
+          image.dataset.privateState = 'response-error';
+          image.alt = 'Image unavailable (invalid response type)';
+          console.warn('[private-media] Protected image response was not an image', {
+            imageId: image.dataset.privateDebugId, contentType, route: routeKind(url),
+          });
+          return false;
+        }
         const blob = await response.blob();
-        if (!image.isConnected || signedInUser()?.uid !== user.uid || image.dataset.privateSrc !== url) return false;
-        const objectUrl = URL.createObjectURL(blob);
-        objectUrls.add(objectUrl);
+        diagnostic('blob:created', image, { type: blob.type || '', size: blob.size });
+        const blobType = String(blob.type || '').split(';')[0].trim().toLowerCase();
+        if (blobType && !['image/jpeg', 'image/png'].includes(blobType)) {
+          image.dataset.privateError = `blob-type:${blobType}`;
+          image.dataset.privateState = 'response-error';
+          image.alt = 'Image unavailable (invalid response type)';
+          console.warn('[private-media] Protected image Blob has an invalid type', {
+            imageId: image.dataset.privateDebugId, blobType, route: routeKind(url),
+          });
+          return false;
+        }
+        if (!image.isConnected || signedInUser()?.uid !== user.uid || image.dataset.privateSrc !== url) {
+          image.dataset.privateState = 'stale-response';
+          diagnostic('blob:discarded', image, { route: routeKind(url), connected: image.isConnected });
+          return false;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        objectUrls.set(objectUrl, image);
         image.dataset.privateObjectUrl = objectUrl;
+        image.dataset.privateState = 'loading';
+        watchImageLoad(image, objectUrl);
         image.src = objectUrl;
+        diagnostic('object-url:assigned', image, { route: routeKind(url), blobType: blob.type || '', blobSize: blob.size });
         return true;
-      } catch (_) {
+      } catch (error) {
+        image.dataset.privateError = 'network';
+        image.dataset.privateState = 'fetch-error';
+        image.alt = 'Image unavailable (network error)';
+        if (objectUrl) {
+          revokeObjectUrl(objectUrl, 'source-error', image);
+          delete image.dataset.privateObjectUrl;
+        }
+        console.warn('[private-media] Protected image fetch failed', {
+          imageId: image.dataset.privateDebugId,
+          route: routeKind(url),
+          errorType: error?.name || 'Error',
+        });
         return false;
       } finally {
         if (pending.get(image)?.path === url) pending.delete(image);

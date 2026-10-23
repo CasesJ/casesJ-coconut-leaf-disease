@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import Future
 from io import BytesIO
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -18,6 +19,12 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_LOCK = threading.Lock()
 _CONFIGURED_VALUES: tuple[str, str, str] | None = None
+_DOWNLOAD_LOCK = threading.Lock()
+_INFLIGHT_DOWNLOADS: dict[tuple[str, str], Future[tuple[bytes, str]]] = {}
+_DOWNLOAD_MAX_ATTEMPTS = 3
+_DOWNLOAD_RETRY_BACKOFF_SECONDS = (0.2, 0.5)
+_RETRYABLE_DOWNLOAD_STATUSES = {408, 500, 502, 503, 504}
+_DOWNLOAD_URL_EXPIRY_MARGIN_SECONDS = 30
 _PUBLIC_ID_PATTERN = re.compile(r"^neuralcoco/[a-z0-9_-]+/[a-f0-9]{32}$")
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
 _URL_PATTERN = re.compile(r"(?i)\b(?:https?://|cloudinary://)\S+")
@@ -222,23 +229,24 @@ def delete_asset(reference: dict) -> bool:
         return False
 
 
-def download_asset(reference: dict) -> tuple[bytes, str]:
-    """Download an authenticated asset through the backend only."""
-    public_id, image_format = _validate_reference(reference)
-    cloud_name, _, _ = _configure()
-    try:
-        from cloudinary import utils  # noqa: PLC0415
-        url = utils.private_download_url(
-            public_id, image_format, resource_type="image", type="authenticated",
-            expires_at=int(time.time()) + 60,
-        )
-        parsed = urlsplit(url)
-        expected_prefix = f"/v1_1/{cloud_name}/image/download"
-        if parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com" or parsed.path != expected_prefix:
-            raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
-        response = requests.get(url, timeout=(5, config.CLOUDINARY_TIMEOUT_SECONDS),
-                                stream=True, allow_redirects=False)
+def _download_private_url(url: str) -> bytes:
+    """Fetch bytes with bounded retries for transient provider/network failures."""
+    for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+        response = None
         try:
+            response = requests.get(
+                url,
+                timeout=(5, config.CLOUDINARY_READ_TIMEOUT_SECONDS),
+                stream=True,
+                allow_redirects=False,
+            )
+            status = getattr(response, "status_code", None)
+            if status in _RETRYABLE_DOWNLOAD_STATUSES and attempt + 1 < _DOWNLOAD_MAX_ATTEMPTS:
+                response.close()
+                response = None
+                time.sleep(_DOWNLOAD_RETRY_BACKOFF_SECONDS[attempt])
+                continue
+
             response.raise_for_status()
             chunks: list[bytes] = []
             total = 0
@@ -250,13 +258,78 @@ def download_asset(reference: dict) -> tuple[bytes, str]:
                     raise CloudinaryStorageError("Stored image exceeds the configured limit")
                 chunks.append(chunk)
             content = b"".join(chunks)
+            if not content:
+                raise CloudinaryStorageError("Cloudinary returned an empty image")
+            return content
+        except (requests.Timeout, requests.ConnectionError) as error:
+            if (isinstance(error, requests.exceptions.SSLError)
+                    or attempt + 1 >= _DOWNLOAD_MAX_ATTEMPTS):
+                raise
+            if response is not None:
+                response.close()
+                response = None
+            time.sleep(_DOWNLOAD_RETRY_BACKOFF_SECONDS[attempt])
         finally:
-            response.close()
-        if not content:
-            raise CloudinaryStorageError("Cloudinary returned an empty image")
+            if response is not None:
+                response.close()
+    raise AssertionError("Cloudinary download retry loop completed unexpectedly")
+
+
+def _download_asset_once(reference: dict, public_id: str, image_format: str,
+                         cloud_name: str) -> tuple[bytes, str]:
+    try:
+        from cloudinary import utils  # noqa: PLC0415
+        url = utils.private_download_url(
+            public_id, image_format, resource_type="image", type="authenticated",
+            expires_at=(int(time.time()) + max(
+                60,
+                _DOWNLOAD_MAX_ATTEMPTS * config.CLOUDINARY_READ_TIMEOUT_SECONDS
+                + int(sum(_DOWNLOAD_RETRY_BACKOFF_SECONDS))
+                + _DOWNLOAD_URL_EXPIRY_MARGIN_SECONDS,
+            )),
+        )
+        parsed = urlsplit(url)
+        expected_prefix = f"/v1_1/{cloud_name}/image/download"
+        if parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com" or parsed.path != expected_prefix:
+            raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
+        content = _download_private_url(url)
         return content, str(reference.get("content_type") or "image/jpeg")
     except CloudinaryStorageError:
         raise
     except Exception as error:
         _log_cloudinary_failure("private download", error)
         raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+
+def download_asset(reference: dict) -> tuple[bytes, str]:
+    """Download an authenticated asset through the backend only.
+
+    Concurrent requests for the same asset share one provider download, including
+    its bounded retry sequence, so bursts do not multiply Cloudinary traffic.
+    """
+    public_id, image_format = _validate_reference(reference)
+    cloud_name, _, _ = _configure()
+    key = (public_id, image_format)
+    with _DOWNLOAD_LOCK:
+        pending = _INFLIGHT_DOWNLOADS.get(key)
+        if pending is None:
+            pending = Future()
+            _INFLIGHT_DOWNLOADS[key] = pending
+            is_leader = True
+        else:
+            is_leader = False
+
+    if not is_leader:
+        return pending.result()
+
+    try:
+        result = _download_asset_once(reference, public_id, image_format, cloud_name)
+        pending.set_result(result)
+        return result
+    except BaseException as error:
+        pending.set_exception(error)
+        raise
+    finally:
+        with _DOWNLOAD_LOCK:
+            if _INFLIGHT_DOWNLOADS.get(key) is pending:
+                del _INFLIGHT_DOWNLOADS[key]

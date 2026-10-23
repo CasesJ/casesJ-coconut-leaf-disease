@@ -56,19 +56,24 @@ def _persist(monkeypatch, db, refs, deleted):
 def _call():
     return service.save_detection_record(
         user_id="farmer-a", email="farmer@example.test", record_id="record-1",
-        detections=[{"class": "Bud Rot", "confidence": 0.8}],
+        detections=[{"class": "Bud Rot", "confidence": 0.8, "bbox": [10, 20, 110, 220]}],
         gps_data={"latitude": 7.1, "longitude": 125.6}, filename="leaf.jpg",
         source="upload", image_metadata={"gps_source": "exif"},
         original_bytes=b"source", annotated_image=None, is_offline=False,
+        image_dimensions={"width": 200, "height": 400},
     )
 
 
-def test_firestore_stores_cloudinary_asset_ids_without_local_database_write(monkeypatch):
-    db, original, annotated = MemoryFirestore(), _asset("original"), _asset("annotated")
+def test_firestore_stores_one_cloudinary_original_and_normalized_annotation_metadata(monkeypatch):
+    db, original = MemoryFirestore(), _asset("original")
     deleted = []
-    _persist(monkeypatch, db, {"original": original, "annotated": annotated}, deleted)
+    _persist(monkeypatch, db, {"original": original}, deleted)
     assert _call() is True
-    assert db.record["image_assets"] == {"original": original, "annotated": annotated}
+    assert db.record["image_assets"] == {"original": original}
+    assert db.record["image_dimensions"] == {"width": 200, "height": 400}
+    assert db.record["annotation_format"] == "xyxy-normalized-v1"
+    assert db.record["detections"][0]["bbox_normalized"] == [0.05, 0.05, 0.55, 0.55]
+    assert db.record["detections"][0]["bbox"] == [10, 20, 110, 220]
     assert "image_url" not in db.record and "secure_url" not in str(db.record)
     assert deleted == []
 
@@ -84,7 +89,7 @@ def test_verified_ambiguous_firestore_commit_is_success(monkeypatch):
 
 def test_confirmed_absent_firestore_write_cleans_only_new_assets(monkeypatch):
     db, deleted = MemoryFirestore("fail"), []
-    refs = {"original": _asset("original"), "annotated": _asset("annotated")}
+    refs = {"original": _asset("original")}
     _persist(monkeypatch, db, refs, deleted)
     with pytest.raises(service.DetectionPersistenceError):
         _call()

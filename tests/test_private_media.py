@@ -1,9 +1,11 @@
 """Offline access-control and historical media resolver tests."""
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from PIL import Image
 import pytest
 
 from app.api import media as media_api
@@ -29,6 +31,12 @@ def _cloudinary_ref(kind="original"):
             "byte_size": 9, "sha256": "test"}
 
 
+def _valid_jpeg_bytes():
+    stream = BytesIO()
+    Image.new("RGB", (8, 8), "green").save(stream, format="JPEG")
+    return stream.getvalue()
+
+
 def test_farmer_can_read_only_their_cloudinary_detection_image(client, monkeypatch):
     http, actor = client
     ref = _cloudinary_ref()
@@ -47,13 +55,127 @@ def test_farmer_can_read_only_their_cloudinary_detection_image(client, monkeypat
 
 def test_expert_route_requires_expert_and_binds_the_owner(client, monkeypatch):
     http, actor = client
+    image_bytes = _valid_jpeg_bytes()
     monkeypatch.setattr(detection_service, "find_canonical_record_for_user", lambda uid, rid: {
         "id": rid, "user_id": uid, "image_assets": {"annotated": _cloudinary_ref("annotated")}})
-    monkeypatch.setattr(media_service, "download_asset", lambda asset: (b"annotated", "image/jpeg"))
+    monkeypatch.setattr(media_service, "download_asset", lambda asset: (image_bytes, "image/jpeg"))
     assert http.get("/expert/media/detections/farmer-a/rec-2/annotated").status_code == 403
     actor.update(uid="expert-1", role="expert")
     response = http.get("/expert/media/detections/farmer-a/rec-2/annotated")
-    assert response.status_code == 200 and response.content == b"annotated"
+    assert response.status_code == 200 and response.content == image_bytes
+    assert response.headers["content-type"] == "image/jpeg"
+    Image.open(BytesIO(response.content)).verify()
+
+
+def test_new_annotated_media_route_renders_boxes_from_metadata_on_demand(client, monkeypatch):
+    http, _ = client
+    image_bytes = _valid_jpeg_bytes()
+    reference = _cloudinary_ref("original")
+    record = {
+        "id": "record-new",
+        "user_id": "farmer-a",
+        "image_assets": {"original": reference},
+        "image_dimensions": {"width": 8, "height": 8},
+        "detections": [{
+            "class": "Bud Rot", "confidence": 0.82,
+            "bbox": [1, 1, 6, 6], "bbox_normalized": [0.125, 0.125, 0.75, 0.75],
+        }],
+    }
+    downloads = []
+    monkeypatch.setattr(detection_service, "find_canonical_record_for_user",
+                        lambda uid, rid: dict(record) if uid == "farmer-a" and rid == "record-new" else None)
+    monkeypatch.setattr(media_service, "download_asset",
+                        lambda asset: downloads.append(asset) or (image_bytes, "image/jpeg"))
+
+    response = http.get("/media/detections/record-new/annotated")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert downloads == [reference]
+    assert response.content != image_bytes
+    with Image.open(BytesIO(response.content)) as annotated:
+        assert annotated.size == (8, 8)
+
+
+@pytest.mark.parametrize(
+    ("role", "actor_update", "records_url"),
+    [
+        ("farmer", {}, "/detections/my-records"),
+        ("expert", {"uid": "expert-1", "role": "expert"}, "/expert/records?status=all"),
+    ],
+)
+def test_new_cloudinary_upload_round_trips_through_farmer_and_expert_history(
+    client, monkeypatch, role, actor_update, records_url,
+):
+    http, actor = client
+    actor.update(actor_update)
+    reference = _cloudinary_ref("original")
+    image_bytes = _valid_jpeg_bytes()
+    record = {
+        "id": "upload_farmera_20261023_a1b2c3d4",
+        "user_id": "farmer-a",
+        "email": "farmer@example.test",
+        "timestamp": "2026-10-23T10:00:00Z",
+        "source": "upload",
+        "detections": [{
+            "class": "Bud Rot", "confidence": 0.82, "bbox": [1, 1, 6, 6],
+            "bbox_normalized": [0.125, 0.125, 0.75, 0.75],
+        }],
+        "image_dimensions": {"width": 8, "height": 8},
+        "image_assets": {"original": reference},
+    }
+    if role == "farmer":
+        monkeypatch.setattr(detection_service, "get_user_records", lambda uid, limit: [dict(record)])
+    else:
+        from app.api import expert as expert_api
+        monkeypatch.setattr(expert_api, "get_all_user_records", lambda limit: [dict(record)])
+        monkeypatch.setattr(detection_service, "get_all_user_records", lambda limit: [dict(record)])
+    monkeypatch.setattr(
+        detection_service,
+        "find_canonical_record_for_user",
+        lambda uid, rid: dict(record) if uid == record["user_id"] and rid == record["id"] else None,
+    )
+
+    def download(asset):
+        assert asset == reference
+        return image_bytes, "image/jpeg"
+
+    monkeypatch.setattr(media_service, "download_asset", download)
+    listed = http.get(records_url)
+    assert listed.status_code == 200
+    presented = listed.json()["records"][0]
+    if role == "farmer":
+        expected_url = f"/media/detections/{record['id']}/original"
+    else:
+        expected_url = f"/expert/media/detections/farmer-a/{record['id']}/original"
+    assert presented["image_url"] == expected_url
+    assert "annotated_image_url" not in presented
+    assert presented["detections"][0]["bbox_normalized"] == [0.125, 0.125, 0.75, 0.75]
+    assert presented["image_dimensions"] == {"width": 8, "height": 8}
+    assert "image_assets" not in presented
+
+    response = http.get(expected_url)
+    assert response.status_code == 200
+    assert response.content == image_bytes
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, no-store"
+    Image.open(BytesIO(response.content)).verify()
+
+
+def test_obsolete_local_storage_paths_are_not_presented_as_available_images(monkeypatch, tmp_path):
+    monkeypatch.setattr(media_service.config, "UPLOAD_IMAGE_DIR", tmp_path / "removed-uploads")
+    monkeypatch.setattr(media_service.config, "ANNOTATED_IMAGE_DIR", tmp_path / "removed-annotated")
+    record = {
+        "id": "old-record",
+        "user_id": "farmer-a",
+        "image_url": "/static/uploads/old-record.jpg",
+        "original_storage_path": "static/uploads/old-record.jpg",
+        "image_path": "C:/old-sqlite-data/uploads/old-record.jpg",
+    }
+
+    presented = media_service.present_detection_record(record)
+
+    assert "image_url" not in presented
 
 
 def test_media_route_rejects_missing_authentication(client):
@@ -72,10 +194,25 @@ def test_record_presentation_hides_cloudinary_and_firebase_delivery_details():
               "image_assets": {"original": _cloudinary_ref()}}
     presented = media_service.present_detection_record(record)
     assert presented["image_url"] == "/media/detections/rec/original"
-    assert presented["annotated_image_url"] == "/media/detections/rec/annotated"
+    assert "annotated_image_url" not in presented
     assert "image_assets" not in presented
     assert "historic-token" not in str(presented)
     assert "res.cloudinary.com" not in str(presented)
+
+
+def test_historical_firebase_media_reference_still_gets_a_protected_route():
+    record = {
+        "id": "rec",
+        "user_id": "farmer-a",
+        "image_url": "https://firebasestorage.googleapis.com/v0/b/legacy-bucket/o/"
+        + quote("detections/rec/original.jpg", safe="")
+        + "?alt=media&token=historic-token",
+    }
+
+    presented = media_service.present_detection_record(record)
+
+    assert presented["image_url"] == "/media/detections/rec/original"
+    assert "historic-token" not in str(presented)
 
 
 def test_historical_firebase_storage_reference_is_read_through_admin_sdk(monkeypatch):

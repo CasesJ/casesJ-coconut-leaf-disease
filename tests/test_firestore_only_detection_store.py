@@ -172,13 +172,16 @@ def test_new_detection_and_mutation_write_only_canonical_firestore(firestore, mo
 
     assert detection_service.save_detection_record(
         user_id="farmer-a", email="farmer@example.test", record_id="new-detection",
-        detections=[{"class": "Bud Rot", "confidence": 0.8}],
+        detections=[{"class": "Bud Rot", "confidence": 0.8, "bbox": [10, 20, 110, 220]}],
         gps_data={"latitude": 7.1, "longitude": 125.6}, filename="leaf.jpg",
         source="upload", image_metadata={"gps_source": "exif"}, original_bytes=b"png",
         annotated_image=None, is_offline=False,
+        image_dimensions={"width": 200, "height": 400},
     )
     path = ("users", "farmer-a", "detections", "new-detection")
     assert firestore.data[path]["image_assets"] == assets
+    assert firestore.data[path]["image_dimensions"] == {"width": 200, "height": 400}
+    assert firestore.data[path]["detections"][0]["bbox_normalized"] == [0.05, 0.05, 0.55, 0.55]
     assert firestore.data[path]["gps_data"]["latitude"] == 7.1
     assert "users/farmer-a/uploads/new-detection" not in firestore.data
     assert detection_service.update_record_everywhere(
