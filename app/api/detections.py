@@ -61,7 +61,7 @@ async def detect_image(
     from drone_gps import get_drone_gps, init_drone_gps  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
-    # --- Auth (optional — supports offline mode) ---
+    # --- Auth (requires a verified Firebase identity) ---
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authentication is required for image inference")

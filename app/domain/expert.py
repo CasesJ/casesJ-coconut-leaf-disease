@@ -1,7 +1,7 @@
 """
 app/domain/expert.py — Expert identity checks and audit-log helpers.
 
-Pure functions: no HTTP, no database calls.
+Pure identity predicates and audit helpers with Firestore/local-file persistence.
 """
 import json
 import logging
@@ -72,7 +72,7 @@ def append_expert_audit_event(
     target: dict | None = None,
     details: dict | None = None,
 ) -> None:
-    """Append an expert action to the local JSONL audit log."""
+    """Append an expert action to Firestore, falling back to the local JSONL log."""
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "action": action,

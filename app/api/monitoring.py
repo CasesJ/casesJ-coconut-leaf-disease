@@ -16,7 +16,7 @@ from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MI
                              MAX_IMAGE_UPLOAD_BYTES, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
-from app.domain.expert import is_expert_identity
+from app.domain.expert import is_authorized_expert_identity
 from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
 from app.services.detection_service import _annotated_detections
@@ -61,10 +61,10 @@ def _expert(decoded: dict) -> str:
 
 
 def _trusted_expert(decoded: dict) -> bool:
-    # Email allowlists require proof of email ownership. Signed role/UID claims
-    # continue to work without changing existing account records.
-    return is_expert_identity(decoded if decoded.get("email_verified") is True
-                              else {**decoded, "email": None})
+    # Preserve the wrapper's historical failure for a missing identity.
+    if decoded is None:
+        raise AttributeError("'NoneType' object has no attribute 'get'")
+    return is_authorized_expert_identity(decoded)
 
 
 _PHILIPPINE_TZ = ZoneInfo("Asia/Manila")

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from app.core.security import verify_verified_firebase_token
-from app.domain.expert import is_expert_identity
+from app.domain.expert import is_authorized_expert_identity
 from app.services import detection_service
 from app.services import media_service
 from app.services import monitoring_service
@@ -26,9 +26,10 @@ def _uid(decoded: dict) -> str:
 
 
 def _is_expert(decoded: dict) -> bool:
-    if decoded.get("email_verified") is not True:
-        decoded = {**decoded, "email": None}
-    return is_expert_identity(decoded)
+    # Preserve the wrapper's historical failure for a missing identity.
+    if decoded is None:
+        raise AttributeError("'NoneType' object has no attribute 'get'")
+    return is_authorized_expert_identity(decoded)
 
 
 def _farmer(decoded: dict) -> str:
