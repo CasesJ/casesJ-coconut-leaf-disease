@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from concurrent.futures import Future
+from collections import OrderedDict
 from io import BytesIO
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -20,7 +21,10 @@ logger = logging.getLogger(__name__)
 _CONFIG_LOCK = threading.Lock()
 _CONFIGURED_VALUES: tuple[str, str, str] | None = None
 _DOWNLOAD_LOCK = threading.Lock()
-_INFLIGHT_DOWNLOADS: dict[tuple[str, str], Future[tuple[bytes, str]]] = {}
+_INFLIGHT_DOWNLOADS: dict[tuple, Future[tuple[bytes, str]]] = {}
+_DOWNLOAD_CACHE = OrderedDict()
+_DOWNLOAD_CACHE_BYTES = 32 * 1024 * 1024
+_DOWNLOAD_CACHE_TTL = 60
 _DOWNLOAD_MAX_ATTEMPTS = 3
 _DOWNLOAD_RETRY_BACKOFF_SECONDS = (0.2, 0.5)
 _RETRYABLE_DOWNLOAD_STATUSES = {408, 500, 502, 503, 504}
@@ -309,8 +313,17 @@ def download_asset(reference: dict) -> tuple[bytes, str]:
     """
     public_id, image_format = _validate_reference(reference)
     cloud_name, _, _ = _configure()
-    key = (public_id, image_format)
+    key = (cloud_name, public_id, image_format, str(reference.get("version") or ""),
+           str(reference.get("asset_id") or ""), str(reference.get("sha256") or ""))
     with _DOWNLOAD_LOCK:
+        now = time.monotonic()
+        for cached_key, (expires, _) in list(_DOWNLOAD_CACHE.items()):
+            if expires <= now:
+                del _DOWNLOAD_CACHE[cached_key]
+        cached = _DOWNLOAD_CACHE.get(key)
+        if cached:
+            _DOWNLOAD_CACHE.move_to_end(key)
+            return cached[1]
         pending = _INFLIGHT_DOWNLOADS.get(key)
         if pending is None:
             pending = Future()
@@ -324,6 +337,11 @@ def download_asset(reference: dict) -> tuple[bytes, str]:
 
     try:
         result = _download_asset_once(reference, public_id, image_format, cloud_name)
+        with _DOWNLOAD_LOCK:
+            if len(result[0]) <= _DOWNLOAD_CACHE_BYTES:
+                _DOWNLOAD_CACHE[key] = (time.monotonic() + _DOWNLOAD_CACHE_TTL, result)
+                while sum(len(entry[1][0]) for entry in _DOWNLOAD_CACHE.values()) > _DOWNLOAD_CACHE_BYTES:
+                    _DOWNLOAD_CACHE.popitem(last=False)
         pending.set_result(result)
         return result
     except BaseException as error:

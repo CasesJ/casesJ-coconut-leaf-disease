@@ -318,7 +318,7 @@ def has_record_image(record: dict, kind: str) -> bool:
         return True
     field = "annotated_image_url" if kind == "annotated" else "image_url"
     path_field = "annotated_storage_path" if kind == "annotated" else "original_storage_path"
-    record_id = str(record.get("id") or "")
+    record_id = str(record.get("id") or record.get("record_id") or "")
     allowed_paths = _expected_legacy_storage_paths(record, kind, record_id)
     url = record.get(field)
     firebase_location = _firebase_location(url)
@@ -333,6 +333,8 @@ def has_record_image(record: dict, kind: str) -> bool:
                  or _local_file(record.get("image_path"), kind, record_id, allow_leaf=False) is not None)
     if available:
         return True
+    if kind == "annotated":
+        return has_record_image(record, "original")
     return False
 
 

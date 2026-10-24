@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/recommendations/fertilizer")
-async def get_recommendations(
+def get_recommendations(
     request: RecommendationRequest,
     lat: Optional[float] = None,
     lng: Optional[float] = None,

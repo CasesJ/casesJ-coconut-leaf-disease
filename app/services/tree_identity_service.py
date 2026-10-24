@@ -14,6 +14,63 @@ class IdentityNotFound(ValueError):
     pass
 
 
+def list_trees(farmer_id: str) -> list[dict]:
+    """Only explicit registrations and existing case identities; never infer from GPS."""
+    parent = store._firestore().collection("users").document(farmer_id)
+    trees = {doc.id: doc.to_dict() for doc in parent.collection("trees").stream()}
+    for case in store.list_cases(farmer_id):
+        if case.get("tree_id"):
+            trees.setdefault(case["tree_id"], {"id": case["tree_id"], "farmer_id": farmer_id})
+    return list(trees.values())
+
+
+def commit_care_identity(farmer_id, baseline_id, selected_id, write_case):
+    """Atomically bind a detection and create its care records without replacing an ID.
+
+    Short random IDs supply readable identifiers; create() additionally
+    reserves the ID globally so a collision fails rather than merging trees.
+    """
+    db = store._firestore()
+    parent = db.collection("users").document(farmer_id)
+    detection = parent.collection("detections").document(baseline_id)
+    allowed = {tree["id"] for tree in list_trees(farmer_id)} if selected_id else set()
+    historical_ids = {case["tree_id"] for case in store.list_cases(farmer_id)
+                      if case.get("baseline_detection_id") == baseline_id and case.get("tree_id")}
+    if len(historical_ids) > 1:
+        raise ValueError("Historical care records have conflicting tree identities; expert review is required")
+    candidate = "TREE-" + uuid4().hex[:10].upper()
+
+    def commit(transaction):
+        snap = detection.get(transaction=transaction)
+        data = snap.to_dict() if snap.exists else None
+        if not data or data.get("user_id", farmer_id) != farmer_id:
+            raise ValueError("Baseline detection not found for farmer")
+        existing = data.get("tree_id") or next(iter(historical_ids), None)
+        if historical_ids and data.get("tree_id") and data["tree_id"] not in historical_ids:
+            raise ValueError("Detection and historical care record tree identities conflict")
+        if existing and selected_id != existing:
+            raise ValueError("Select the tree already linked to this detection")
+        if selected_id and selected_id != existing and selected_id not in allowed:
+            raise ValueError("Selected tree is not registered to this farmer")
+        tree_id = existing or selected_id or candidate
+        tree = parent.collection("trees").document(tree_id)
+        registered = tree.get(transaction=transaction)
+        if not registered.exists:
+            registration = {"id": tree_id, "farmer_id": farmer_id,
+                            "created_at": datetime.now(timezone.utc).isoformat()}
+            if tree_id == candidate:
+                transaction.create(db.collection("tree_id_reservations").document(tree_id), registration)
+            transaction.create(tree, registration)
+        if not data.get("tree_id"):
+            transaction.update(detection, {"tree_id": tree_id})
+        return write_case(transaction, tree_id)
+
+    result = _transaction(commit)
+    from app.services.detection_service import invalidate_expert_records_cache
+    invalidate_expert_records_cache()
+    return result
+
+
 def _transaction(operation):
     from firebase_admin import firestore
     return firestore.transactional(operation)(store._firestore().transaction())

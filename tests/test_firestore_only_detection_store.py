@@ -84,7 +84,7 @@ class Document:
     def collection(self, name):
         return Collection(self.db, (*self._path, name))
 
-    def get(self):
+    def get(self, transaction=None):
         return Snapshot(self, self.db.data.get(self._path))
 
     def create(self, value):
@@ -226,7 +226,23 @@ def test_treatment_baseline_is_loaded_from_the_canonical_firestore_detection(fir
     _put(firestore, "users", "farmer-a", "detections", "baseline", value=baseline)
     monkeypatch.setattr(monitoring_service, "_firestore", lambda: firestore)
 
-    case = monitoring_service.create_case("farmer-a", "tree-1", "baseline", None, "expert-1")
+    from app.services import tree_identity_service as identity
+    def transaction(operation):
+        batch = Batch(firestore)
+        batch.create = lambda ref, value: batch.operations.append(("create", ref, value))
+        result = operation(batch)
+        for action, ref, value in batch.operations:
+            if action == "create":
+                ref.create(value)
+            elif action == "set":
+                firestore.data[ref._path] = value
+            else:
+                ref.update(value)
+        return result
+    monkeypatch.setattr(identity, "_transaction", transaction)
+    case = monitoring_service.create_case("farmer-a", None, "baseline", None, "expert-1")
+    assert case["tree_id"].startswith("TREE-")
+    assert detection_service.find_record_for_user("farmer-a", "baseline")["tree_id"] == case["tree_id"]
 
     assert case["baseline_detection_id"] == "baseline"
     assert case["baseline_image_reference"]["image_assets"]["original"]["asset_id"] == "baseline-image"

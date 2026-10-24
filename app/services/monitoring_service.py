@@ -86,7 +86,7 @@ def _case_ref(farmer_id: str, case_id: str):
     return _firestore().collection("users").document(farmer_id).collection("monitoring_cases").document(case_id)
 
 
-def create_case(farmer_id: str, tree_id: str, baseline_id: str, next_date: str | None,
+def create_case(farmer_id: str, tree_id: str | None, baseline_id: str, next_date: str | None,
                 expert_id: str, interval_days: int = 6) -> dict:
     baseline = find_record_for_user(farmer_id, baseline_id)
     if not baseline or str(baseline.get("user_id") or "") != farmer_id:
@@ -119,7 +119,7 @@ def create_case(farmer_id: str, tree_id: str, baseline_id: str, next_date: str |
     now = _audit_timestamp()
     case_id, treatment_id = uuid4().hex, uuid4().hex
     case = MonitoringCase(
-        id=case_id, farmer_id=farmer_id, tree_id=tree_id,
+        id=case_id, farmer_id=farmer_id, tree_id=tree_id or "pending",
         baseline_detection_id=baseline_id, disease=disease,
         baseline_image_reference=baseline_image_reference,
         baseline_prediction_snapshot=baseline_prediction_snapshot,
@@ -140,22 +140,26 @@ def create_case(farmer_id: str, tree_id: str, baseline_id: str, next_date: str |
     db = _firestore()
     parent = db.collection("users").document(farmer_id)
     case_ref = parent.collection("monitoring_cases").document(case_id)
-    batch = db.batch()
-    batch.set(parent.collection("treatment_records").document(treatment_id), treatment)
-    if next_date:
-        schedule_id = uuid4().hex
-        schedule = {
-            "id": schedule_id, "case_id": case_id, "farmer_id": farmer_id,
-            "schedule_type": "disease_progression", "due_date": next_date,
-            "follow_up_interval_days": interval_days, "treatment_application_id": None,
-            "created_at": now, "created_by_uid": expert_id,
-            "created_by_role": "expert", "status": "scheduled",
-        }
-        case["next_follow_up_schedule_id"] = schedule_id
-        batch.set(case_ref.collection("follow_up_schedules").document(schedule_id), schedule)
-    batch.set(case_ref, case)
-    batch.commit()
-    return case
+    from app.services.tree_identity_service import commit_care_identity
+
+    def write_case(batch, assigned_id):
+        batch.set(parent.collection("treatment_records").document(treatment_id), {**treatment, "tree_id": assigned_id})
+        if next_date:
+            schedule_id = uuid4().hex
+            schedule = {
+                "id": schedule_id, "case_id": case_id, "farmer_id": farmer_id,
+                "schedule_type": "disease_progression", "due_date": next_date,
+                "follow_up_interval_days": interval_days, "treatment_application_id": None,
+                "created_at": now, "created_by_uid": expert_id,
+                "created_by_role": "expert", "status": "scheduled",
+            }
+            case["next_follow_up_schedule_id"] = schedule_id
+            batch.set(case_ref.collection("follow_up_schedules").document(schedule_id), schedule)
+        case["tree_id"] = assigned_id
+        batch.set(case_ref, case)
+        return case
+
+    return commit_care_identity(farmer_id, baseline_id, tree_id, write_case)
 
 
 def get_case(farmer_id: str, case_id: str) -> dict | None:
@@ -213,6 +217,9 @@ def get_overview(farmer_id: str, case_id: str) -> dict | None:
             legacy_baseline = apply_record_defaults(dict(legacy_baseline)) or legacy_baseline
         baseline = {
             "id": baseline_id,
+            "image_assets": deepcopy(legacy_baseline.get("image_assets") or {}),
+            "original_storage_path": legacy_baseline.get("original_storage_path"),
+            "annotated_storage_path": legacy_baseline.get("annotated_storage_path"),
             "image_url": legacy_baseline.get("image_url"),
             "annotated_image_url": legacy_baseline.get("annotated_image_url"),
             "timestamp": legacy_baseline.get("timestamp"),
@@ -396,31 +403,78 @@ def get_treatment_application(farmer_id: str, case_id: str, application_id: str)
     return application
 
 
+FOLLOW_UP_UPLOAD_LIMIT = 3
+
+
+class FollowUpLimitReached(ValueError):
+    """The farmer has used all follow-up uploads for this tree."""
+
+
+FOLLOW_UP_LIMIT_MESSAGE = "You have reached the limit of 3 follow-up image uploads for this tree ID."
+
+
+def tree_follow_up_count(farmer_id: str, tree_id: str) -> int:
+    """Count historical uploads across every case for this farmer and tree."""
+    return sum(len(list_follow_ups(farmer_id, case["id"]))
+               for case in list_cases(farmer_id) if case.get("tree_id") == tree_id)
+
+
+def follow_up_upload_allowance(farmer_id: str, tree_id: str) -> dict:
+    used = tree_follow_up_count(farmer_id, tree_id)
+    return {"limit": FOLLOW_UP_UPLOAD_LIMIT, "used": used,
+            "remaining": max(0, FOLLOW_UP_UPLOAD_LIMIT - used)}
+
+
+def _follow_up_limit_ref(farmer_id: str, tree_id: str):
+    return (_firestore().collection("users").document(farmer_id)
+            .collection("follow_up_upload_limits").document(tree_id))
+
+
+def _follow_up_transaction(operation):
+    from firebase_admin import firestore
+    return firestore.transactional(operation)(_firestore().transaction())
+
+
 def save_follow_up(farmer_id: str, case_id: str, follow_up: dict) -> None:
     if follow_up.get("farmer_id") != farmer_id or follow_up.get("case_id") != case_id:
         raise ValueError("Follow-up does not belong to this monitoring case")
-    # Each follow-up is a separate document; the parent never grows with history.
+    tree_id = follow_up["tree_id"]
+    # Seed from historical records so existing uploads also consume the limit.
+    historical_count = tree_follow_up_count(farmer_id, tree_id)
     parent = _case_ref(farmer_id, case_id)
-    db = _firestore()
-    batch = db.batch()
-    batch.create(parent.collection("follow_ups").document(follow_up["id"]), follow_up)
-    batch.update(parent, {"latest_follow_up_id": follow_up["id"],
-                          "last_inspection_at": follow_up["created_at"],
-                          "latest_review_status": "pending_expert_review",
-                          "latest_confirmed_outcome": None})
-    schedule_id = follow_up.get("follow_up_schedule_id")
-    if schedule_id:
-        schedule_ref = parent.collection("follow_up_schedules").document(schedule_id)
-        snapshot = schedule_ref.get()
-        if snapshot.exists:
-            schedule = snapshot.to_dict() or {}
-            if schedule.get("farmer_id") == farmer_id and schedule.get("case_id") == case_id:
-                batch.update(schedule_ref, {
-                    "status": "inspection_recorded",
-                    "last_inspection_id": follow_up["id"],
-                    "last_inspection_at": follow_up["created_at"],
-                })
-    batch.commit()
+    limit_ref = _follow_up_limit_ref(farmer_id, tree_id)
+
+    def commit(transaction):
+        case_snapshot = parent.get(transaction=transaction)
+        case = case_snapshot.to_dict() if case_snapshot.exists else None
+        if not case or case.get("farmer_id") != farmer_id or case.get("tree_id") != tree_id:
+            raise ValueError("Follow-up does not belong to this monitoring tree")
+        limit_snapshot = limit_ref.get(transaction=transaction)
+        quota = limit_snapshot.to_dict() if limit_snapshot.exists else {}
+        used = max(historical_count, (quota or {}).get("used", 0))
+        if used >= FOLLOW_UP_UPLOAD_LIMIT:
+            raise FollowUpLimitReached(FOLLOW_UP_LIMIT_MESSAGE)
+        schedule_ref = None
+        schedule = {}
+        schedule_id = follow_up.get("follow_up_schedule_id")
+        if schedule_id:
+            schedule_ref = parent.collection("follow_up_schedules").document(schedule_id)
+            snapshot = schedule_ref.get(transaction=transaction)
+            schedule = snapshot.to_dict() if snapshot.exists else {}
+        # The counter and evidence commit together, serializing concurrent requests.
+        transaction.set(limit_ref, {"used": used + 1, "farmer_id": farmer_id, "tree_id": tree_id})
+        transaction.create(parent.collection("follow_ups").document(follow_up["id"]), follow_up)
+        transaction.update(parent, {"latest_follow_up_id": follow_up["id"],
+                                    "last_inspection_at": follow_up["created_at"],
+                                    "latest_review_status": "pending_expert_review",
+                                    "latest_confirmed_outcome": None})
+        if schedule_ref and schedule.get("farmer_id") == farmer_id and schedule.get("case_id") == case_id:
+            transaction.update(schedule_ref, {
+                "status": "inspection_recorded", "last_inspection_id": follow_up["id"],
+                "last_inspection_at": follow_up["created_at"],
+            })
+
+    _follow_up_transaction(commit)
 
 
 def list_follow_ups(farmer_id: str, case_id: str) -> list[dict]:
@@ -565,3 +619,24 @@ def review_follow_up(farmer_id: str, case_id: str, follow_up_id: str,
     batch.commit()
     return {**follow_up, **changes, "next_follow_up_date": due,
             "follow_up_schedule_id": follow_up_schedule_id}
+
+
+def finish_case(farmer_id: str, case_id: str, expert_id: str) -> dict | None:
+    """Persist an explicit expert recovery confirmation without removing history."""
+    ref = _case_ref(farmer_id, case_id)
+
+    def commit(transaction):
+        snapshot = ref.get(transaction=transaction)
+        case = snapshot.to_dict() if snapshot.exists else None
+        if not case or case.get("farmer_id") != farmer_id or case.get("id") != case_id:
+            return None
+        if case.get("monitoring_status") == "finish":
+            return case
+        changes = {"monitoring_status": "finish", "health_status": "healthy",
+                   "finished_at": _audit_timestamp(), "finished_by_expert_uid": expert_id}
+        transaction.update(ref, changes)
+        transaction.create(ref.collection("completion_events").document(uuid4().hex), changes)
+        return {**case, **changes}
+
+    from firebase_admin import firestore
+    return firestore.transactional(commit)(_firestore().transaction())

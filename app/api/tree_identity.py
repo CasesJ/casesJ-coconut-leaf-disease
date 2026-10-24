@@ -136,3 +136,15 @@ def _history(farmer_id, case_id, follow_up_id):
         return {"identity_reviews": identity.list_identity_reviews(farmer_id, case_id, follow_up_id)}
     except identity.IdentityNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/monitoring/trees")
+def farmer_trees(decoded: dict = Depends(verify_verified_firebase_token)):
+    return {"trees": identity.list_trees(_farmer(decoded))}
+
+
+@router.get("/expert/monitoring/trees/{farmer_id}")
+def expert_farmer_trees(farmer_id: str, decoded: dict = Depends(verify_verified_firebase_token)):
+    _expert(decoded)
+    _ids(farmer_id)
+    return {"trees": identity.list_trees(farmer_id)}

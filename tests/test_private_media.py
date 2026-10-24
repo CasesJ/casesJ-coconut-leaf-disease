@@ -149,7 +149,11 @@ def test_new_cloudinary_upload_round_trips_through_farmer_and_expert_history(
     else:
         expected_url = f"/expert/media/detections/farmer-a/{record['id']}/original"
     assert presented["image_url"] == expected_url
-    assert "annotated_image_url" not in presented
+    assert presented["annotated_image_url"] == expected_url.rsplit("/", 1)[0] + "/annotated"
+    annotated = http.get(presented["annotated_image_url"])
+    assert annotated.status_code == 200
+    assert annotated.headers["content-type"] == "image/jpeg"
+    Image.open(BytesIO(annotated.content)).verify()
     assert presented["detections"][0]["bbox_normalized"] == [0.125, 0.125, 0.75, 0.75]
     assert presented["image_dimensions"] == {"width": 8, "height": 8}
     assert "image_assets" not in presented
@@ -194,7 +198,7 @@ def test_record_presentation_hides_cloudinary_and_firebase_delivery_details():
               "image_assets": {"original": _cloudinary_ref()}}
     presented = media_service.present_detection_record(record)
     assert presented["image_url"] == "/media/detections/rec/original"
-    assert "annotated_image_url" not in presented
+    assert presented["annotated_image_url"] == "/media/detections/rec/annotated"
     assert "image_assets" not in presented
     assert "historic-token" not in str(presented)
     assert "res.cloudinary.com" not in str(presented)
@@ -299,3 +303,30 @@ def test_monitoring_media_enforces_farmer_owner_and_expert_role(client, monkeypa
     actor.update(uid="expert-1", role="expert")
     response = http.get("/expert/media/monitoring/farmer-a/case-1/follow-ups/follow-1/original")
     assert response.status_code == 200
+
+
+def test_baseline_image_uses_snapshot_without_loading_overview(client, monkeypatch):
+    http, actor = client
+    actor.update(uid="expert-1", role="expert")
+    reference = _cloudinary_ref()
+    case = {"id": "case-1", "farmer_id": "farmer-a", "baseline_detection_id": "rec-1",
+            "baseline_image_reference": {"image_assets": {"original": reference}}}
+    monkeypatch.setattr(monitoring_service, "get_case", lambda *args: case)
+    monkeypatch.setattr(monitoring_service, "get_overview", lambda *args: pytest.fail("Full overview should not load"))
+    monkeypatch.setattr(detection_service, "find_canonical_record_for_user", lambda *args: pytest.fail("Snapshot is sufficient"))
+    monkeypatch.setattr(media_service, "download_asset", lambda asset: (b"snapshot", "image/jpeg"))
+    response = http.get("/expert/media/monitoring/farmer-a/case-1/baseline/original")
+    assert response.status_code == 200 and response.content == b"snapshot"
+
+
+def test_baseline_recovers_delivery_only_snapshot_from_owned_detection(client, monkeypatch):
+    http, _ = client
+    case = {"id": "case-1", "farmer_id": "farmer-a", "baseline_detection_id": "rec-1",
+            "baseline_image_reference": {"image_url": "/media/detections/rec-1/original"}}
+    monkeypatch.setattr(monitoring_service, "get_case", lambda *args: case)
+    monkeypatch.setattr(monitoring_service, "get_overview", lambda *args: pytest.fail("Full overview should not load"))
+    monkeypatch.setattr(detection_service, "find_canonical_record_for_user", lambda uid, rid: {
+        "id": rid, "user_id": uid, "image_assets": {"original": _cloudinary_ref()}})
+    monkeypatch.setattr(media_service, "download_asset", lambda asset: (b"recovered", "image/jpeg"))
+    response = http.get("/media/monitoring/case-1/baseline/original")
+    assert response.status_code == 200 and response.content == b"recovered"

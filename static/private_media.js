@@ -144,9 +144,11 @@
     image.alt = image.dataset.privateAlt;
     delete image.dataset.privateError;
     observer?.unobserve(image);
-    image.dataset.privateSrc = url;
     const previous = pending.get(image);
     if (previous?.path === url) return previous.promise;
+    if (image.dataset.privateSrc === url && image.dataset.privateObjectUrl
+        && ['loading', 'loaded'].includes(image.dataset.privateState)) return true;
+    if (image.dataset.privateSrc !== url) image.dataset.privateSrc = url;
     if (image.dataset.privateObjectUrl) {
       revokeObjectUrl(image.dataset.privateObjectUrl, 'source-replaced', image);
       delete image.dataset.privateObjectUrl;
@@ -156,10 +158,13 @@
     image.dataset.privateState = 'fetching';
     const promise = (async () => {
       let objectUrl = null;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
       try {
         const fetchWithToken = token => fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
           cache: 'no-store',
+          signal: controller.signal,
         });
         const token = await user.getIdToken();
         diagnostic('fetch:start', image, { route: routeKind(url), tokenPresent: Boolean(token) });
@@ -214,9 +219,9 @@
         diagnostic('object-url:assigned', image, { route: routeKind(url), blobType: blob.type || '', blobSize: blob.size });
         return true;
       } catch (error) {
-        image.dataset.privateError = 'network';
+        image.dataset.privateError = controller.signal.aborted ? 'timeout' : 'network';
         image.dataset.privateState = 'fetch-error';
-        image.alt = 'Image unavailable (network error)';
+        image.alt = controller.signal.aborted ? 'Image request timed out. Reopen this record to retry.' : 'Image unavailable (network error)';
         if (objectUrl) {
           revokeObjectUrl(objectUrl, 'source-error', image);
           delete image.dataset.privateObjectUrl;
@@ -228,6 +233,7 @@
         });
         return false;
       } finally {
+        clearTimeout(timeout);
         if (pending.get(image)?.path === url) pending.delete(image);
       }
     })();
@@ -240,6 +246,11 @@
     if (root instanceof HTMLImageElement && root.dataset.privateSrc) images.push(root);
     root.querySelectorAll?.('img[data-private-src]').forEach((image) => images.push(image));
     images.forEach((image) => {
+      if (image.closest?.('.monitor-comparison')) {
+        image.loading = 'eager';
+        void setPrivateImageSource(image, image.dataset.privateSrc);
+        return;
+      }
       image.loading = 'lazy';
       if (observer) observer.observe(image);
       else void setPrivateImageSource(image, image.dataset.privateSrc);

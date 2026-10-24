@@ -1,5 +1,7 @@
 # Firebase Hosting deployment
 
+Updated against local deployment configuration on October 24, 2026. These are operator instructions, not confirmation that a deployment has run.
+
 This system needs two Google services:
 
 - **Firebase Hosting** publishes the browser application in `static/`.
@@ -34,6 +36,10 @@ EXPERT_ACCOUNT_EMAIL: "expert@example.com"
 EXPERT_ACCOUNT_PASSWORD: "replace-with-a-strong-password"
 CORS_ALLOWED_ORIGINS: "https://coconut-leaf-disease-dcf9a.web.app,https://coconut-leaf-disease-dcf9a.firebaseapp.com"
 FIREBASE_SERVICE_ACCOUNT_JSON: '{"type":"service_account",...}'
+CLOUDINARY_CLOUD_NAME: "your-cloud-name"
+CLOUDINARY_API_KEY: "your-api-key"
+CLOUDINARY_API_SECRET: "your-api-secret"
+ALLOW_UNVERIFIED_FIREBASE_TOKENS: "false"
 ```
 
 Use the complete one-line content of a newly rotated Firebase service-account
@@ -63,3 +69,15 @@ that Cloud Run service. The live site will be:
 - The Cloud Run service is public so Firebase Hosting can proxy to it. The app
   protects user operations with Firebase ID-token verification.
 - Redeploy after a code change with the same two commands in step 3.
+
+## Current deployment checks
+
+- Confirm the source build can install requirements.txt, include weights.pt, and launch the FastAPI app on the platform-provided PORT. firebase.json configures Hosting rewrites; it does not by itself prove that the backend source build/start configuration is complete.
+- Keep Firebase and Cloudinary secrets in the platform secret manager. The YAML above is an illustrative private configuration file; never commit it.
+- Deploy both frontend and backend when changing their contracts. Hosting caches JS/CSS for one hour according to firebase.json.
+- Hosting rewrites include /monitoring, /expert, /media, /detections, /recommendations, /notifications, /reports, /records, /drone, /farm, /api, /auth, /detect, /health, /classes, and historical image paths.
+- Upload folders are excluded from public Hosting. Test authenticated farmer/expert media access and rejection of unauthorized reads.
+- Verify sign-in, a saved pending upload, expert review, tree registration, care overview, treatment application, follow-up review, and the full-width Inspection timeline.
+- Follow-up uploads have a Firestore-enforced allowance of three per tree ID. Inference quotas are process-local and require shared enforcement for multi-instance deployments.
+- Firestore is preferred for notifications and expert audit events; compatibility fallbacks include RTDB/local notification JSON and local audit JSONL. Recommendation configuration also uses local files. Account for these fallbacks on ephemeral instances.
+- A deployment is not verified until the running service and actual persistence/media workflows have been checked.

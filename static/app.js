@@ -6,6 +6,8 @@
 // before the record-level recommendation snapshot was wired through.
 var recommendationSnapshot = null;
 var currentExpertRecommendationTarget = null;
+let expertRecommendationLoadId = 0;
+const expertRecommendationCache = new Map();
 
 // The dashboard, history, map, and records panels share one farmer history.
 // Coalesce simultaneous reads and reuse a very short-lived response so tab
@@ -388,6 +390,8 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
   const empty = document.getElementById('expert-recommendation-image-empty');
   const frame = document.getElementById('expert-recommendation-frame');
   if (!image || !empty) return;
+  const previewId = String(Number(image.dataset.previewId || 0) + 1);
+  image.dataset.previewId = previewId;
   if (frame) {
     frame.dataset.overlayDetections = JSON.stringify(Array.isArray(record?.detections) ? record.detections : []);
     frame.dataset.overlayDimensions = JSON.stringify(record?.image_dimensions || {});
@@ -395,13 +399,13 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
     window.DetectionOverlay?.mount(frame);
   }
 
-  // Prefer the original upload, but use the annotated result if that asset is
-  // unavailable.  This keeps an expert from losing the visual evidence when a
-  // legacy original-image link has expired or was removed.
+  // Prefer the original with saved detection boxes; older annotated copies may be unavailable.
   const urls = [...new Set((Array.isArray(imageUrls) ? imageUrls : [imageUrls])
     .map(url => String(url || '').trim())
     .filter(Boolean))];
   const showUnavailable = () => {
+    if (image.dataset.previewId !== previewId) return;
+    empty.textContent = 'No image is available for this upload.';
     image.removeAttribute('src');
     image.onload = null;
     image.onerror = null;
@@ -416,7 +420,10 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
 
   let currentUrl = 0;
   const loadImage = async () => {
+    if (frame) frame.dataset.overlayDetections = JSON.stringify(
+      urls[currentUrl] === record?.annotated_image_url ? [] : (record?.detections || []));
     const loaded = await window.setPrivateImageSource(image, urls[currentUrl]);
+    if (image.dataset.previewId !== previewId) return;
     if (loaded) {
       image.classList.remove('hidden');
       empty.classList.add('hidden');
@@ -432,6 +439,7 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
 
   image.alt = imageLabel ? `Uploaded image: ${imageLabel}` : 'Selected uploaded image';
   image.classList.add('hidden');
+  empty.textContent = 'Loading uploaded image…';
   empty.classList.remove('hidden');
   loadImage();
 }
@@ -446,14 +454,23 @@ window.openExpertRecommendationImage = function openExpertRecommendationImage() 
   lightbox.setAttribute('aria-modal', 'true');
   lightbox.setAttribute('aria-label', 'Enlarged uploaded image');
   lightbox.innerHTML = '<button type="button" class="expert-image-lightbox-close" aria-label="Close enlarged image">✕</button><img alt="Enlarged uploaded image">';
-  lightbox.querySelector('img').src = sourceImage.src;
+  const sourceFrame = document.getElementById('expert-recommendation-frame');
+  let detections = [];
+  try { detections = JSON.parse(sourceFrame?.dataset.overlayDetections || '[]'); } catch (_) { /* no saved boxes */ }
+  const preview = window.DetectionOverlay?.frameHtml(sourceImage.src, { detections }, {
+    direct: true, className: 'expert-enlarged-frame', alt: 'Enlarged annotated detection preview',
+  });
+  if (preview) lightbox.querySelector('img').outerHTML = preview;
+  else lightbox.querySelector('img').src = sourceImage.src;
   const close = () => lightbox.remove();
   lightbox.querySelector('button').addEventListener('click', close);
   lightbox.addEventListener('click', event => { if (event.target === lightbox) close(); });
   document.body.appendChild(lightbox);
+  window.DetectionOverlay?.mount(lightbox);
 };
 
 function hideExpertRecommendationEditor() {
+  expertRecommendationLoadId += 1;
   const editor = document.getElementById('expert-recommendation-editor');
   if (editor) editor.classList.add('hidden');
   document.body.classList.remove('expert-recommendation-open');
@@ -743,31 +760,21 @@ function showDetectionImagesModal(record, imageLabel) {
   const label = imageLabel || record?.filename || 'Detection image';
   title.textContent = 'Detection Image Preview';
   subtitle.textContent = label;
-  content.innerHTML = `<div class="detection-image-tabs" role="group" aria-label="Image preview mode"><button type="button" data-image-mode="original" aria-pressed="false">Original image</button><button type="button" data-image-mode="annotated" aria-pressed="true">Annotated preview</button></div><div id="detection-image-modal-stage"></div>`;
-  const stage = content.querySelector('#detection-image-modal-stage');
-  const renderMode = mode => {
-    const useStoredAnnotated = mode === 'annotated' && annotatedUrl;
-    const imageUrl = useStoredAnnotated ? annotatedUrl : (originalUrl || annotatedUrl);
-    const imageRecord = mode === 'annotated' && !useStoredAnnotated
-      ? payload
-      : { ...payload, detections: [] };
-    stage.innerHTML = window.DetectionOverlay?.frameHtml(imageUrl, imageRecord, {
-      className: 'detection-image-modal-frame',
-      alt: mode === 'annotated' ? `Annotated detection preview for ${label}` : label,
-    }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;" />`;
-    window.DetectionOverlay?.mount(stage);
-    window.loadPrivateMediaImages?.(stage);
-  };
-  content.querySelectorAll('[data-image-mode]').forEach(button => {
-    button.addEventListener('click', () => {
-      content.querySelectorAll('[data-image-mode]').forEach(tab => {
-        tab.setAttribute('aria-pressed', String(tab === button));
-      });
-      renderMode(button.dataset.imageMode);
-    });
-  });
-  renderMode('annotated');
+  // Render saved detections on the same original used by the table thumbnail.
+  const imageUrl = originalUrl || annotatedUrl;
+  const imageRecord = originalUrl ? payload : { ...payload, detections: [] };
+  content.innerHTML = window.DetectionOverlay?.frameHtml(imageUrl, imageRecord, {
+    className: 'detection-image-modal-frame',
+    alt: `Annotated detection preview for ${label}`,
+  }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(label)}" style="display:block;width:100%;max-height:70vh;object-fit:contain;" />`;
+  window.DetectionOverlay?.mount(content);
   modal.classList.remove('hidden');
+  // Load immediately: an unloaded image has no height for lazy intersection.
+  const image = content.querySelector('img');
+  if (image) {
+    image.loading = 'eager';
+    void window.setPrivateImageSource(image, imageUrl);
+  }
 }
 
 function encodeInlineValue(value) {
@@ -2234,34 +2241,22 @@ function renderUpload(data, originalFile = null, originalObjectUrl = '') {
   }
   
   const previewFrame = document.getElementById('result-image-frame');
-  const originalMode = document.getElementById('result-mode-original');
-  const annotatedMode = document.getElementById('result-mode-annotated');
   const detections = Array.isArray(data.detections) ? data.detections : [];
-  const imageUrl = originalObjectUrl || (originalFile ? URL.createObjectURL(originalFile) : '');
+  const annotatedImage = data.annotated_image_base64
+    ? 'data:image/jpeg;base64,' + data.annotated_image_base64
+    : '';
+  const imageUrl = annotatedImage || originalObjectUrl || (originalFile ? URL.createObjectURL(originalFile) : '');
+  resultImg.alt = 'Annotated detection result';
   if (previewFrame) {
-    previewFrame.dataset.overlayDetections = JSON.stringify(detections);
+    // Server annotations are already baked in; otherwise draw the saved boxes.
+    previewFrame.dataset.overlayDetections = JSON.stringify(annotatedImage ? [] : detections);
     previewFrame.dataset.overlayDimensions = JSON.stringify(data.image_dimensions || {});
     delete previewFrame.dataset.overlayReady;
+    window.DetectionOverlay?.mount(previewFrame);
   }
-  const setPreviewMode = mode => {
-    const annotated = mode === 'annotated';
-    if (resultImg) {
-      resultImg.src = imageUrl || (data.annotated_image_base64 ? 'data:image/jpeg;base64,' + data.annotated_image_base64 : '');
-      resultImg.alt = annotated ? 'Annotated detection preview' : 'Original uploaded image';
-    }
-    if (previewFrame) {
-      previewFrame.dataset.overlayDetections = JSON.stringify(annotated ? detections : []);
-      delete previewFrame.dataset.overlayReady;
-      window.DetectionOverlay?.mount(previewFrame);
-    }
-    if (originalMode) originalMode.setAttribute('aria-pressed', String(!annotated));
-    if (annotatedMode) annotatedMode.setAttribute('aria-pressed', String(annotated));
-    const footer = document.getElementById('result-image-label');
-    if (footer) footer.textContent = annotated ? 'Annotated detection preview' : 'Original uploaded image';
-  };
-  if (originalMode) originalMode.onclick = () => setPreviewMode('original');
-  if (annotatedMode) annotatedMode.onclick = () => setPreviewMode('annotated');
-  setPreviewMode('annotated');
+  resultImg.src = imageUrl;
+  const footer = document.getElementById('result-image-label');
+  if (footer) footer.textContent = 'Annotated detection result';
   if (feedToolbar) feedToolbar.style.display='none';
   if (uploadDrop) uploadDrop.style.display='none';
   if (resultArea) resultArea.style.display='block';
@@ -3145,6 +3140,8 @@ function updateExpertQueueDiseaseOptions(records) {
   select.value = diseases.some(disease => disease.toLowerCase() === current) ? current : '';
 }
 
+const expertQueueRenderCache = new WeakMap();
+
 window.filterExpertQueue = function filterExpertQueue() {
   const search = String(document.getElementById('expert-queue-search')?.value || '').trim().toLowerCase();
   const disease = String(document.getElementById('expert-queue-disease')?.value || '').toLowerCase();
@@ -3164,7 +3161,16 @@ window.filterExpertQueue = function filterExpertQueue() {
   const queue = document.getElementById('expert-pending-list');
   const count = document.getElementById('expert-queue-count');
   const state = document.getElementById('expert-filter-state');
-  if (queue) queue.innerHTML = matches.length ? renderExpertRecordsTable(matches) : '<div class="no-records">No records match the selected queue filters.</div>';
+  if (queue) {
+    const html = matches.length ? renderExpertRecordsTable(matches) : '<div class="no-records">No records match the selected queue filters.</div>';
+    const previous = expertQueueRenderCache.get(queue);
+    // Replacing identical rows discards loaded thumbnails and fetches their private media again.
+    // Compare generated markup, since the live DOM includes object URLs and overlay nodes.
+    if (previous?.html !== html || previous?.root !== queue.firstChild) {
+      queue.innerHTML = html;
+      expertQueueRenderCache.set(queue, { html, root: queue.firstChild });
+    }
+  }
   if (count) count.textContent = `${matches.length} of ${expertQueueRecords.length} records`;
   if (state) state.textContent = `Showing ${matches.length} matching review record${matches.length === 1 ? '' : 's'}`;
 };
@@ -3222,7 +3228,7 @@ function renderExpertRecordsTable(records) {
     const userId = String(record.user_id || '').replace(/'/g, '&#39;');
     const diseaseArg = String(disease).replace(/'/g, '&#39;');
     const imageCell = previewImage
-      ? `<button type="button" title="View original and annotated result" onclick="openExpertImageResult('${encodeInlineValue(record.image_url || '')}','${encodeInlineValue(annotatedImage)}','${encodeInlineValue(imageLabel)}','${encodedRecordImagePayload(record)}')" style="border:0;background:transparent;padding:0;cursor:pointer;">${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { className: 'expert-record-thumb-frame', alt: `View ${imageLabel}` }) || `<img class="expert-record-thumb" data-private-src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}">`}</button>`
+      ? `<button type="button" title="View annotated result" onclick="openExpertImageResult('${encodeInlineValue(record.image_url || '')}','${encodeInlineValue(annotatedImage)}','${encodeInlineValue(imageLabel)}','${encodedRecordImagePayload(record)}')" style="border:0;background:transparent;padding:0;cursor:pointer;">${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { className: 'expert-record-thumb-frame', alt: `View ${imageLabel}` }) || `<img class="expert-record-thumb" data-private-src="${escapeHtml(previewImage)}" alt="View ${escapeHtml(imageLabel)}">`}</button>`
       : '<span class="expert-table-muted">No image</span>';
     const actions = formatVerificationStatus(record.verification_status).cls !== 'verified'
       ? `<div class="table-actions"><button class="btn btn-p expert-primary-action" onclick="verifyExpertRecord('${userId}','${recordId}')">Verify</button><button class="btn btn-o" onclick="editExpertRecommendation('${diseaseArg}', ${confidence}, '${userId}', '${recordId}', '${encodeInlineValue(record.image_url || '')}', '${encodeInlineValue(annotatedImage)}', '${encodeInlineValue(imageLabel)}')">Recommendation</button></div>`
@@ -3246,24 +3252,18 @@ function renderExpertRecordsTable(records) {
 }
 
 function renderExpertAuditTable(events) {
-  const formatAuditDetails = (details) => {
-    // Older recommendation events did not include verification_status, but
-    // direct_record_synced means that save also verified the selected record.
-    const status = details?.verification_status
-      || (details?.direct_record_synced ? 'verified' : '');
-    return status ? `Verification status: ${formatVerificationStatus(status).label}` : 'No details';
-  };
-
   const rows = events.map((entry) => {
     const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
     const target = entry.target || {};
     const upload = entry.upload || {};
-    const details = entry.details || {};
     const action = String(entry.action || 'action').replace(/_/g, ' ');
-    const detailLabel = formatAuditDetails(details);
-    return `<tr><td>${escapeHtml(timestamp)}</td><td><strong>${escapeHtml(action)}</strong></td><td>${escapeHtml(entry.actor_email || entry.actor_uid || 'Unknown expert')}</td><td>${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</td><td>${escapeHtml(upload.email || '—')}</td><td>${escapeHtml(detailLabel)}</td></tr>`;
+    const treeId = entry.tree_id || target.tree_id;
+    const treeCell = treeId && target.user_id
+      ? `<button type="button" class="btn btn-o audit-tree-link" title="${escapeHtml(treeId)}" onclick="monitoringOpenTree('${encodeInlineValue(treeId)}','${encodeInlineValue(target.user_id)}')">${escapeHtml(treeId)}</button>`
+      : escapeHtml(treeId || 'Unassigned');
+    return `<tr><td data-label="Date and time">${escapeHtml(timestamp)}</td><td data-label="Action"><strong>${escapeHtml(action)}</strong></td><td data-label="Record">${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</td><td data-label="Uploaded by">${escapeHtml(upload.email || upload.user_id || target.user_id || '—')}</td><td data-label="Tree ID">${treeCell}</td><td data-label="Status"><span class="monitor-pill">${entry.monitoring_status === 'finish' ? 'Finish' : 'Waiting'}</span></td></tr>`;
   }).join('');
-  return `<div class="expert-table-wrap"><table class="expert-records-table"><thead><tr><th>Date and time</th><th>Action</th><th>Expert</th><th>Record</th><th>Uploaded by</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="expert-table-wrap"><table class="expert-records-table expert-audit-table"><thead><tr><th>Date and time</th><th>Action</th><th>Record</th><th>Uploaded by</th><th>TREE ID</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderExpertAuditLog() {
@@ -3273,6 +3273,8 @@ function renderExpertAuditLog() {
 
   const matchingEvents = query
     ? expertAuditEvents.filter((entry) => JSON.stringify({
+      tree_id: entry.tree_id || entry.target?.tree_id || 'Unassigned',
+      monitoring_status: entry.monitoring_status === 'finish' ? 'Finish' : 'Waiting',
       target: entry.target || {},
         upload: entry.upload || {},
         details: entry.details || {},
@@ -3411,13 +3413,15 @@ async function loadUserRecords({ force = false } = {}) {
       const imageUrl = record.image_url || record.annotated_image_url || '';
       const imageLabel = record.filename || record.image_path || 'Detection image';
       const imagePreview = imageUrl
-        ? `<button type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" aria-label="View ${escapeHtml(imageLabel)}" style="display:block;width:min(100%,360px);margin-top:10px;padding:0;border:0;border-radius:9px;overflow:hidden;background:#eef6f1;cursor:zoom-in;">
+        ? `<button type="button" class="record-image-preview" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" aria-label="View ${escapeHtml(imageLabel)}">
              ${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" />`}
            </button>`
         : '';
       
       return `
-        <div class="record-item">
+        <div class="record-item farmer-record${imageUrl ? '' : ' farmer-record-no-image'}">
+          ${imagePreview}
+          <div class="record-details">
           ${buildRecordStatusBadge(record)}
           <div class="record-meta">
             <strong>${timestamp}</strong><br>
@@ -3427,9 +3431,9 @@ async function loadUserRecords({ force = false } = {}) {
             ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
             <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
-          ${imagePreview}
           ${locationDisplay}
           ${recommendationPanel}
+          </div>
         </div>
       `;
       }).join('');
@@ -3608,7 +3612,9 @@ window.loadExpertReview = async function loadExpertReview({ force = false } = {}
   });
   const pendingListEl = document.getElementById('expert-pending-list');
   const filterStateEl = document.getElementById('expert-filter-state');
-  if (pendingListEl) pendingListEl.innerHTML = '<div class="no-records">Loading expert queue...</div>';
+  if (pendingListEl && !expertQueueRenderCache.has(pendingListEl)) {
+    pendingListEl.innerHTML = '<div class="no-records">Loading expert queue...</div>';
+  }
   if (filterStateEl) filterStateEl.textContent = `Showing ${getExpertFilterLabel(currentExpertFilter)}`;
 
   try {
@@ -3672,6 +3678,7 @@ window.loadExpertAuditLog = async function loadExpertAuditLog() {
 
 window.loadExpertRecommendation = async function loadExpertRecommendation(diseaseName, confidence, target = null) {
   if (!currentToken || !currentUserIsExpert) return;
+  const loadId = ++expertRecommendationLoadId;
   currentExpertRecommendationTarget = target && target.userId && target.recordId
     ? { userId: target.userId, recordId: target.recordId }
     : null;
@@ -3685,13 +3692,40 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
   const statusEl = document.getElementById('expert-recommendation-status');
   const disease = (diseaseName || diseaseInput?.value || '').trim();
   const confValue = Number(confidence ?? 0.85);
+  const fields = [fertilizerInput, treatmentInput, preventionInput, noteInput].filter(Boolean);
+  const saveButton = document.querySelector('#expert-recommendation-editor button[onclick="saveExpertRecommendation()"]');
+  const setLoading = loading => {
+    fields.forEach(field => { field.disabled = loading; field.placeholder = loading ? 'Loading recommendation…' : ''; });
+    if (saveButton) saveButton.disabled = loading;
+  };
+  const fill = data => {
+    const recommendation = data.recommendations || {};
+    if (fertilizerInput) fertilizerInput.value = recommendation.fertilizer || '';
+    if (treatmentInput) treatmentInput.value = recommendation.treatment || '';
+    if (preventionInput) preventionInput.value = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : '';
+    if (noteInput) noteInput.value = data.note || '';
+    setLoading(false);
+    if (statusEl) statusEl.textContent = 'Recommendation ready for review.';
+  };
+  fields.forEach(field => { field.value = ''; });
+  setLoading(true);
 
   if (!disease) {
+    setLoading(false);
+    if (saveButton) saveButton.disabled = true;
     showToast('This upload has no detected disease to review.');
     return;
   }
   // The field is display-only: it always reflects the model result from the selected upload.
   setExpertRecommendationDisease(disease);
+  const record = [...expertQueueRecords, ...(getCachedExpertRecords()?.records || [])].find(item =>
+    String(item.user_id || '') === String(target?.userId || '') && String(item.id || '') === String(target?.recordId || ''));
+  const snapshot = record?.recommendation_snapshot || record?.recommendationSnapshot;
+  const cacheKey = JSON.stringify([currentToken, disease, confValue]);
+  const cached = expertRecommendationCache.get(cacheKey);
+  if (snapshot?.recommendations) { fill(snapshot); return; }
+  if (cached && Date.now() - cached.loadedAt < 45_000) { fill(cached.data); return; }
+  if (statusEl) statusEl.textContent = 'Loading recommendation…';
 
   try {
     const res = await fetch('/recommendations/fertilizer', {
@@ -3708,14 +3742,14 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
     if (!res.ok) throw new Error('Failed to load recommendation');
 
     const data = await res.json();
-    const recommendation = data.recommendations || {};
-    if (diseaseInput) setExpertRecommendationDisease(data.disease || disease);
-    if (fertilizerInput) fertilizerInput.value = recommendation.fertilizer || '';
-    if (treatmentInput) treatmentInput.value = recommendation.treatment || '';
-    if (preventionInput) preventionInput.value = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : '';
-    if (noteInput) noteInput.value = data.note || '';
-    if (statusEl) statusEl.textContent = data.source === 'expert_override' ? 'Loaded expert-edited recommendation data.' : 'Loaded default recommendation data.';
+    if (loadId !== expertRecommendationLoadId) return;
+    expertRecommendationCache.set(cacheKey, { data, loadedAt: Date.now() });
+    fill(data);
   } catch (error) {
+    if (loadId !== expertRecommendationLoadId) return;
+    setLoading(false);
+    if (saveButton) saveButton.disabled = true;
+    if (statusEl) statusEl.textContent = 'Could not load recommendation. Close and reopen to retry.';
     console.error('Error loading expert recommendation:', error);
     showToast('Could not load recommendation');
   }
@@ -3723,12 +3757,12 @@ window.loadExpertRecommendation = async function loadExpertRecommendation(diseas
 
 window.editExpertRecommendation = async function editExpertRecommendation(diseaseName, confidence, userId, recordId, encodedImageUrl = '', encodedAnnotatedImageUrl = '', encodedImageLabel = '') {
   if (!currentToken || !currentUserIsExpert) return;
-  const selectedRecord = expertQueueRecords.find(record => String(record.user_id || '') === String(userId || '') && String(record.id || '') === String(recordId || ''));
+  const selectedRecord = [...expertQueueRecords, ...(getCachedExpertRecords()?.records || [])].find(record => String(record.user_id || '') === String(userId || '') && String(record.id || '') === String(recordId || ''));
   const imageUrls = [
-    decodeURIComponent(encodedImageUrl || ''),
-    decodeURIComponent(encodedAnnotatedImageUrl || ''),
     selectedRecord?.image_url,
+    decodeURIComponent(encodedImageUrl || ''),
     selectedRecord?.annotated_image_url,
+    decodeURIComponent(encodedAnnotatedImageUrl || ''),
   ];
   const imageLabel = decodeURIComponent(encodedImageLabel || '') || selectedRecord?.filename || selectedRecord?.image_path || '';
   setExpertRecommendationPreview(imageUrls, imageLabel, selectedRecord);

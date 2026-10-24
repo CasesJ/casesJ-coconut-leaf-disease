@@ -30,6 +30,8 @@ def client(monkeypatch):
 
     monkeypatch.setattr(monitoring.limiter, "rolling", allowed)
     monkeypatch.setattr(monitoring.limiter, "image_quota_24h", allowed)
+    monkeypatch.setattr(monitoring.store, "follow_up_upload_allowance",
+                        lambda *_: {"limit": 3, "used": 0, "remaining": 3})
     uploads, deleted = [], []
 
     def upload_asset(content, content_type, category):
@@ -98,10 +100,13 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     source = _image()
     saved = []
     uploads = []
-    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.82,
-                                                      "bbox": [0, 0, 16, 16]}],
-                                     "image": image})))
+    def predict(image, conf, *, annotate=True):
+        assert annotate is False, "Follow-up uploads must skip annotation rendering"
+        return {"detections": [{"class": "Bud Rot", "confidence": 0.82,
+                                "bbox": [0, 0, 16, 16]}], "image": image}
+
+    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(
+        detector=SimpleNamespace(predict=predict)))
 
     def fake_upload(content, content_type, category):
         uploads.append((category, content, content_type))
@@ -139,7 +144,7 @@ def test_failed_inference_is_not_saved_as_a_no_detection(client, monkeypatch):
     upload_attempts = []
     saved = []
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf: {"detections": [], "image": image,
+        predict=lambda image, conf, *, annotate=True: {"detections": [], "image": image,
                                      "inference_status": "failed",
                                      "inference_error": "model_execution_failed"})))
     monkeypatch.setattr(monitoring, "upload_asset",
@@ -160,7 +165,7 @@ def test_original_storage_failure_does_not_save_follow_up(client, monkeypatch):
     deleted = []
 
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf: {"detections": [], "image": image,
+        predict=lambda image, conf, *, annotate=True: {"detections": [], "image": image,
                                      "inference_status": "success"})))
 
     def partial_upload(content, content_type, category):
@@ -193,6 +198,8 @@ def test_case_creation_requires_expert(client, monkeypatch):
     assert response.status_code == 403
     app.dependency_overrides[verify_firebase_token] = lambda: {"uid": "expert-1", "role": "expert"}
     monkeypatch.setattr(monitoring.store, "create_case", lambda *args: {"id": "case-1"})
+    assert client.post("/expert/monitoring/cases", json=payload).status_code == 201
+    payload.pop("tree_id")
     assert client.post("/expert/monitoring/cases", json=payload).status_code == 201
 
 
@@ -261,6 +268,13 @@ def test_case_and_treatment_are_written_together(monkeypatch):
         def batch(self):
             return Batch()
 
+    from app.services import tree_identity_service as identity
+    def commit_identity(farmer, baseline, tree, write):
+        batch = Batch()
+        result = write(batch, tree)
+        batch.commit()
+        return result
+    monkeypatch.setattr(identity, "commit_care_identity", commit_identity)
     monkeypatch.setattr(service, "_firestore", lambda: Firestore())
     case = service.create_case("farmer-a", "tree-1", "upload-1", "2030-01-01", "expert-1")
     assert len(writes) == 4 and writes[-1] == "committed"
@@ -401,7 +415,7 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
         def document(self, name):
             return Ref(f"{self.path}/{name}")
 
-        def get(self):
+        def get(self, transaction=None):
             return Snapshot(self.path, documents.get(self.path))
 
         def set(self, data):
@@ -458,8 +472,19 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
                 "recommendation_snapshot": {"disease": "Bud Rot", "model_used": "Saved recommendation",
                                             "recommendations": {"treatment": "Recorded guidance"}}}
     monkeypatch.setattr(service, "find_record_for_user", lambda farmer, record: baseline)
+    from app.services import tree_identity_service as identity
+    documents["/users/farmer-a/detections/upload-1"] = baseline
+    documents["/users/farmer-a/trees/tree-1"] = {"id": "tree-1", "farmer_id": "farmer-a"}
+    def transaction(operation):
+        batch = Batch()
+        result = operation(batch)
+        batch.commit()
+        return result
+    monkeypatch.setattr(identity, "_transaction", transaction)
+    monkeypatch.setattr(service, "_follow_up_transaction", transaction)
+
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf: {"detections": [{"class": "Bud Rot", "confidence": 0.7}],
+        predict=lambda image, conf, *, annotate=True: {"detections": [{"class": "Bud Rot", "confidence": 0.7}],
                                      "image": image})))
     def upload_asset(content, mime, category):
         return {"provider": "cloudinary", "asset_id": uuid4().hex,
@@ -529,6 +554,10 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
             data={"preliminary_status": "no_visible_change", "follow_up_schedule_id": post_schedule["id"]})
         assert inspection.status_code == 201, inspection.text
         post_inspections.append(inspection.json())
+    blocked = client.post(f"/monitoring/cases/{case_id}/follow-ups",
+        files={"file": ("leaf.jpg", _image(), "image/jpeg")})
+    assert blocked.status_code == 409
+    assert "limit of 3" in blocked.json()["detail"]
     assert post_inspections[0]["id"] != post_inspections[1]["id"]
     assert all(record["treatment_application_id"] == application_data["id"] for record in post_inspections)
 
@@ -550,3 +579,31 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     assert len(body["treatment_applications"]) == 1
     assert len([schedule for schedule in body["follow_up_schedules"]
                 if schedule["schedule_type"] == "post_treatment"]) == 2
+
+
+def test_finish_requires_expert_and_returns_shared_status(client, monkeypatch):
+    path = "/expert/monitoring/cases/farmer-a/case-1/finish"
+    assert client.put(path).status_code == 403
+    app.dependency_overrides[verify_firebase_token] = lambda: {"uid": "expert-1", "role": "expert"}
+    calls = []
+    def finish(farmer, case, expert):
+        calls.append((farmer, case, expert))
+        return {"id": case, "farmer_id": farmer, "monitoring_status": "finish", "health_status": "healthy"}
+    monkeypatch.setattr(service, "finish_case", finish)
+    response = client.put(path)
+    assert response.status_code == 200
+    assert response.json()["health_status"] == "healthy"
+    assert response.json()["monitoring_status"] == "finish"
+    assert calls == [("farmer-a", "case-1", "expert-1")]
+    monkeypatch.setattr(service, "finish_case", lambda *args: None)
+    assert client.put(path).status_code == 404
+
+
+def test_follow_up_limit_blocks_before_reading_or_uploading_image(client, monkeypatch):
+    monkeypatch.setattr(service, "follow_up_upload_allowance",
+                        lambda *_: {"limit": 3, "used": 3, "remaining": 0})
+    monkeypatch.setattr(monitoring, "upload_asset", lambda *_: pytest.fail("No asset should upload"))
+    monkeypatch.setattr(monitoring, "run_image_inference", lambda *_: pytest.fail("No inference should run"))
+    response = _upload(client, b"not even an image")
+    assert response.status_code == 409
+    assert "3 follow-up image uploads" in response.json()["detail"]

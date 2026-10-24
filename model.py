@@ -203,13 +203,14 @@ class CoconutDiseaseDetector:
         
         return [detections[i] for i in keep]
 
-    def predict(self, image: np.ndarray, conf: float = 50) -> dict:
+    def predict(self, image: np.ndarray, conf: float = 50, *, annotate: bool = True) -> dict:
         """
         Real-time inference using the active detector backend
         
         Args:
             image: Input image as numpy array (BGR format)
             conf: Confidence threshold (0-100, default 50 for better filtering)
+            annotate: Draw detection boxes and labels on the returned image.
         
         Returns:
             dict with detections, annotated image, and an inference status.
@@ -220,9 +221,9 @@ class CoconutDiseaseDetector:
         try:
             print(f"[PREDICT] Starting {self.backend} prediction with confidence threshold: {conf}")
             if self.backend == "ultralytics":
-                result = self._predict_with_ultralytics(image, conf)
+                result = self._predict_with_ultralytics(image, conf, annotate=annotate)
             else:
-                result = self._predict_with_openvino(image, conf)
+                result = self._predict_with_openvino(image, conf, annotate=annotate)
             result["inference_status"] = "success"
             return result
         except Exception as error:
@@ -236,12 +237,12 @@ class CoconutDiseaseDetector:
                 "inference_error": "model_execution_failed",
             }
 
-    def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50) -> dict:
+    def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50, *, annotate: bool = True) -> dict:
         """Run inference directly on weights.pt using Ultralytics."""
         confidence_threshold = conf / 100.0 if conf > 1 else conf
         original_height, original_width = image.shape[:2]
         image_total_area = original_width * original_height
-        annotated_image = image.copy()
+        annotated_image = image.copy() if annotate else image
         annotation_size = max(original_width, original_height)
         box_thickness = max(12, int(round(annotation_size / 220)))
         font_scale = max(2.0, annotation_size / 1200)
@@ -294,7 +295,7 @@ class CoconutDiseaseDetector:
         detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
         print(f"[FILTER] After NMS: {len(detections)} detections")
 
-        for det in detections:
+        for det in detections if annotate else ():
             x1, y1, x2, y2 = det['bbox']
             class_name = det['class']
             confidence = det['confidence']
@@ -332,7 +333,7 @@ class CoconutDiseaseDetector:
             "image": annotated_image
         }
 
-    def _predict_with_openvino(self, image: np.ndarray, conf: float = 50) -> dict:
+    def _predict_with_openvino(self, image: np.ndarray, conf: float = 50, *, annotate: bool = True) -> dict:
         """Run inference using the OpenVINO export."""
         print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
         # Normalize confidence to 0-1 range if needed
@@ -431,7 +432,7 @@ class CoconutDiseaseDetector:
         print(f"[FILTER] After NMS: {len(detections)} detections")
 
         # Draw detections on image
-        for det in detections:
+        for det in detections if annotate else ():
             x1, y1, x2, y2 = det['bbox']
             class_name = det['class']
             confidence = det['confidence']

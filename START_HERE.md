@@ -1,53 +1,43 @@
 # CoconutAI Disease Detection System
 
-## Start the application
+Updated against the local source on October 24, 2026.
 
-1. Create and activate a Python virtual environment.
-2. Run `pip install -r requirements.txt`.
-3. Configure Firebase credentials and `.env` when remote services are required.
-4. Run `python main.py`.
-5. Open `http://127.0.0.1:8000`.
+## Start locally
+
+From the repository root in PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+python main.py
+```
+
+Copy the example only if you do not already have a .env file. Before starting, populate the ignored .env with EXPERT_ACCOUNT_EMAIL and EXPERT_ACCOUNT_PASSWORD (required at configuration import), Firebase Admin credentials, and CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET. Use FIREBASE_SERVICE_ACCOUNT_JSON or a private file referenced by GOOGLE_APPLICATION_CREDENTIALS.
+
+Open the URL printed by the launcher, normally http://localhost:8000. The launcher selects a nearby free port when needed. python run.py is an alternative; uvicorn app.main:app --reload uses an explicitly selected port. Local backend API documentation is at /docs.
 
 ## Current workflow
 
-1. A farmer uploads a coconut-leaf image.
-2. YOLO26 v6 returns detections, confidence scores, and an annotated image.
-3. Reviewable detections (currently `>= 5%`) are stored in the farmer's Firestore detection collection with authenticated Cloudinary image references.
-4. Every upload starts as `pending_verification`, regardless of its primary confidence, and requires expert verification.
-5. A recommendation is shown below the upload result only when the primary disease confidence is **50% or higher**.
-6. Experts can review every pending upload; the **Needs Review** filter prioritizes results at 50% or below.
-7. An expert can verify a record or save an expert recommendation; either action marks the selected record verified and notifies its farmer.
+1. A signed-in farmer uploads a JPEG or PNG showing a coconut disease symptom, including leaf, bud, or trunk evidence. The default limit is 10,000,000 bytes and 40 megapixels.
+2. The local weights.pt model runs through Ultralytics; the application labels it YOLO26 v6. Detections are displayed and eligible for recording from 5% confidence.
+3. A saved upload starts as pending_verification. A successful result without qualifying detections creates no new record. Inference or persistence failures return errors.
+4. Upload guidance appears at primary confidence of at least 50%. Below 50%, guidance is hidden on that screen and the pending upload is prioritized for expert review.
+5. Experts verify records or save record-specific recommendations, verifying the selected record, recording an audit event, and notifying the farmer.
+6. Experts can create care records from verified diseased uploads with treatment guidance, registering a new tree ID or selecting an existing farmer-owned tree.
+7. Farmers can plan treatment, record actual applications, and submit up to three follow-up images per tree ID across cases. Experts separately review tree identity and visible outcomes and explicitly finish cases when confirming the tree is healthy.
 
-## Screens
+## Screens and evidence
 
-- **Dashboard:** farm detection and health totals.
-- **Disease Detection:** image upload, annotated image, primary confidence, and high-confidence recommendation.
-- **Disease Map:** MapLibre locations, severity, areas, and heatmap.
-- **Detection Records:** saved uploads, verification status, location, expert guidance, and PDF report.
-- **Expert Review:** all pending records, with a **Needs Review** filter for results below 50% confidence.
-- **Settings:** account details and logout.
+- Farmer Detection Records use a fixed 180 ? 180 image preview on the left and details on the right. Narrow screens stack the card with a 160 ? 160 preview. Clicking opens the enlarged image.
+- Expert Review provides a pending queue, verification, recommendation editing, and audit history.
+- Care records show baseline and original follow-up images, a full-width Inspection timeline, and baseline/inspection GPS coordinates when embedded in the evidence images. The separate Recorded treatment plan panel is removed; stored treatment snapshots remain.
+- Uploaded images are mapped only with valid embedded EXIF/DJI EXIF GPS. Missing GPS is Unknown and unmapped. The farm map center is separate.
+- Dashboard summaries, reports, notifications, and account settings support the workflow.
 
-## Main services
+Confidence does not verify a diagnosis or establish recovery. Firestore is authoritative for records; Cloudinary stores authenticated originals. Browser SVG overlays reconstruct boxes from metadata instead of persisting new annotated copies.
 
-| Service | Purpose |
-|---|---|
-| FastAPI | Web UI and REST API |
-| YOLO26 v6 | Coconut disease inference |
-| Firebase Auth | Email/password sign-in and role identity |
-| Firebase Firestore | Authoritative detection, expert-review, and monitoring records |
-| Cloudinary | Authenticated image evidence storage |
-| MapLibre GL | Disease location map |
+## Documentation
 
-## Important endpoints
-
-- `POST /detect/image`
-- `POST /recommendations/fertilizer`
-- `GET /detections/my-records`
-- `GET /expert/records?status=all|pending|verified`
-- `POST /expert/records/{user_id}/{record_id}/verify`
-- `PUT /expert/recommendations/{disease}`
-- `GET /notifications`
-- `GET /reports/my-records.pdf`
-- `GET /health`
-
-See `DATA_DICTIONARY.md` for fields and `TROUBLESHOOTING.md` for common problems.
+See [architecture](ARCHITECTURE_DIAGRAMS.md), [data dictionary](DATA_DICTIONARY.md), [API schemas](JSON_SCHEMA_DOCUMENTATION.md), [recommendations](RECOMMENDATIONS_ENHANCEMENT.md), [storage](HYBRID_STORAGE_README.md), [runtime](OPENVINO_COMPLETE.md), [abuse controls](ABUSE_CONTROLS.md), [deployment](FIREBASE_DEPLOY.md), and [troubleshooting](TROUBLESHOOTING.md).

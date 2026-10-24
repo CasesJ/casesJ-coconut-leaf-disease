@@ -1,5 +1,7 @@
 # Inference abuse controls
 
+Updated against the local source on October 24, 2026.
+
 The supported server entry point is `uvicorn app.main:app` (or `python run.py`).
 It protects the expensive inference, export, authentication-token, and streaming
 endpoints with the following defaults:
@@ -36,3 +38,11 @@ By default, source-IP limits use the direct peer address. Set
 `TRUST_PROXY_HEADERS=true` only when a trusted proxy strips inbound
 `X-Forwarded-For` and sets it itself. This prevents clients from choosing their
 own IP rate-limit key.
+
+## Monitoring uploads
+
+POST /monitoring/cases/{case_id}/follow-ups shares the signed-in user's image-minute and 24-hour inference quota keys with ordinary detection uploads. It validates the disease image (JPEG/PNG, matching MIME type, at most 40 megapixels and MAX_IMAGE_UPLOAD_BYTES) and any optional whole-tree reference before inference.
+
+A separate Firestore allowance permits three follow-up image uploads per farmer-owned tree ID across cases. Historical follow-ups count toward usage; a transactional write prevents concurrent requests from exceeding the allowance. Exhaustion returns HTTP 409, not the HTTP 429 used for inference throttling. This allowance is not a daily reset and is not increased by starting another care case.
+
+Failed inference returns HTTP 503 and is not stored as a successful inspection. Inference quota reservations occur before model execution and are distinct from the persisted follow-up allowance.

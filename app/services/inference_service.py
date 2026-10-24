@@ -17,7 +17,8 @@ class InferenceUnavailable(RuntimeError):
     """Raised when a detector could not analyse an image reliably."""
 
 
-def run_image_inference(detector: Any, image: np.ndarray, confidence: float) -> dict[str, Any]:
+def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
+                        annotate: bool = True) -> dict[str, Any]:
     """Run inference and reject failed or malformed detector responses.
 
     An empty ``detections`` list with a successful status is a legitimate
@@ -25,7 +26,8 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float) -> 
     response is not an analysis result and must never be persisted as one.
     """
     try:
-        result = detector.predict(image, conf=confidence)
+        result = (detector.predict(image, conf=confidence) if annotate else
+                  detector.predict(image, conf=confidence, annotate=False))
     except Exception as exc:
         raise InferenceUnavailable("Detector execution failed") from exc
 

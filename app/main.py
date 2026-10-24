@@ -95,7 +95,10 @@ def create_app() -> FastAPI:
     @application.middleware("http")
     async def prevent_frontend_cache(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path in {"/", "/static/app.js"}:
+        if request.url.path in {
+            "/", "/index.html", "/static/index.html", "/static/app.js",
+            "/monitoring.js", "/static/monitoring.js",
+        }:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"

@@ -1,12 +1,15 @@
-# Hybrid Storage at a Glance
+# Storage at a Glance
+
+Updated against the local source on October 24, 2026. The historical filename is retained for links.
 
 | Layer | Current role |
 |---|---|
-| Firestore | Authoritative detection records and expert queue |
-| Cloudinary | Authenticated storage for new image evidence |
-| Firebase RTDB | Notifications and legacy data only |
-| Local SQLite and JSON | Retained historical backups; not used by the application runtime |
+| Firestore | Authoritative detections, registered trees, care records, treatment history, schedules, reviews, follow-up allowances, notifications, and expert audit events |
+| Cloudinary | Authenticated original disease and whole-tree reference images |
+| Browser SVG overlay | Detection boxes from stored dimensions and normalized bounding boxes |
+| Firebase RTDB | Notification compatibility fallback |
+| Local notification/configuration/audit files | Service-specific state, not a detection database fallback |
+| Historical SQLite/JSON detections | Retained backups, not application record storage |
+| Historical local/Firebase Storage images | Protected compatibility reads when referenced by an authorized record |
 
-The app fails record reads and writes when Firestore is unavailable; it does not save detections to SQLite or JSON. Expert verification and recommendations update the canonical Firestore record. Per-user notifications remain a separate service.
-
-Use `GET /health` for service status and `GET /detections/my-records` for the signed-in farmer’s records.
+Firestore failures fail record operations. Cloudinary failures fail affected image writes. New annotated copies are not persisted. See [storage details](HYBRID_STORAGE_README.md), [fields](DATA_DICTIONARY.md), and the backend /health endpoint.

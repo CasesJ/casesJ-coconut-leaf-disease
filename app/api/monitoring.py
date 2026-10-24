@@ -126,6 +126,8 @@ def my_monitoring_overview(case_id: str, decoded: dict = Depends(verify_firebase
     overview = store.get_overview(_farmer(decoded), case_id)
     if not overview:
         raise HTTPException(404, "Monitoring case not found")
+    overview["follow_up_upload_allowance"] = store.follow_up_upload_allowance(
+        overview["case"]["farmer_id"], overview["case"]["tree_id"])
     return media_service.present_monitoring_overview(overview)
 
 
@@ -332,6 +334,9 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     case = store.get_case(farmer_id, case_id)
     if not case:
         raise HTTPException(404, "Monitoring case not found")
+    allowance = store.follow_up_upload_allowance(farmer_id, case["tree_id"])
+    if allowance["remaining"] == 0:
+        raise HTTPException(409, store.FOLLOW_UP_LIMIT_MESSAGE)
     if preliminary_status not in {"needs_review", "improving", "no_visible_change", "worsening"}:
         raise HTTPException(422, "Invalid preliminary status")
     follow_up_schedule = None
@@ -373,7 +378,9 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     from drone_gps import DroneGPS  # noqa: PLC0415
 
     try:
-        result = run_image_inference(detector, decoded_image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+        result = run_image_inference(
+            detector, decoded_image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD, annotate=False,
+        )
     except InferenceUnavailable as exc:
         logger.error("Monitoring inference failed for %s/%s: %s", farmer_id, case_id, exc)
         raise HTTPException(
@@ -432,6 +439,9 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     try:
         store.save_follow_up(farmer_id, case_id, record)
         return media_service.present_monitoring_follow_up(record)
+    except store.FollowUpLimitReached as exc:
+        cleanup_new_evidence()
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         # A failed Firestore commit can be ambiguous. Remove the new assets
         # only when a follow-up read succeeds and proves no record was stored.
@@ -452,3 +462,16 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
             cleanup_new_evidence()
         logger.exception("Could not persist follow-up evidence")
         raise HTTPException(503, "Follow-up storage unavailable") from exc
+
+
+@router.put("/expert/monitoring/cases/{farmer_id}/{case_id}/finish")
+def finish_monitoring_case(farmer_id: str, case_id: str,
+                           decoded: dict = Depends(verify_firebase_token)):
+    expert_id = _expert(decoded)
+    _case_id(case_id)
+    if not _ID.fullmatch(farmer_id):
+        raise HTTPException(404, "Monitoring case not found")
+    updated = store.finish_case(farmer_id, case_id, expert_id)
+    if not updated:
+        raise HTTPException(404, "Monitoring case not found")
+    return media_service.present_monitoring_case(updated)

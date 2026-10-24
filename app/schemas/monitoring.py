@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class MonitoringCaseCreate(BaseModel):
     farmer_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    tree_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    tree_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     baseline_detection_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
     next_follow_up_date: date | None = None
     follow_up_interval_days: int = Field(default=6, ge=1, le=90)
@@ -60,6 +60,10 @@ class MonitoringCase(BaseModel):
     planned_treatment_date: date | None = None
     latest_treatment_application_id: str | None = None
     latest_treatment_application_date: date | None = None
+    monitoring_status: Literal["waiting", "finish"] = "waiting"
+    health_status: str | None = None
+    finished_at: str | None = None
+    finished_by_expert_uid: str | None = None
     latest_review_status: str = "no_follow_up"
     created_at: str
     created_by_expert_uid: str

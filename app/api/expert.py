@@ -173,7 +173,7 @@ async def verify_expert_record(
 
     append_expert_audit_event(
         action="verify_record", actor=decoded,
-        target={"user_id": user_id, "record_id": record_id},
+        target={"user_id": user_id, "record_id": record_id, "tree_id": record.get("tree_id")},
         details={"verification_status": desired_status},
     )
     return {"message": "Record updated successfully", "user_id": user_id,
@@ -270,7 +270,8 @@ async def update_expert_recommendation(
 
     append_expert_audit_event(
         action="update_recommendation", actor=decoded,
-        target={"disease": disease, "user_id": payload.target_user_id, "record_id": payload.target_record_id},
+        target={"disease": disease, "user_id": payload.target_user_id, "record_id": payload.target_record_id,
+                "tree_id": target_record.get("tree_id")},
         details={"verification_status": VERIFIED_STATUS if direct_record_synced else "pending",
                  "active": payload.active, "prevention_count": len(payload.prevention or []),
                  "synced_records": 0, "direct_record_synced": direct_record_synced},
@@ -303,10 +304,19 @@ def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_fireba
         record = records_by_key.get((uid, rid))
         if not record:
             continue
+        event["tree_id"] = event.get("tree_id") or target.get("tree_id") or record.get("tree_id")
         event["upload"] = {
             "user_id": uid, "email": str(record.get("email") or ""),
             "filename": str(record.get("filename") or record.get("image_path") or ""),
             "image_url": present_detection_record(record, expert=True).get("image_url", ""),
             "annotated_image_url": present_detection_record(record, expert=True).get("annotated_image_url", ""),
         }
+    from app.services import monitoring_service
+    cases = monitoring_service.list_expert_cases()
+    by_detection = {(case["farmer_id"], case.get("baseline_detection_id")): case for case in cases}
+    for event in events:
+        target = event.get("target") or {}
+        case = by_detection.get((target.get("user_id"), target.get("record_id"))) or {}
+        event["tree_id"] = event.get("tree_id") or target.get("tree_id") or case.get("tree_id")
+        event["monitoring_status"] = case.get("monitoring_status", "waiting")
     return {"events": events, "limit": safe_limit}

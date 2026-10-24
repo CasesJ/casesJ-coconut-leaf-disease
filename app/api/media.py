@@ -106,16 +106,19 @@ def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
     if not case or str(case.get("farmer_id") or "") != farmer_id:
         raise HTTPException(404, "Monitoring evidence not found")
     if baseline:
-        overview = monitoring_service.get_overview(farmer_id, case_id)
-        record = (overview or {}).get("baseline")
         snapshot = case.get("baseline_image_reference")
-        if not isinstance(record, dict):
-            record = {}
-        if isinstance(snapshot, dict):
-            record = {**snapshot, **record}
-        record.setdefault("id", case.get("baseline_detection_id"))
+        record = dict(snapshot) if isinstance(snapshot, dict) else {}
+        record["id"] = case.get("baseline_detection_id")
         record["user_id"] = farmer_id
         record["_media_scope"] = "detection"
+        # Older snapshots sometimes contain only a first-party delivery URL,
+        # not a durable provider reference. Resolve the exact owned detection
+        # without loading treatment records, schedules, and all follow-ups.
+        if not media_service.has_record_image(record, kind):
+            record = dict(_detection_record(farmer_id, str(case.get("baseline_detection_id") or "")))
+            record["_media_scope"] = "detection"
+        else:
+            record["predictions"] = case.get("baseline_prediction_snapshot") or []
         return _read_or_http_error(lambda: media_service.read_monitoring_image(record, kind))
     if not follow_up_id:
         raise HTTPException(404, "Monitoring evidence not found")

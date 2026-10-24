@@ -18,11 +18,38 @@ from app.infrastructure.imaging import image_utils
 
 @pytest.fixture
 def cloudinary_config(monkeypatch):
+    store._DOWNLOAD_CACHE.clear()
     monkeypatch.setattr(store.config, "CLOUDINARY_CLOUD_NAME", "test-cloud")
     monkeypatch.setattr(store.config, "CLOUDINARY_API_KEY", "server-key")
     monkeypatch.setattr(store.config, "CLOUDINARY_API_SECRET", "server-secret")
     monkeypatch.setattr(store.config, "CLOUDINARY_READ_TIMEOUT_SECONDS", 2)
     monkeypatch.setattr(store, "_CONFIGURED_VALUES", None)
+
+
+def test_recent_download_is_reused_but_new_version_is_fetched(monkeypatch, cloudinary_config):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "e" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg", "version": 1}
+    calls = []
+    monkeypatch.setattr(store, "_download_asset_once", lambda *args: calls.append(args) or (b"image", "image/jpeg"))
+    assert store.download_asset(reference) == store.download_asset(reference)
+    assert len(calls) == 1
+    store.download_asset({**reference, "version": 2})
+    assert len(calls) == 2
+
+
+def test_expired_download_is_fetched_again(monkeypatch, cloudinary_config):
+    reference = {"provider": "cloudinary", "public_id": "neuralcoco/test/" + "f" * 32,
+                 "resource_type": "image", "delivery_type": "authenticated",
+                 "format": "jpg", "content_type": "image/jpeg"}
+    calls = []
+    clock = [100]
+    monkeypatch.setattr(store.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(store, "_download_asset_once", lambda *args: calls.append(args) or (b"image", "image/jpeg"))
+    store.download_asset(reference)
+    clock[0] += store._DOWNLOAD_CACHE_TTL + 1
+    store.download_asset(reference)
+    assert len(calls) == 2
 
 
 def _jpeg():

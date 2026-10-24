@@ -69,12 +69,13 @@ function createHarness({ responses = [response()], imageEvent = 'load', tokenPro
   const logs = [];
   const revoked = [];
   let objectUrlNumber = 0;
+  let mutationCallback;
   const user = {
     uid: 'farmer-1',
     getIdToken: tokenProvider || (async () => 'test-bearer-token'),
   };
   class FakeMutationObserver {
-    constructor(callback) { this.callback = callback; }
+    constructor(callback) { this.callback = callback; mutationCallback = callback; }
     observe() {}
     disconnect() {}
   }
@@ -109,9 +110,12 @@ function createHarness({ responses = [response()], imageEvent = 'load', tokenPro
       warn: (...args) => logs.push(args),
     },
     queueMicrotask,
+    AbortController,
+    setTimeout,
+    clearTimeout,
   };
   vm.runInNewContext(source, context, { filename: 'private_media.js' });
-  return { image, calls, logs, revoked, window: fakeWindow };
+  return { image, calls, logs, revoked, window: fakeWindow, mutate: changes => mutationCallback(changes) };
 }
 
 function logged(logs, event) {
@@ -197,4 +201,47 @@ test('unexpected Blob MIME type is rejected before assigning its object URL', as
   assert.equal(harness.image.dataset.privateState, 'response-error');
   assert.equal(logged(harness.logs, 'blob:created'), true);
   assert.equal(logged(harness.logs, 'object-url:assigned'), false);
+});
+
+
+test('hydrating an already loaded image preserves its URL without fetching again', async () => {
+  const harness = createHarness();
+  const url = harness.image.dataset.privateSrc;
+  await harness.window.setPrivateImageSource(harness.image, url);
+  await harness.window.setPrivateImageSource(harness.image, url);
+  harness.window.loadPrivateMediaImages(harness.image);
+  assert.equal(harness.calls.length, 1);
+  assert.equal(harness.image.src, 'blob:private-media-1');
+  assert.deepEqual(harness.revoked, []);
+});
+
+
+test('same-source attribute notifications and repeated hydration share the in-flight request', async () => {
+  let resolveToken;
+  const harness = createHarness({ tokenProvider: () => new Promise(resolve => { resolveToken = resolve; }) });
+  const image = harness.image;
+  const loading = harness.window.setPrivateImageSource(image, image.dataset.privateSrc);
+  harness.mutate([{ type: 'attributes', target: image, addedNodes: [], removedNodes: [] }]);
+  harness.window.loadPrivateMediaImages(image);
+  resolveToken('test-token');
+  assert.equal(await loading, true);
+  harness.mutate([{ type: 'attributes', target: image, addedNodes: [], removedNodes: [] }]);
+  assert.equal(harness.calls.length, 1);
+  assert.deepEqual(harness.revoked, []);
+  assert.equal(image.listeners.get('load').size, 0);
+});
+
+test('replacing a loaded thumbnail revokes its URL and fetches the replacement element', async () => {
+  const harness = createHarness({ responses: [response(), response()] });
+  const image = harness.image;
+  await harness.window.setPrivateImageSource(image, image.dataset.privateSrc);
+  image.isConnected = false;
+  image.nodeType = 1;
+  harness.mutate([{ type: 'childList', addedNodes: [], removedNodes: [image] }]);
+  const replacement = new FakeImage();
+  await harness.window.setPrivateImageSource(replacement, replacement.dataset.privateSrc);
+  assert.equal(harness.calls.length, 2);
+  assert.deepEqual(harness.revoked, ['blob:private-media-1']);
+  assert.equal(image.src, '');
+  assert.equal(replacement.src, 'blob:private-media-2');
 });
