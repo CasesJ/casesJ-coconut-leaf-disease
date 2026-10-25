@@ -20,9 +20,8 @@ logger = logging.getLogger(__name__)
 
 # ── CSV export ─────────────────────────────────────────────────────────────────
 
-def generate_detections_csv() -> str:
-    """Generate the expert CSV export from canonical Firestore detections."""
-    records = get_all_user_records(limit=2_000)
+def _csv_detection_rows(records: list[dict]) -> list[dict]:
+    """Flatten saved predictions and legacy JSON fields without changing values."""
     all_detections = []
     for record in records:
         gps = record.get("gps_data") or {}
@@ -60,6 +59,12 @@ def generate_detections_csv() -> str:
                 "source": record.get("source") or "detection",
             })
 
+    return all_detections
+
+
+def generate_detections_csv() -> str:
+    """Generate the expert CSV export from canonical Firestore detections."""
+    all_detections = _csv_detection_rows(get_all_user_records(limit=2_000))
     disease_stats: dict = defaultdict(lambda: {"count": 0, "high": 0, "medium": 0, "low": 0, "total_confidence": 0})
     for detection in all_detections:
         disease = detection.get("disease_name", "Unknown")

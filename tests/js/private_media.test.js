@@ -245,3 +245,12 @@ test('replacing a loaded thumbnail revokes its URL and fetches the replacement e
   assert.equal(image.src, '');
   assert.equal(replacement.src, 'blob:private-media-2');
 });
+
+
+test('protected blob images decode eagerly after visibility scheduling', async () => {
+  const harness = createHarness();
+  harness.window.loadPrivateMediaImages(harness.image);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(harness.image.loading, 'eager');
+  assert.equal(harness.image.dataset.privateState, 'loaded');
+});

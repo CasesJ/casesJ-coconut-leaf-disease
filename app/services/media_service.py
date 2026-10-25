@@ -338,6 +338,12 @@ def has_record_image(record: dict, kind: str) -> bool:
     return False
 
 
+def _strip_image_storage_fields(value: dict) -> None:
+    """Remove shared provider retrieval details from a presentation copy."""
+    for field in ("image_assets", "original_storage_path", "annotated_storage_path"):
+        value.pop(field, None)
+
+
 def present_detection_record(record: dict, *, expert: bool = False) -> dict:
     """Replace stored delivery values with authenticated first-party routes."""
     value = deepcopy(record)
@@ -345,10 +351,8 @@ def present_detection_record(record: dict, *, expert: bool = False) -> dict:
     record_id = str(value.get("id") or value.get("record_id") or "")
     base = (f"/expert/media/detections/{farmer_id}/{record_id}" if expert
             else f"/media/detections/{record_id}")
-    value.pop("image_assets", None)
+    _strip_image_storage_fields(value)
     value.pop("cloudinary_asset", None)
-    value.pop("original_storage_path", None)
-    value.pop("annotated_storage_path", None)
     if value.get("image_path"):
         value["image_path"] = Path(str(value["image_path"])).name
     for kind, field in (("original", "image_url"), ("annotated", "annotated_image_url")):
@@ -387,9 +391,7 @@ def present_monitoring_follow_up(record: dict, *, expert: bool = False) -> dict:
             value[field] = f"{base}/{kind}"
         else:
             value.pop(field, None)
-    value.pop("image_assets", None)
-    value.pop("original_storage_path", None)
-    value.pop("annotated_storage_path", None)
+    _strip_image_storage_fields(value)
     if value.get("tree_reference"):
         value["tree_reference"] = present_tree_reference(value["tree_reference"])
     return value
@@ -424,15 +426,12 @@ def present_monitoring_overview(overview: dict, *, expert: bool = False) -> dict
             or baseline_record.get("annotated_storage_path")):
         prefix = (f"/expert/media/monitoring/{farmer_id}/{case_id}/baseline"
                   if expert else f"/media/monitoring/{case_id}/baseline")
-        baseline.pop("image_assets", None)
         baseline["image_url"] = f"{prefix}/original"
         baseline["annotated_image_url"] = f"{prefix}/annotated"
     else:
         baseline.pop("image_url", None)
         baseline.pop("annotated_image_url", None)
-    baseline.pop("image_assets", None)
-    baseline.pop("original_storage_path", None)
-    baseline.pop("annotated_storage_path", None)
+    _strip_image_storage_fields(baseline)
     value["baseline"] = baseline
     value["case"] = present_monitoring_case(case)
     value["follow_ups"] = [present_monitoring_follow_up(record, expert=expert)

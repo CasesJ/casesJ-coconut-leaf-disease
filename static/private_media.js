@@ -155,11 +155,13 @@
     }
     removeImageLoadHandlers(image);
     image.removeAttribute('src');
+    image.loading = 'eager';
     image.dataset.privateState = 'fetching';
     const promise = (async () => {
       let objectUrl = null;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
+      // Allow the backend's three bounded storage attempts to finish.
+      const timeout = setTimeout(() => controller.abort(), 90000);
       try {
         const fetchWithToken = token => fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
@@ -246,12 +248,13 @@
     if (root instanceof HTMLImageElement && root.dataset.privateSrc) images.push(root);
     root.querySelectorAll?.('img[data-private-src]').forEach((image) => images.push(image));
     images.forEach((image) => {
-      if (image.closest?.('.monitor-comparison')) {
+      if (image.closest?.('.monitor-comparison') || image.dataset.privatePriority === 'high') {
         image.loading = 'eager';
         void setPrivateImageSource(image, image.dataset.privateSrc);
         return;
       }
-      image.loading = 'lazy';
+      // Visibility is already managed here; native lazy loading can defer blob decoding.
+      image.loading = 'eager';
       if (observer) observer.observe(image);
       else void setPrivateImageSource(image, image.dataset.privateSrc);
     });

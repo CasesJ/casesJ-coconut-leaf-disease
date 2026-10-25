@@ -102,7 +102,7 @@
     const source = options.direct
       ? `src="${escapeAttribute(imageUrl)}"`
       : `data-private-src="${escapeAttribute(imageUrl)}"`;
-    return `<span class="detection-overlay-frame${className}" data-overlay-detections="${escapeAttribute(detections)}" data-overlay-dimensions="${escapeAttribute(dimensionsData)}"${style}><img data-overlay-image ${source} alt="${escapeAttribute(options.alt || record.filename || 'Detection image')}" /><svg class="detection-overlay-svg" aria-label="YOLO bounding boxes and confidence labels"></svg></span>`;
+    return `<span class="detection-overlay-frame${className}" data-overlay-detections="${escapeAttribute(detections)}" data-overlay-dimensions="${escapeAttribute(dimensionsData)}"${style}><img data-overlay-image width="180" height="180" data-private-priority="${options.priority === 'high' ? 'high' : 'auto'}" ${source} alt="${escapeAttribute(options.alt || record.filename || 'Detection image')}" /><svg class="detection-overlay-svg" aria-label="YOLO bounding boxes and confidence labels"></svg></span>`;
   }
 
   function mount(root = document) {

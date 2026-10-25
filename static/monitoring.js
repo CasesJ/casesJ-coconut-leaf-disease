@@ -42,10 +42,13 @@ function monitoringDateTime(value) {
   return Number.isNaN(date.getTime()) ? 'Not recorded'
     : new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
-function monitoringToday() {
-  const fields = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+function monitoringTodayFields() {
+  return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
   }).formatToParts(new Date()).map(part => [part.type, part.value]));
+}
+function monitoringToday() {
+  const fields = monitoringTodayFields();
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 function monitoringDayOffset(value, offset) {
@@ -56,9 +59,7 @@ function monitoringDayOffset(value, offset) {
 function monitoringTomorrow() { return monitoringDayOffset(monitoringToday(), 1); }
 function monitoringDue(value) {
   if (!value) return { text: 'Not scheduled', cls: '' };
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' })
-    .formatToParts(new Date());
-  const fields = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  const fields = monitoringTodayFields();
   const today = Date.UTC(+fields.year, +fields.month - 1, +fields.day);
   const [year, month, day] = String(value).split('-').map(Number);
   const remaining = Math.round((Date.UTC(year, month - 1, day) - today) / 86400000);

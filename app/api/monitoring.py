@@ -46,6 +46,14 @@ def _case_id(case_id: str) -> None:
         raise HTTPException(404, "Monitoring case not found")
 
 
+def _require_case(farmer_id: str, case_id: str) -> dict:
+    """Read a case in the already-authorized farmer scope or preserve the 404."""
+    case = store.get_case(farmer_id, case_id)
+    if not case:
+        raise HTTPException(404, "Monitoring case not found")
+    return case
+
+
 def _farmer(decoded: dict) -> str:
     uid = _uid(decoded)
     if _trusted_expert(decoded):
@@ -114,9 +122,7 @@ def all_monitoring_cases(decoded: dict = Depends(verify_firebase_token)):
 @router.get("/monitoring/cases/{case_id}")
 def my_monitoring_case(case_id: str, decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
-    case = store.get_case(_farmer(decoded), case_id)
-    if not case:
-        raise HTTPException(404, "Monitoring case not found")
+    case = _require_case(_farmer(decoded), case_id)
     return media_service.present_monitoring_case(case)
 
 
@@ -135,8 +141,7 @@ def my_monitoring_overview(case_id: str, decoded: dict = Depends(verify_firebase
 def my_planned_treatments(case_id: str, decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    if not store.get_case(farmer_id, case_id):
-        raise HTTPException(404, "Monitoring case not found")
+    _require_case(farmer_id, case_id)
     return {"planned_treatments": store.list_planned_treatments(farmer_id, case_id)}
 
 
@@ -145,8 +150,7 @@ def create_planned_treatment(case_id: str, payload: PlannedTreatmentCreate,
                              decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    if not store.get_case(farmer_id, case_id):
-        raise HTTPException(404, "Monitoring case not found")
+    _require_case(farmer_id, case_id)
     if payload.planned_date <= _today_philippine():
         raise HTTPException(422, "Planned treatment date must be in the future")
     planned = PlannedTreatmentRecord(
@@ -168,8 +172,7 @@ def create_planned_treatment(case_id: str, payload: PlannedTreatmentCreate,
 def my_treatment_applications(case_id: str, decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    if not store.get_case(farmer_id, case_id):
-        raise HTTPException(404, "Monitoring case not found")
+    _require_case(farmer_id, case_id)
     return {"treatment_applications": store.list_treatment_applications(farmer_id, case_id)}
 
 
@@ -179,9 +182,7 @@ def create_treatment_application(case_id: str, payload: TreatmentApplicationCrea
     """Append what the farmer actually applied, separate from the care plan."""
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    case = store.get_case(farmer_id, case_id)
-    if not case:
-        raise HTTPException(404, "Monitoring case not found")
+    case = _require_case(farmer_id, case_id)
     if payload.application_date > _today_philippine():
         raise HTTPException(422, "Application date cannot be in the future")
     treatment_performed = payload.treatment_performed.strip()
@@ -237,9 +238,7 @@ def expert_monitoring_case(farmer_id: str, case_id: str,
     _case_id(case_id)
     if not _ID.fullmatch(farmer_id):
         raise HTTPException(404, "Monitoring case not found")
-    case = store.get_case(farmer_id, case_id)
-    if not case:
-        raise HTTPException(404, "Monitoring case not found")
+    case = _require_case(farmer_id, case_id)
     return media_service.present_monitoring_case(case)
 
 
@@ -317,8 +316,7 @@ def confirm_follow_up(farmer_id: str, case_id: str, follow_up_id: str,
 def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    if not store.get_case(farmer_id, case_id):
-        raise HTTPException(404, "Monitoring case not found")
+    _require_case(farmer_id, case_id)
     return {"follow_ups": [media_service.present_monitoring_follow_up(item)
                            for item in store.list_follow_ups(farmer_id, case_id)]}
 
@@ -331,9 +329,7 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
                            decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    case = store.get_case(farmer_id, case_id)
-    if not case:
-        raise HTTPException(404, "Monitoring case not found")
+    case = _require_case(farmer_id, case_id)
     allowance = store.follow_up_upload_allowance(farmer_id, case["tree_id"])
     if allowance["remaining"] == 0:
         raise HTTPException(409, store.FOLLOW_UP_LIMIT_MESSAGE)

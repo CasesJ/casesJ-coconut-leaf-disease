@@ -9,6 +9,9 @@ responses that predate the status field.
 from __future__ import annotations
 
 from typing import Any
+from threading import Lock
+
+_INFERENCE_LOCK = Lock()
 
 import numpy as np
 
@@ -26,8 +29,10 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
     response is not an analysis result and must never be persisted as one.
     """
     try:
-        result = (detector.predict(image, conf=confidence) if annotate else
-                  detector.predict(image, conf=confidence, annotate=False))
+        # The shared detector can be called by concurrent upload worker threads.
+        with _INFERENCE_LOCK:
+            result = (detector.predict(image, conf=confidence) if annotate else
+                      detector.predict(image, conf=confidence, annotate=False))
     except Exception as exc:
         raise InferenceUnavailable("Detector execution failed") from exc
 

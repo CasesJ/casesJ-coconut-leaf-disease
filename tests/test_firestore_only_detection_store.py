@@ -151,6 +151,34 @@ def _put(db, *path, value):
     db.data[tuple(path)] = deepcopy(value)
 
 
+@pytest.mark.parametrize("expert", [False, True])
+@pytest.mark.parametrize("updates,accepted", [
+    ({"user_id": "another-farmer"}, False),
+    ({"id": "another-record"}, False),
+    ({"user_id": None, "id": None}, True),
+    ({"source": "drone", "tree_id": "TREE-HISTORICAL"}, True),
+])
+def test_list_mapping_preserves_identity_checks_and_stored_data(firestore, expert, updates, accepted):
+    path = ("users", "farmer-a", "detections", "record-a")
+    stored = _record("record-a", **updates)
+    _put(firestore, *path, value=stored)
+    records = (detection_service.get_all_user_records() if expert
+               else detection_service.get_user_records("farmer-a"))
+    assert len(records) == int(accepted)
+    if accepted:
+        record = records[0]
+        assert record["id"] == "record-a"
+        assert record["user_id"] == "farmer-a"
+        assert record["source"] == updates.get("source", "upload")
+        assert record.get("tree_id") == stored.get("tree_id")
+        assert record["storage_backend"] == "firestore"
+        record["detections"][0]["confidence"] = 0
+        again = (detection_service.get_all_user_records() if expert
+                 else detection_service.get_user_records("farmer-a"))
+        assert again[0]["detections"][0]["confidence"] == 0.8
+    assert firestore.data[path] == stored
+
+
 def test_farmer_history_reads_only_the_owners_canonical_firestore_collection(firestore, monkeypatch):
     _put(firestore, "users", "farmer-a", "detections", "record-a", value=_record("record-a"))
     _put(firestore, "users", "farmer-a", "uploads", "legacy-a", value=_record("legacy-a"))

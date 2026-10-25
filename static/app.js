@@ -1901,7 +1901,7 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
     areaMonitoringLoaded = true;
   } catch (error) {
     console.error('Area monitoring error:', error);
-    gridEl.innerHTML = `<div class="no-events" style="grid-column:1/-1;padding:1rem">${error.message}</div>`;
+    gridEl.innerHTML = `<div class="no-events" style="grid-column:1/-1;padding:1rem">${escapeHtml(error.message)}</div>`;
   }
 };
 
@@ -3067,7 +3067,7 @@ function renderRecordCard(record, idx, options = {}) {
     ? `<div style="margin-top:10px;border:1px solid rgba(11,42,31,0.12);border-radius:10px;overflow:hidden;background:#fff;">
          <div style="padding:8px 10px;font-size:11px;font-weight:600;color:#164d37;background:rgba(38,134,90,0.08);border-bottom:1px solid rgba(11,42,31,0.08);">Annotated Image Preview</div>
          <button type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" style="display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer;">
-           ${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel }) || `<img data-private-src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" />`}
+           ${window.DetectionOverlay?.frameHtml(previewImage, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel, priority: idx < 3 ? 'high' : 'auto' }) || `<img data-private-src="${escapeHtml(previewImage)}" alt="${escapeHtml(imageLabel)}" />`}
          </button>
        </div>`
     : `<div style="margin-top:10px;padding:10px;background:rgba(38,134,90,0.08);border-radius:8px;border:1px dashed rgba(38,134,90,0.25);color:#3f5b4d;font-size:12px;">
@@ -3099,7 +3099,7 @@ function renderRecordCard(record, idx, options = {}) {
         ${detections.length} detection${detections.length !== 1 ? 's' : ''}
       </div>
       <div class="record-detections">
-        ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
+        ${detections.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round(d.confidence*100)}%</span>`).join('')}
       </div>
       ${isExpertView ? imagePreviewHtml : ''}
       ${locationDisplay}
@@ -3299,7 +3299,7 @@ async function loadUserRecords({ force = false } = {}) {
   }
   
   const listEl = document.getElementById('records-list');
-  listEl.innerHTML = '<div class="no-records">Loading records...</div>';
+  if (!getCachedUserRecords() || force) listEl.innerHTML = '<div class="no-records" role="status">Loading your detection records…</div>';
   
   try {
     const data = await fetchUserRecords({ force });
@@ -3333,8 +3333,7 @@ async function loadUserRecords({ force = false } = {}) {
     });
 
     if (records.length === 0) {
-      const statusLabel = currentUserRecordsFilter === 'pending' ? 'pending' : 'verified';
-      listEl.innerHTML = `<div class="no-records">No ${statusLabel} detection records yet.</div>`;
+      listEl.innerHTML = '<div class="no-records">No records match these filters.</div>';
     } else {
       listEl.innerHTML = records.map((record, idx) => {
       const timestamp = new Date(record.timestamp).toLocaleString();
@@ -3388,25 +3387,12 @@ async function loadUserRecords({ force = false } = {}) {
         ? `📍 Record ${idx}: Embedded GPS - ${lat.toFixed(6)}, ${lng.toFixed(6)} (source: ${gpsSource})`
         : `📍 Record ${idx}: No embedded GPS metadata`);
       
-      // Build location display with map button
-      let locationDisplay = '';
       const mapButtonHtml = hasEmbeddedGps
-        ? `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`
-        : '';
+        ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng});switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
       const recommendationButtonHtml = status.cls === 'verified'
-        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)' style="padding:6px 12px;font-size:11px;margin-top:8px;background:#f0b429;color:#0e1c15;border:none;border-radius:4px;cursor:pointer;"><span>＋ Recommendation</span></button>`
-        : `<button class="btn btn-o" disabled style="padding:6px 12px;font-size:11px;margin-top:8px;background:#edf1ec;color:#7a9a8a;border:none;border-radius:4px;cursor:not-allowed;"><span>＋ Recommendation (Pending)</span></button>`;
-      locationDisplay = hasEmbeddedGps
-        ? `<div style="margin-top:10px;padding:10px;background:rgba(38, 134, 90, 0.12);border-radius:6px;border-left:4px solid #26865a;">
-            <div style="font-size:11px;font-weight:600;color:#164d37;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">📍 Embedded GPS Location</div>
-            <div style="font-size:12px;color:#0e1c15;font-family:monospace;font-weight:500;margin-bottom:8px;background:white;padding:6px;border-radius:3px;"><strong>Latitude:</strong> ${lat.toFixed(6)}<br><strong>Longitude:</strong> ${lng.toFixed(6)}</div>
-            <div style="font-size:10px;color:#7a9a8a;margin-bottom:6px;"><strong>Source:</strong> ${gpsSource.replace(/_/g, ' ')}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;align-items:center;">
-              ${mapButtonHtml}
-              ${recommendationButtonHtml}
-            </div>
-          </div>`
-        : `<div style="margin-top:10px;padding:10px;background:rgba(100,116,139,.10);border-radius:6px;border-left:4px solid #64748b;font-size:12px;color:#475569;"><strong>📍 Location: Unknown</strong><br>This image has no embedded GPS coordinates, so it is not shown on the map.<div style="margin-top:8px;">${recommendationButtonHtml}</div></div>`;
+        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)'>View recommendation</button>`
+        : '<span class="record-awaiting">Recommendations available after expert review</span>';
+      const locationDisplay = `<div class="record-location"><span class="record-location-label">Location</span><span>${hasEmbeddedGps ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS data'}</span>${!hasEmbeddedGps ? '<small>This upload has no embedded coordinates.</small>' : ''}</div><div class="record-actions">${mapButtonHtml}${recommendationButtonHtml}</div>`;
       const recommendationPanel = status.cls === 'verified'
         ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';
@@ -3414,21 +3400,22 @@ async function loadUserRecords({ force = false } = {}) {
       const imageLabel = record.filename || record.image_path || 'Detection image';
       const imagePreview = imageUrl
         ? `<button type="button" class="record-image-preview" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" aria-label="View ${escapeHtml(imageLabel)}">
-             ${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" />`}
+             ${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? detections : [] }, { alt: imageLabel, priority: idx < 3 ? 'high' : 'auto' }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageLabel)}" />`}
            </button>`
-        : '';
+        : '<div class="record-image-empty">No image available</div>';
       
       return `
         <div class="record-item farmer-record${imageUrl ? '' : ' farmer-record-no-image'}">
           ${imagePreview}
           <div class="record-details">
           ${buildRecordStatusBadge(record)}
+          <h4 class="record-title">${escapeHtml(formatDiseaseClass(primary.class || 'Detection record'))}</h4>
           <div class="record-meta">
-            <strong>${timestamp}</strong><br>
+            <time>${escapeHtml(timestamp)}</time><span class="record-meta-divider">·</span>
             ${detections.length} detection${detections.length !== 1 ? 's' : ''}
           </div>
           <div class="record-detections">
-            ${detections.map(d => `<span class="record-det high">${formatDiseaseClass(d.class)} ${Math.round(d.confidence*100)}%</span>`).join('')}
+            ${detections.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round(d.confidence*100)}%</span>`).join('')}
             <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
           ${locationDisplay}
@@ -3484,7 +3471,7 @@ async function loadUserRecords({ force = false } = {}) {
     
   } catch (error) {
     console.error('Error loading records:', error);
-    listEl.innerHTML = `<div class="no-records">❌ Error loading records<br>${error.message}</div>`;
+    listEl.innerHTML = `<div class="no-records">❌ Error loading records<br>${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -3652,7 +3639,7 @@ window.loadExpertReview = async function loadExpertReview({ force = false } = {}
     }
   } catch (error) {
     console.error('Error loading expert review:', error);
-    if (pendingListEl) pendingListEl.innerHTML = `<div class="no-records">❌ Error loading expert queue<br>${error.message}</div>`;
+    if (pendingListEl) pendingListEl.innerHTML = `<div class="no-records">❌ Error loading expert queue<br>${escapeHtml(error.message)}</div>`;
   }
 };
 
@@ -3672,7 +3659,7 @@ window.loadExpertAuditLog = async function loadExpertAuditLog() {
     renderExpertAuditLog();
   } catch (error) {
     console.error('Error loading audit log:', error);
-    if (auditListEl) auditListEl.innerHTML = `<div class="no-records">❌ Error loading audit log<br>${error.message}</div>`;
+    if (auditListEl) auditListEl.innerHTML = `<div class="no-records">❌ Error loading audit log<br>${escapeHtml(error.message)}</div>`;
   }
 };
 

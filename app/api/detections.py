@@ -66,7 +66,7 @@ async def detect_image(
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authentication is required for image inference")
     try:
-        decoded = verify_token(auth_header.split(" ", 1)[1])
+        decoded = await asyncio.to_thread(verify_token, auth_header.split(" ", 1)[1])
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
     user_id = str(decoded.get("uid") or "").strip()
@@ -130,6 +130,7 @@ async def detect_image(
     else:
         lat, lng = None, None
 
+    inference_started = time.perf_counter()
     # --- Inference ---
     np_arr = np.frombuffer(contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
@@ -139,17 +140,18 @@ async def detect_image(
     # even if it contains no disease detection.
     farm_center = None
     if lat is not None and lng is not None and gps_source in {"exif", "dji_exif"}:
-        farm_center = set_initial_farm_center(user_id, lat, lng, gps_source)
+        farm_center = await asyncio.to_thread(set_initial_farm_center, user_id, lat, lng, gps_source)
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     try:
-        result = run_image_inference(detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+        result = await asyncio.to_thread(run_image_inference, detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
     except InferenceUnavailable as exc:
         logger.error("Image inference failed for upload by %s: %s", user_id, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Disease analysis is temporarily unavailable. Your image was not saved.",
         ) from exc
+    inference_ms = (time.perf_counter() - inference_started) * 1000
     all_detections = result["detections"]
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
@@ -159,6 +161,7 @@ async def detect_image(
     encoded = base64.b64encode(buffer).decode("utf-8")
 
     # --- Persist ---
+    persistence_started = time.perf_counter()
     record_id = None
     if high_confidence_detections:
         gps_data = {
@@ -168,7 +171,8 @@ async def detect_image(
         }
         record_id = f"upload_{user_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
         try:
-            save_detection_record(
+            await asyncio.to_thread(
+                save_detection_record,
                 user_id=user_id, email=email, record_id=record_id,
                 detections=high_confidence_detections, gps_data=gps_data,
                 filename=file.filename, source="upload",
@@ -184,6 +188,9 @@ async def detect_image(
                 detail="Image storage is temporarily unavailable. The detection was not saved.",
             ) from exc
 
+    logger.info("Upload processing inference_ms=%.0f persistence_ms=%.0f recorded=%s",
+                inference_ms, (time.perf_counter() - persistence_started) * 1000,
+                bool(record_id))
     return {
         "detections": all_detections,
         "recorded_count": len(high_confidence_detections),
@@ -386,7 +393,7 @@ async def detect_stream(websocket: WebSocket):
                     continue
 
                 try:
-                    result = run_image_inference(detector, image, 50)
+                    result = await asyncio.to_thread(run_image_inference, detector, image, 50)
                 except InferenceUnavailable:
                     await websocket.send_json({
                         "error": "Disease analysis is temporarily unavailable",

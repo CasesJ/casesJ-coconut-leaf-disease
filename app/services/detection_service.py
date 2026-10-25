@@ -168,6 +168,16 @@ def update_record_everywhere(user_id: str, record_id: str, updates: dict) -> boo
     return True
 
 
+def _prepare_listed_record(record: dict, user_id: str, record_id: str) -> dict:
+    """Format an already ownership-checked Firestore record for list consumers."""
+    record["id"] = record_id
+    record["user_id"] = user_id
+    record.setdefault("source", "upload")
+    record["storage_backend"] = "firestore"
+    apply_record_defaults(record)
+    return record
+
+
 def get_all_user_records(limit: int = 500) -> list[dict]:
     """Return the expert queue from the canonical Firestore detections group."""
     safe_limit = max(1, min(int(limit), 2_000))
@@ -200,12 +210,7 @@ def get_all_user_records(limit: int = 500) -> list[dict]:
                     or record_id_from_data != doc.id):
                 logger.error("Skipping Firestore detection with mismatched owner (%s)", doc.id)
                 continue
-            record["id"] = doc.id
-            record["user_id"] = owner_from_path
-            record.setdefault("source", "upload")
-            record["storage_backend"] = "firestore"
-            apply_record_defaults(record)
-            records.append(record)
+            records.append(_prepare_listed_record(record, owner_from_path, doc.id))
         records.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
     except Exception as error:
         logger.warning("Firestore expert detection query failed (%s)", type(error).__name__)
@@ -242,12 +247,7 @@ def get_user_records(user_id: str, limit: int | None = None) -> list[dict]:
             if stored_owner != user_id or stored_id != doc.id:
                 logger.error("Skipping Firestore detection with mismatched owner (%s)", doc.id)
                 continue
-            record["id"] = doc.id
-            record["user_id"] = user_id
-            record.setdefault("source", "upload")
-            record["storage_backend"] = "firestore"
-            apply_record_defaults(record)
-            records.append(record)
+            records.append(_prepare_listed_record(record, user_id, doc.id))
         records.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
         return records[:limit] if limit is not None else records
     except Exception as error:
