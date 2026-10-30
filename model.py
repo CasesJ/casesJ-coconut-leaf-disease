@@ -243,11 +243,12 @@ class CoconutDiseaseDetector:
         original_height, original_width = image.shape[:2]
         image_total_area = original_width * original_height
         annotated_image = image.copy() if annotate else image
-        annotation_size = max(original_width, original_height)
-        box_thickness = max(12, int(round(annotation_size / 220)))
-        font_scale = max(2.0, annotation_size / 1200)
-        text_thickness = max(4, int(round(box_thickness * 0.6)))
-        text_padding = max(12, box_thickness)
+        # Use a fixed display-space annotation size. Scaling these values from
+        # source pixels makes boxes overwhelm high-resolution uploads.
+        box_thickness = 4
+        font_scale = 0.9
+        text_thickness = 2
+        text_padding = 8
 
         results = self.yolo_model.predict(source=image, imgsz=640, conf=confidence_threshold, verbose=False)
         result = results[0] if results else None
@@ -339,11 +340,10 @@ class CoconutDiseaseDetector:
         # Normalize confidence to 0-1 range if needed
         confidence_threshold = conf / 100.0 if conf > 1 else conf
         image_height, image_width = image.shape[:2]
-        annotation_size = max(image_width, image_height)
-        box_thickness = max(12, int(round(annotation_size / 220)))
-        font_scale = max(2.0, annotation_size / 1200)
-        text_thickness = max(4, int(round(box_thickness * 0.6)))
-        text_padding = max(12, box_thickness)
+        box_thickness = 4
+        font_scale = 0.9
+        text_thickness = 2
+        text_padding = 8
 
         # Store original image dimensions
         original_height, original_width = image.shape[:2]

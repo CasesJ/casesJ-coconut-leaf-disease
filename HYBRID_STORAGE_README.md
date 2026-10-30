@@ -12,7 +12,7 @@ Care creation atomically binds the baseline to a registered tree and creates car
 
 ## Image evidence
 
-New uploads persist original bytes as authenticated Cloudinary assets. Stored image_dimensions and normalized boxes (annotation_format: xyxy-normalized-v1) support SVG annotation in static/detection_overlay.js. Follow-up comparisons display original images without overlays. Whole-tree photos are separate identity evidence.
+New uploads persist authenticated Cloudinary evidence plus a compact private thumbnail for record lists. Stored image_dimensions and normalized boxes (annotation_format: xyxy-normalized-v1) support SVG annotation in static/detection_overlay.js. Older records generate and cache a thumbnail on first preview. Follow-up comparisons display original images without overlays. Whole-tree photos are separate identity evidence.
 
 static/private_media.js loads protected API images using the signed-in token. Farmer and expert routes check record/case access. Historical local images and Firebase Storage objects are compatibility sources when authorized records reference them. Public static hosting excludes historical upload folders.
 

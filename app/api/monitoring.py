@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MINUTE,
-                             MAX_IMAGE_UPLOAD_BYTES, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+                             MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
 from app.domain.expert import is_authorized_expert_identity
@@ -356,8 +356,8 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         raise HTTPException(400, "Image upload is empty")
     try:
         with Image.open(BytesIO(contents)) as image:
-            if image.format not in {"JPEG", "PNG"} or image.width * image.height > 40_000_000:
-                raise ValueError("Upload must be a JPEG or PNG image of at most 40 megapixels")
+            if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
+                raise ValueError(f"Upload must be a JPEG or PNG image of at most {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels")
             content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
             image.verify()
         if file.content_type != content_type:

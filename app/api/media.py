@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 
 from app.core.security import verify_verified_firebase_token
@@ -57,9 +57,11 @@ def _serve(contents: bytes, content_type: str) -> Response:
     })
 
 
-def _read_or_http_error(read) -> Response:
+def _read_or_http_error(read, after_read=None) -> Response:
     try:
         contents, content_type = read()
+        if after_read:
+            after_read(contents)
         return _serve(contents, content_type)
     except media_service.MediaNotFound:
         raise HTTPException(404, "Image not found") from None
@@ -78,23 +80,33 @@ def _detection_record(farmer_id: str, record_id: str) -> dict:
 
 
 @router.get("/media/detections/{record_id}/{kind}")
-def farmer_detection_image(record_id: str, kind: str,
+def farmer_detection_image(record_id: str, kind: str, background_tasks: BackgroundTasks,
                            decoded: dict = Depends(verify_verified_firebase_token)):
     farmer_id = _farmer(decoded)
-    if kind not in {"original", "annotated"}:
+    if kind not in {"original", "annotated", "thumbnail"}:
         raise HTTPException(404, "Image not found")
     record = _detection_record(farmer_id, record_id)
-    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind))
+    assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
+    should_cache_thumbnail = kind == "thumbnail" and not assets.get("thumbnail")
+    after_read = (lambda contents: background_tasks.add_task(
+        media_service.persist_detection_thumbnail, record, contents
+    )) if should_cache_thumbnail else None
+    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
 
 
 @router.get("/expert/media/detections/{farmer_id}/{record_id}/{kind}")
-def expert_detection_image(farmer_id: str, record_id: str, kind: str,
+def expert_detection_image(farmer_id: str, record_id: str, kind: str, background_tasks: BackgroundTasks,
                            decoded: dict = Depends(verify_verified_firebase_token)):
     _expert(decoded)
-    if kind not in {"original", "annotated"} or not farmer_id or not record_id:
+    if kind not in {"original", "annotated", "thumbnail"} or not farmer_id or not record_id:
         raise HTTPException(404, "Image not found")
     record = _detection_record(farmer_id, record_id)
-    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind))
+    assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
+    should_cache_thumbnail = kind == "thumbnail" and not assets.get("thumbnail")
+    after_read = (lambda contents: background_tasks.add_task(
+        media_service.persist_detection_thumbnail, record, contents
+    )) if should_cache_thumbnail else None
+    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
 
 
 def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,

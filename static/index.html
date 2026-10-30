@@ -104,14 +104,24 @@
       display:flex; 
       align-items:center; 
       justify-content:center;
-      padding:1.5rem;
+      padding:clamp(1rem, 2.75vw, 3.5rem);
       overflow-y:auto;
+      scrollbar-width:none;
       background-image: url('/coco-farm.jpg');
       background-size: cover;
       background-position: center;
       background-repeat: no-repeat;
       background-attachment: scroll;
     }
+    .auth-screen::-webkit-scrollbar { display:none; }
+    .auth-screen.signup-mode { align-items:center; }
+    .auth-screen.signup-mode .auth-container { height:min(88vh, 900px); min-height:0; }
+    .auth-screen.signup-mode .auth-form { padding-block:clamp(1.25rem, 3vh, 2.25rem); }
+    .auth-screen.signup-mode .auth-brand { margin-bottom:1.25rem; }
+    .auth-screen.signup-mode .auth-tabs { margin-bottom:1.25rem; }
+    .auth-screen.signup-mode .form-group { margin-bottom:.55rem; }
+    .auth-screen.signup-mode .form-group input { padding-block:.7rem; }
+    .auth-screen.signup-mode .btn-submit { margin-top:.65rem; padding-block:.85rem; }
     .auth-screen::before {
       content:''; 
       position:absolute; 
@@ -121,25 +131,40 @@
       pointer-events:none;
     }
     .auth-screen.hidden { display:none; }
-    .auth-container { width:min(100%, 420px); position:relative; z-index:2; transform:translateY(clamp(-4rem, -7vh, -2rem)); }
-    .auth-header { text-align:center; margin-bottom:clamp(1rem, 3vw, 1.5rem); padding:clamp(0.5rem, 2vw, 1rem); }
-    .auth-header .logo-icon { width:clamp(2.75rem, 8vw, 3.5rem); height:clamp(2.75rem, 8vw, 3.5rem); background: linear-gradient(135deg, var(--accent) 0%, var(--bright) 100%); border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 auto clamp(1rem, 3vw, 1.25rem); box-shadow: 0 8px 32px rgba(62, 201, 122, 0.3); }
+    .auth-container { width:min(100%, 1600px); min-height:min(88vh, 900px); position:relative; z-index:2; display:grid; grid-template-columns:minmax(0,1fr) minmax(420px, 0.95fr); grid-template-rows:minmax(100%,1fr); align-items:stretch; overflow:hidden; border-radius:30px; box-shadow:0 28px 90px rgba(0,0,0,.3); }
+    .auth-header { min-height:100%; text-align:center; margin:0; padding:clamp(2rem, 5vw, 5rem); display:flex; flex-direction:column; justify-content:center; align-items:center; background:linear-gradient(135deg, rgba(9,43,44,.42), rgba(9,43,44,.24)); color:white; }
+    .auth-header .logo-icon { width:clamp(2.75rem, 8vw, 3.5rem); height:clamp(2.75rem, 8vw, 3.5rem); background: linear-gradient(135deg, var(--accent) 0%, var(--bright) 100%); border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 0 1.25rem; box-shadow: 0 8px 32px rgba(62, 201, 122, 0.3); }
     .auth-header .logo-icon svg { width:clamp(1.2rem, 4vw, 1.5rem); height:clamp(1.2rem, 4vw, 1.5rem); stroke:#ffffff; fill:none; stroke-width:1.8; stroke-linecap:round; }
-    .auth-header h1 { font-family:'DM Serif Display',serif; font-size:clamp(2rem, 8vw, 2.5rem); font-weight:700; color:#ffffff; margin-bottom:0.5rem; text-shadow: 0 3px 12px rgba(11, 42, 31, 0.5); letter-spacing:-0.5px; }
-    .auth-header p { font-size:clamp(0.9rem, 3vw, 1rem); font-weight:500; color:#ffffff; text-shadow: 0 2px 8px rgba(11, 42, 31, 0.4); letter-spacing:0.3px; line-height:1.5; }
+    .auth-header h1 { font-family:'DM Sans',sans-serif; font-size:clamp(2.4rem, 5vw, 4rem); font-weight:700; color:#ffffff; margin:0 auto 1rem; text-shadow: 0 3px 12px rgba(11, 42, 31, 0.5); letter-spacing:-1.5px; line-height:1.05; max-width:12ch; }
+    .auth-header p { margin-inline:auto; font-size:clamp(1rem, 1.5vw, 1.15rem); font-weight:500; color:rgba(255,255,255,.92); text-shadow: 0 2px 8px rgba(11, 42, 31, 0.4); letter-spacing:0; line-height:1.65; max-width:42ch; }
+    .auth-trust { display:inline-flex; align-items:center; gap:.55rem; align-self:center; margin-bottom:2rem; padding:.7rem 1rem; border-radius:999px; background:rgba(255,255,255,.2); color:#fff; font-size:.9rem; font-weight:600; }
+    .auth-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.8rem; margin:2.5rem auto 0; max-width:460px; }
+    .auth-stat { padding:1rem; border-radius:16px; background:rgba(255,255,255,.19); backdrop-filter:blur(8px); }
+    .auth-stat strong { display:block; font-size:1.35rem; line-height:1.2; }
+    .auth-stat span { font-size:.9rem; }
     
-    .auth-form { background:rgba(255,255,255,0.98); border-radius:var(--r); padding:clamp(2rem, 5vw, 2.5rem); box-shadow:0 16px 48px rgba(0,0,0,0.2); backdrop-filter: blur(10px); }
-    .form-title { font-size:var(--text-2xl); font-weight:600; color:var(--deep); margin-bottom:clamp(1.5rem, 3vw, 1.75rem); }
+    .auth-form { min-height:100%; background:#fff; border-radius:0; padding:clamp(2rem, 5vw, 5rem); box-shadow:none; backdrop-filter:none; display:flex; flex-direction:column; justify-content:center; }
+    .auth-form form { width:100%; }
+    .auth-brand { display:flex; align-items:center; gap:.8rem; margin:0 auto 2.5rem; color:#101827; }
+    .auth-brand .logo-icon { width:48px; height:48px; display:grid; place-items:center; border-radius:15px; background:#0e9b8d; color:#fff; font-size:1.6rem; font-weight:700; }
+    .auth-brand strong { display:block; font-size:1.2rem; }
+    .auth-brand small { color:#0e9b8d; font-size:.85rem; }
+    .auth-tabs { display:grid; grid-template-columns:1fr 1fr; margin-bottom:2rem; border-bottom:1px solid #e1e5eb; }
+    .auth-tab { padding:.85rem .5rem; text-align:center; color:#94a3b8; border-bottom:2px solid transparent; font-weight:600; cursor:pointer; }
+    .auth-tab.active { color:#0e9b8d; border-bottom-color:#0e9b8d; }
+    .form-title { display:none; }
     .form-group { margin-bottom:clamp(1.1rem, 2.5vw, 1.25rem); }
-    .form-group label { display:block; font-size:var(--text-xs); font-weight:600; margin-bottom:0.5rem; color:var(--text2); letter-spacing:.5px; text-transform:uppercase; }
-    .form-group input { width:100%; padding:clamp(0.7rem, 1.5vw, 0.9rem) clamp(0.85rem, 2vw, 1rem); border:1.5px solid rgba(11,42,31,0.12); border-radius:8px; font-size:var(--text-base); font-family:'DM Sans',sans-serif; transition:all .2s; }
+    .signup-only { display:none; }
+    .auth-form.signup-mode .signup-only { display:block; }
+    .form-group label { display:block; font-size:.95rem; font-weight:500; margin-bottom:0.55rem; color:#17212c; letter-spacing:0; text-transform:none; }
+    .form-group input { width:100%; padding:clamp(0.8rem, 1.5vw, 1rem) clamp(0.9rem, 2vw, 1.1rem); border:1px solid #cbd3de; border-radius:18px; font-size:var(--text-base); font-family:'DM Sans',sans-serif; transition:all .2s; }
     .form-group input:focus { outline:none; border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,0.1); }
     .error-message { background:var(--red-bg); color:var(--red-text); padding:clamp(0.65rem, 1.5vw, 0.85rem) var(--spacing-sm); border-radius:8px; font-size:var(--text-sm); margin-bottom:var(--spacing-md); display:none; }
     .error-message.show { display:block; }
     .success-message { background:#e8f5e9; color:#1b5e20; padding:clamp(0.65rem, 1.5vw, 0.85rem) var(--spacing-sm); border-radius:8px; font-size:var(--text-sm); margin-bottom:var(--spacing-md); display:none; }
     .success-message.show { display:block; }
-    .btn-submit { width:100%; padding:clamp(0.85rem, 2vw, 1rem); background:var(--deep); color:white; border:none; border-radius:8px; font-size:var(--text-base); font-weight:600; cursor:pointer; transition:all .2s; font-family:'DM Sans',sans-serif; margin-top:clamp(1.5rem, 3vw, 1.75rem); }
-    .btn-submit:hover:not(:disabled) { background:var(--mid); box-shadow:0 4px 12px rgba(11,42,31,0.2); }
+    .btn-submit { width:100%; padding:clamp(0.95rem, 2vw, 1.1rem); background:#0e9b8d; color:white; border:none; border-radius:20px; font-size:var(--text-base); font-weight:600; cursor:pointer; transition:all .2s; font-family:'DM Sans',sans-serif; margin-top:clamp(1.5rem, 3vw, 1.75rem); }
+    .btn-submit:hover:not(:disabled) { background:#0b8177; box-shadow:0 4px 12px rgba(11,42,31,0.2); }
     .btn-submit:disabled { background:var(--text3); cursor:not-allowed; opacity:.6; }
     .loading-spinner { display:none; width:1rem; height:1rem; border:2px solid var(--pale); border-top-color:var(--bright); border-radius:50%; animation:spin .8s linear infinite; margin-right:0.5rem; vertical-align:middle; }
     .loading-spinner.active { display:inline-block; }
@@ -156,9 +181,41 @@
     .password-meter[data-strength="fair"] .password-meter-bar:nth-child(-n+2) { background:var(--yellow); }
     .password-meter[data-strength="good"] .password-meter-bar:nth-child(-n+3),
     .password-meter[data-strength="strong"] .password-meter-bar { background:var(--bright); }
+    @media(max-width:820px) {
+      .auth-screen { padding:1rem; }
+      .auth-container { grid-template-columns:1fr; max-width:560px; min-height:0; border-radius:24px; }
+      .auth-header { padding:1.5rem 2rem; }
+      .auth-header h1 { font-size:2rem; max-width:none; }
+      .auth-header p,.auth-stats { display:none; }
+      .auth-trust { margin-bottom:1rem; font-size:.8rem; }
+      .auth-form { padding:2rem; }
+      .auth-brand { margin-bottom:1.5rem; }
+      .auth-screen.signup-mode { align-items:flex-start; }
+      .auth-screen.signup-mode .auth-container { height:auto; }
+    }
     @media (max-height:760px) {
-      .auth-container { transform:none; }
-      .auth-header { margin-bottom:0.75rem; padding:0; }
+      .auth-container { min-height:0; }
+    }
+    @media(min-width:821px) {
+      .auth-form { padding-inline:clamp(3rem, 5vw, 6rem); }
+      .auth-form form, .auth-tabs { max-width:720px; width:100%; margin-left:auto; margin-right:auto; }
+      .auth-brand { width:min(100%, 720px); margin-left:auto; margin-right:auto; }
+      .auth-form .form-footer { width:100%; }
+      .auth-form.signup-mode #auth-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:1.25rem; align-items:end; }
+      .auth-form.signup-mode #auth-form .form-group { margin-bottom:.75rem; }
+      .auth-form.signup-mode #password-group,
+      .auth-form.signup-mode #password-meter,
+      .auth-form.signup-mode #submit-btn { grid-column:1 / -1; }
+    }
+    @media(max-width:520px) {
+      .auth-screen { padding:.75rem; align-items:flex-start; }
+      .auth-container { width:100%; border-radius:18px; }
+      .auth-header { padding:1.25rem; }
+      .auth-header .logo-icon { display:none; }
+      .auth-header h1 { font-size:1.7rem; }
+      .auth-form { padding:1.5rem 1.25rem; }
+      .auth-brand { margin-bottom:1.25rem; }
+      .auth-tabs { margin-bottom:1.25rem; }
     }
 
     /* MAIN APP (hidden until logged in) */
@@ -1561,9 +1618,9 @@
     console.log('✅ Global scope setup complete');
   </script>
   <!-- Load app functions - will override stubs -->
-  <script src="/detection_overlay.js?v=20261025-1"></script>
+  <script src="/detection_overlay.js?v=overlay-scale-20261030-1"></script>
   <script src="/private_media.js?v=20261025-1"></script>
-  <script src="/app.js?v=records-20261025-1"></script>
+  <script src="/app.js?v=record-thumbnails-20261030-1"></script>
   <script src="/tree_identity.js?v=20261025-1"></script>
   <script src="/monitoring.js?v=follow-up-limit-20261024-5"></script>
 </head>
@@ -1573,25 +1630,45 @@
 <div id="auth-screen" class="auth-screen">
   <div class="auth-container">
     <div class="auth-header">
-      <div class="logo-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 2C8 2 4 6 4 10c0 5 8 12 8 12s8-7 8-12c0-4-4-8-8-8z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      <div class="auth-trust"><span aria-hidden="true">◆</span> Coconut Disease Mapping Platform</div>
+      <h1>Precision driven coconut health</h1>
+      <p>Secure access to your coconut disease mapping platform. Monitor orchard conditions and make informed decisions with clear, timely insights.</p>
+      <div class="auth-stats" aria-label="Platform highlights">
+        <div class="auth-stat"><strong>AI</strong><span>Disease insights</span></div>
+        <div class="auth-stat"><strong>GPS</strong><span>Farm mapping</span></div>
+        <div class="auth-stat"><strong>24/7</strong><span>Access</span></div>
       </div>
-      <h1>CoconutAI</h1>
-      <p>Drone Disease Mapping System</p>
     </div>
     
     <div class="auth-form">
+      <div class="auth-brand"><div class="logo-icon" aria-hidden="true">C</div><div><strong>CoconutAI</strong><small>Drone Disease Mapping System</small></div></div>
+      <div class="auth-tabs" role="tablist" aria-label="Account access">
+        <div class="auth-tab active" id="login-tab" role="tab" aria-selected="true" onclick="setAuthMode('login')">Sign In</div>
+        <div class="auth-tab" id="signup-tab" role="tab" aria-selected="false" onclick="setAuthMode('signup')">Create Account</div>
+      </div>
       <div class="form-title" id="form-title">Login</div>
       
       <div class="error-message" id="error-message"></div>
       <div class="success-message" id="success-message"></div>
       
       <form id="auth-form" onsubmit="handleAuthSubmit(event)">
+          <div class="form-group signup-only">
+          <label for="first-name">Name</label>
+          <input type="text" id="first-name" autocomplete="given-name" placeholder="Enter your name" />
+        </div>
+        <div class="form-group signup-only">
+          <label for="last-name">Last Name</label>
+          <input type="text" id="last-name" autocomplete="family-name" placeholder="Enter your last name" />
+        </div>
+        <div class="form-group signup-only">
+          <label for="contact-number">Contact Number</label>
+          <input type="tel" id="contact-number" autocomplete="tel" inputmode="tel" placeholder="e.g. +63 912 345 6789" />
+        </div>
         <div class="form-group">
           <label for="email">Email</label>
           <input type="email" id="email" required placeholder="Enter Your Email" />
         </div>
-        <div class="form-group">
+        <div class="form-group" id="password-group">
           <label for="password">Password</label>
           <input type="password" id="password" required placeholder="••••••••" />
         </div>
@@ -1774,7 +1851,7 @@
              ondragover="event.preventDefault();event.stopPropagation();this.classList.add('over')"
              ondragleave="event.stopPropagation();this.classList.remove('over')"
              ondrop="handleDrop(event)">
-          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" multiple onchange="stageUploadImage(this.files)"/>
+          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff" multiple onchange="stageUploadImage(this.files)"/>
           <div class="loverlay" id="upload-loading"><div class="spin"></div><p id="upload-loading-text">Analyzing leaf...</p></div>
           <div class="uicon">
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>

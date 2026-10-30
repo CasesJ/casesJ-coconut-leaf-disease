@@ -6,7 +6,7 @@ from io import BytesIO
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 
-from app.core.config import MAX_IMAGE_UPLOAD_BYTES
+from app.core.config import MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS
 from app.domain.tree_identity import normalize_gps
 
 
@@ -18,8 +18,8 @@ async def read_reference_image(file: UploadFile) -> tuple[bytes, str]:
         raise HTTPException(400, "Whole-tree image upload is empty")
     try:
         with Image.open(BytesIO(contents)) as image:
-            if image.format not in {"JPEG", "PNG"} or image.width * image.height > 40_000_000:
-                raise ValueError("Whole-tree photo must be JPEG or PNG, at most 40 megapixels")
+            if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
+                raise ValueError(f"Whole-tree photo must be JPEG or PNG, at most {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels")
             content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("Use a single-frame whole-tree photograph")

@@ -29,7 +29,7 @@
     return node;
   }
 
-  function draw(svg, detections, width, height) {
+  function draw(svg, detections, width, height, sourceDimensions = null) {
     if (!svg || !(width > 0) || !(height > 0)) return;
     const document = svg.ownerDocument;
     svg.replaceChildren();
@@ -39,8 +39,10 @@
     title.textContent = 'Annotated detection preview';
     svg.appendChild(title);
 
-    const strokeWidth = Math.max(2, Math.min(width, height) * 0.004);
-    const fontSize = Math.max(12, Math.min(24, Math.min(width, height) * 0.035));
+    // Keep the preview annotation legible but restrained at every image size.
+    // vector-effect below keeps box edges stable on screen as the image scales.
+    const strokeWidth = Math.max(3, Math.min(6, Math.min(width, height) * 0.006));
+    const fontSize = Math.max(14, Math.min(22, Math.min(width, height) * 0.06));
     const padding = fontSize * 0.35;
     (Array.isArray(detections) ? detections : []).forEach(detection => {
       if (!detection || typeof detection !== 'object') return;
@@ -50,7 +52,10 @@
       if (Array.isArray(normalized) && normalized.length === 4) {
         box = normalized.map(Number).map((value, index) => value * (index % 2 === 0 ? width : height));
       } else if (Array.isArray(raw) && raw.length === 4) {
-        box = raw.map(Number);
+        const sourceWidth = Number(sourceDimensions?.width) || width;
+        const sourceHeight = Number(sourceDimensions?.height) || height;
+        box = raw.map((value, index) => Number(value)
+          * ((index % 2 === 0 ? width : height) / (index % 2 === 0 ? sourceWidth : sourceHeight)));
       } else {
         return;
       }
@@ -121,7 +126,12 @@
         if (!width || !height) return;
         let detections = [];
         try { detections = JSON.parse(frame.dataset.overlayDetections || '[]'); } catch (_) { detections = []; }
-        draw(svg, detections, width, height);
+        let sourceDimensions = null;
+        try {
+          const size = JSON.parse(frame.dataset.overlayDimensions || '{}');
+          sourceDimensions = dimensions({ image_dimensions: size });
+        } catch (_) { sourceDimensions = null; }
+        draw(svg, detections, width, height, sourceDimensions);
       };
       image.addEventListener('load', render);
       if (image.complete && image.naturalWidth) render();

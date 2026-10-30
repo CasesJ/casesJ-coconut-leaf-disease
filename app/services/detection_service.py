@@ -268,6 +268,7 @@ def save_detection_record(
     annotated_image: Optional[np.ndarray],
     is_offline: bool,
     image_dimensions: dict | None = None,
+    timings: dict[str, float] | None = None,
 ) -> bool:
     """Persist authenticated Cloudinary image references and a Firestore record.
 
@@ -302,11 +303,15 @@ def save_detection_record(
         # ``annotated_image`` is accepted for call compatibility; only the
         # original source bytes are persisted to Cloudinary.
         del annotated_image
-        image_fields = save_upload_image_assets(record_id, original_bytes)
+        if timings is None:
+            image_fields = save_upload_image_assets(record_id, original_bytes)
+        else:
+            image_fields = save_upload_image_assets(record_id, original_bytes, timings=timings)
     except CloudinaryStorageError:
         raise DetectionPersistenceError("Cloudinary image upload failed") from None
     detection_record.update(image_fields)
 
+    firestore_started = monotonic()
     try:
         document.create(detection_record)
     except Exception as write_error:
@@ -328,6 +333,9 @@ def save_detection_record(
                 delete_asset(reference)
             logger.warning("Firestore did not commit detection %s (%s)", record_id, type(write_error).__name__)
             raise DetectionPersistenceError("Detection record could not be saved to Firestore") from None
+    finally:
+        if timings is not None:
+            timings["firestore_write_ms"] = (monotonic() - firestore_started) * 1000
 
     invalidate_expert_records_cache()
     return True

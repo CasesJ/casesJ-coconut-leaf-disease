@@ -139,6 +139,7 @@ def env(monkeypatch):
     db.docs["users/farmer-a/treatment_records/treatment-1"] = {"recommendation_snapshot": {"recommendations": {"treatment": "Historical plan"}}}
     originals = deepcopy(db.docs)
     monkeypatch.setattr(store, "_firestore", lambda: db)
+    monkeypatch.setattr(store, "_follow_up_transaction", db.transact)
     monkeypatch.setattr(identity, "_transaction", db.transact)
     actor = {"uid": "expert-1", "role": "expert"}
     app.dependency_overrides[verify_firebase_token] = lambda: dict(actor)
@@ -169,7 +170,8 @@ def env(monkeypatch):
     monkeypatch.setattr(api.limiter, "rolling", allowed)
     monkeypatch.setattr(api.limiter, "image_quota_24h", allowed)
 
-    def infer(image, conf):
+    def infer(image, conf, *, annotate=True):
+        assert annotate is False  # Monitoring stores predictions without drawing on the image.
         inference_calls.append(image.copy())
         return {"image": image, "detections": [{"class": "Bud Rot", "confidence": 0.81}]}
 

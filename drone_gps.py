@@ -225,7 +225,8 @@ class DroneGPS:
             model = exif_values.get("Model")
             metadata["camera_make"] = make.decode(errors="replace").strip() if isinstance(make, bytes) else str(make).strip() if make else None
             metadata["camera_model"] = model.decode(errors="replace").strip() if isinstance(model, bytes) else str(model).strip() if model else None
-            captured_at = exif_values.get("DateTimeOriginal") or exif_values.get("DateTime")
+            photo_exif = exif.get_ifd(34665)  # Original capture time lives in the EXIF sub-IFD.
+            captured_at = photo_exif.get(36867) or exif_values.get("DateTimeOriginal") or exif_values.get("DateTime")
             metadata["captured_at"] = captured_at.decode(errors="replace") if isinstance(captured_at, bytes) else captured_at
             metadata["metadata_available"] = bool(exif_values)
 

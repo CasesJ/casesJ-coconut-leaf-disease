@@ -9,10 +9,10 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.core import config
-from app.infrastructure.cloudinary_storage import download_asset
+from app.infrastructure.cloudinary_storage import delete_asset, download_asset, upload_asset
 
 logger = logging.getLogger(__name__)
 _KINDS = {"original", "annotated"}
@@ -178,6 +178,32 @@ def _read_one(record: dict, kind: str, record_id: str, *,
 
 
 def read_detection_image(record: dict, kind: str) -> tuple[bytes, str]:
+    if kind == "thumbnail":
+        assets = record.get("image_assets")
+        thumbnail = assets.get("thumbnail") if isinstance(assets, dict) else None
+        if isinstance(thumbnail, dict) and thumbnail.get("provider") == "cloudinary":
+            try:
+                return download_asset(thumbnail)
+            except Exception as error:
+                logger.warning("Cloudinary thumbnail read failed (%s)", type(error).__name__)
+                raise MediaUnavailable("Image preview is temporarily unavailable") from None
+        # Older records have no separate preview asset. Generate a small response
+        # from the protected source image so the browser still receives less data.
+        original, _ = _read_one(
+            record, "original", str(record.get("id") or record.get("record_id") or ""),
+            url_field="image_url", path_field="original_storage_path",
+        )
+        try:
+            with Image.open(BytesIO(original)) as source:
+                with ImageOps.exif_transpose(source).convert("RGB") as image:
+                    image.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                    output = BytesIO()
+                    image.save(output, format="JPEG", quality=78, optimize=True)
+                    return output.getvalue(), "image/jpeg"
+        except Exception as error:
+            logger.warning("Detection thumbnail generation failed (%s)", type(error).__name__)
+            raise MediaUnavailable("Image preview could not be generated") from None
+
     record_id = str(record.get("id") or record.get("record_id") or "")
     try:
         return _read_one(
@@ -195,11 +221,35 @@ def read_detection_image(record: dict, kind: str) -> tuple[bytes, str]:
         return _render_annotated_preview(record, original), "image/jpeg"
 
 
+def persist_detection_thumbnail(record: dict, thumbnail_bytes: bytes) -> None:
+    """Cache a legacy record's generated preview as a private asset for later visits."""
+    assets = record.get("image_assets")
+    if not isinstance(assets, dict) or not isinstance(assets.get("original"), dict):
+        return
+    if assets.get("thumbnail") or assets["original"].get("provider") != "cloudinary":
+        return
+    farmer_id = str(record.get("user_id") or "").strip()
+    record_id = str(record.get("id") or record.get("record_id") or "").strip()
+    if not farmer_id or not record_id or not thumbnail_bytes:
+        return
+    thumbnail = None
+    try:
+        thumbnail = upload_asset(thumbnail_bytes, "image/jpeg", "detection-thumbnail")
+        from app.services.detection_service import update_record_everywhere  # noqa: PLC0415
+        if not update_record_everywhere(farmer_id, record_id, {"image_assets.thumbnail": thumbnail}):
+            delete_asset(thumbnail)
+    except Exception as error:
+        if thumbnail is not None:
+            delete_asset(thumbnail)
+        logger.warning("Legacy detection thumbnail could not be cached (%s)", type(error).__name__)
+
+
 def _render_annotated_preview(record: dict, original: bytes) -> bytes:
     """Build a temporary annotated image for legacy URL consumers and downloads."""
     try:
         with Image.open(BytesIO(original)) as source:
-            image = source.convert("RGB")
+            with ImageOps.exif_transpose(source).convert("RGB") as oriented:
+                image = oriented.copy()
             image.load()
     except Exception:
         raise MediaUnavailable("Original image cannot be annotated") from None
@@ -231,6 +281,14 @@ def _render_annotated_preview(record: dict, original: bytes) -> bytes:
             if coordinates is normalized:
                 values = [value * (width if index % 2 == 0 else height)
                           for index, value in enumerate(values)]
+            else:
+                source_size = record.get("image_dimensions") or record.get("original_image_dimensions") or {}
+                source_width = float(source_size.get("width") or source_size.get("image_width") or width)
+                source_height = float(source_size.get("height") or source_size.get("image_height") or height)
+                if source_width > 0 and source_height > 0:
+                    values = [value * (width if index % 2 == 0 else height)
+                              / (source_width if index % 2 == 0 else source_height)
+                              for index, value in enumerate(values)]
             x1, y1, x2, y2 = values
             x1, x2 = sorted((max(0, min(width - 1, round(x1))), max(0, min(width - 1, round(x2)))))
             y1, y2 = sorted((max(0, min(height - 1, round(y1))), max(0, min(height - 1, round(y2)))))
@@ -360,6 +418,10 @@ def present_detection_record(record: dict, *, expert: bool = False) -> dict:
             value[field] = f"{base}/{kind}"
         else:
             value.pop(field, None)
+    if has_record_image(record, "original"):
+        value["thumbnail_url"] = f"{base}/thumbnail"
+    else:
+        value.pop("thumbnail_url", None)
     return value
 
 

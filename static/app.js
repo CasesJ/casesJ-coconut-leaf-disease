@@ -136,6 +136,11 @@ window.showSuccess = function showSuccess(message) {
   }, 5000);
 };
 
+window.setAuthMode = function setAuthMode(mode) {
+  if (mode !== 'login' && mode !== 'signup') return;
+  if (authMode !== mode) window.switchAuthMode();
+};
+
 window.switchAuthMode = function switchAuthMode() {
   const title = document.getElementById('form-title');
   const btnText = document.getElementById('btn-text');
@@ -152,6 +157,19 @@ window.switchAuthMode = function switchAuthMode() {
     btnText.textContent = 'Sign Up';
     toggleText.innerHTML = 'Already have an account? <a onclick="switchAuthMode()">Login</a>';
   }
+
+  const loginTab = document.getElementById('login-tab');
+  const signupTab = document.getElementById('signup-tab');
+  const authFormPanel = document.querySelector('.auth-form');
+  if (authFormPanel) authFormPanel.classList.toggle('signup-mode', authMode === 'signup');
+  const authScreen = document.getElementById('auth-screen');
+  if (authScreen) authScreen.classList.toggle('signup-mode', authMode === 'signup');
+  document.querySelectorAll('.signup-only input').forEach(input => {
+    input.required = authMode === 'signup';
+    if (authMode === 'login') input.value = '';
+  });
+  if (loginTab) { loginTab.classList.toggle('active', authMode === 'login'); loginTab.setAttribute('aria-selected', String(authMode === 'login')); }
+  if (signupTab) { signupTab.classList.toggle('active', authMode === 'signup'); signupTab.setAttribute('aria-selected', String(authMode === 'signup')); }
 
   const passwordInput = document.getElementById('password');
   const passwordMeter = document.getElementById('password-meter');
@@ -195,6 +213,9 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   
   const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
+  const firstName = document.getElementById('first-name')?.value.trim() || '';
+  const lastName = document.getElementById('last-name')?.value.trim() || '';
+  const contactNumber = document.getElementById('contact-number')?.value.trim() || '';
   const form = document.getElementById('auth-form');
   const btn = document.getElementById('submit-btn');
   const spinner = document.getElementById('spinner');
@@ -207,6 +228,10 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   }
   if (!password) {
     showError('❌ Please enter a password');
+    return;
+  }
+  if (authMode === 'signup' && (!firstName || !lastName || !contactNumber)) {
+    showError('Please enter your name, last name, and contact number.');
     return;
   }
   
@@ -266,6 +291,22 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       console.log('Attempting signup...');
       userCred = await auth.createUserWithEmailAndPassword(email, password);
       console.log('Signup successful:', userCred.user.email);
+
+      const displayName = `${firstName} ${lastName}`.trim();
+      await userCred.user.updateProfile({ displayName });
+      const profileToken = await userCred.user.getIdToken(true);
+      const profileResponse = await fetch('/auth/profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${profileToken}`
+        },
+        body: JSON.stringify({ first_name: firstName, last_name: lastName, contact_number: contactNumber })
+      });
+      if (!profileResponse.ok) {
+        const profileError = await profileResponse.json().catch(() => ({}));
+        throw new Error(profileError.detail || 'Account created, but profile details could not be saved. Please try again.');
+      }
       
       // Sign out immediately after signup
       await auth.signOut();
@@ -1980,7 +2021,7 @@ let activeBatchResultIndex = 0;
 
 function stageUploadImage(files) {
   const selectedFiles = Array.from(files || []);
-  const imageFiles = selectedFiles.filter(file => file.type.startsWith('image/'));
+  const imageFiles = selectedFiles.filter(file => file.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(file.name));
   if (!imageFiles.length) {
     showToast('Please choose one or more image files.');
     return;
@@ -2094,37 +2135,64 @@ async function detectImages(files) {
     batchResults.innerHTML = '';
   }
 
+  const completedResults = new Array(files.length);
+  const failedUploads = new Array(files.length);
+  const uploadStates = files.map(() => 'Queued');
+  let nextIndex = 0;
   let completed = 0;
-  const completedResults = [];
-  const failedUploads = [];
-  for (const [index, file] of files.entries()) {
-    if (loadingText) loadingText.textContent = `Analyzing image ${index + 1} of ${files.length}...`;
-    try {
-      const result = await detectImage(file);
-      completedResults.push({ file, result });
-      completed += 1;
-    } catch (err) {
-      console.error(`Upload error for ${file.name}:`, err);
-      failedUploads.push({ file, message: err?.message || 'Unknown upload error' });
+  // Persistence uses a provider connection pool; serialize complete detection
+  // requests so a batch cannot contend for the same Cloudinary connection.
+  const concurrency = 1;
+  const updateUploadStatus = (index, progress) => {
+    if (progress?.preparing) {
+      uploadStates[index] = 'Preparing';
+    } else if (progress?.complete) {
+      uploadStates[index] = 'Analyzing';
+    } else if (progress?.total > 0) {
+      uploadStates[index] = `Uploading ${Math.min(100, Math.round(progress.loaded / progress.total * 100))}%`;
     }
-  }
+    if (loadingText) {
+      const active = uploadStates.filter(state => state === 'Analyzing' || state === 'Preparing' || state.startsWith('Uploading')).length;
+      loadingText.textContent = `${uploadStates[index]} image ${index + 1} of ${files.length} · ${completed} complete${active ? ` · ${active} in progress` : ''}`;
+    }
+  };
+  const uploadWorker = async () => {
+    while (nextIndex < files.length) {
+      const index = nextIndex++;
+      uploadStates[index] = 'Uploading';
+      updateUploadStatus(index);
+      try {
+        const result = await detectImage(files[index], progress => updateUploadStatus(index, progress));
+        completedResults[index] = { file: files[index], result };
+        uploadStates[index] = 'Complete';
+        completed += 1;
+      } catch (err) {
+        console.error(`Upload error for ${files[index].name}:`, err);
+        uploadStates[index] = 'Failed';
+        failedUploads[index] = { file: files[index], message: err?.message || 'Unknown upload error' };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => uploadWorker()));
+  const successfulResults = completedResults.filter(Boolean);
+  const retryableUploads = failedUploads.filter(Boolean);
 
   if (uploadLoading) uploadLoading.classList.remove('on');
   if (loadingText) loadingText.textContent = 'Analyzing leaf...';
   const fileInput = document.getElementById('fileInput');
   if (fileInput) fileInput.value = '';
-  if (completedResults.length) {
-    renderBatchUpload(completedResults);
+  if (successfulResults.length) {
+    renderBatchUpload(successfulResults);
   }
-  if (failedUploads.length) {
+  if (retryableUploads.length) {
     // Keep failed files visible so the user can retry without selecting them again.
-    stagedUploadFiles = failedUploads.map(item => item.file);
+    stagedUploadFiles = retryableUploads.map(item => item.file);
     renderStagedImagePreviews();
     const confirmation = document.getElementById('upload-confirmation');
     const fileName = document.getElementById('upload-confirmation-name');
     if (fileName) fileName.textContent = `${stagedUploadFiles.length} image${stagedUploadFiles.length === 1 ? '' : 's'} ready to retry`;
     if (confirmation) confirmation.style.display = 'block';
-    const details = failedUploads.map(item => `${item.file.name}: ${item.message}`).join(' | ');
+    const details = retryableUploads.map(item => `${item.file.name}: ${item.message}`).join(' | ');
     showToast(`Upload failed — ${details}`);
   } else {
     showToast(`${completed} image${completed === 1 ? '' : 's'} uploaded and analyzed.`);
@@ -2186,7 +2254,7 @@ window.showNextBatchResult = function showNextBatchResult() {
   showBatchResult(activeBatchResultIndex + 1);
 };
 
-async function detectImage(file){
+async function detectImage(file, onUploadProgress){
   if(!file)return;
   if (!currentUser) {
     showToast('Session expired, please refresh');
@@ -2195,22 +2263,30 @@ async function detectImage(file){
   const fd=new FormData();
   fd.append('file',file);
   
-  const fetchOpts={
-    method:'POST',
-    body:fd
-  };
-  
-  // ✅ Add auth header only if token exists (offline mode if missing)
-  if(currentToken){
-    fetchOpts.headers={'Authorization': `Bearer ${currentToken}`};
-  }
-  
-  const res = await fetch('/detect/image', fetchOpts);
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Server error ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
-  }
-  const data = await res.json();
+  const data = await new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/detect/image');
+    if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
+    request.upload.addEventListener('progress', event => {
+      if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
+    });
+    request.upload.addEventListener('load', () => onUploadProgress?.({ complete: true }));
+    request.addEventListener('load', () => {
+      if (request.status < 200 || request.status >= 300) {
+        const detail = request.responseText || '';
+        reject(new Error(`Server error ${request.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(request.responseText));
+      } catch {
+        reject(new Error('The server returned an invalid response.'));
+      }
+    });
+    request.addEventListener('error', () => reject(new Error('Network error while uploading image.')));
+    request.addEventListener('timeout', () => reject(new Error('Image upload timed out.')));
+    request.send(fd);
+  });
   if (data.record_id) clearUserRecordsCache();
   // Reflect a newly established farm immediately; no sign-out/sign-in cycle
   // is needed before the disease map and its monitoring cells use it.
@@ -2881,7 +2957,7 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
   const matches = verifiedHistoryRecords;
   if (list) list.innerHTML = matches.length ? matches.map(record => {
     const ds = record.detections || [];
-    const imageUrl = record.image_url || record.annotated_image_url || '';
+    const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Detection image';
     const actions = imageUrl
       ? `<div class="history-actions"><button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button></div>`
@@ -3019,7 +3095,7 @@ function renderRecordCard(record, idx, options = {}) {
   const isExpertView = Boolean(options.expert);
   const ownerLabel = record.email || record.user_id || 'Unknown farmer';
   const statusBadge = buildRecordStatusBadge(record);
-  const previewImage = record.image_url || record.annotated_image_url || '';
+  const previewImage = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
   const primary = getPrimaryDetection(record);
   const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot || null;
 
@@ -3216,7 +3292,7 @@ function renderExpertRecordsTable(records) {
     const detections = record.detections || [];
     const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
     const owner = record.email || record.user_id || 'Unknown farmer';
-    const previewImage = record.image_url || record.annotated_image_url || '';
+    const previewImage = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
     const annotatedImage = record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Image';
     const disease = primary.class || record.primaryDisease || detections[0]?.class || 'No detection';
@@ -3396,7 +3472,7 @@ async function loadUserRecords({ force = false } = {}) {
       const recommendationPanel = status.cls === 'verified'
         ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
         : '';
-      const imageUrl = record.image_url || record.annotated_image_url || '';
+      const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
       const imageLabel = record.filename || record.image_path || 'Detection image';
       const imagePreview = imageUrl
         ? `<button type="button" class="record-image-preview" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')" aria-label="View ${escapeHtml(imageLabel)}">

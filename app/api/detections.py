@@ -21,7 +21,7 @@ from PIL import Image, UnidentifiedImageError
 from app.core.config import (
     IMAGE_INFERENCE_DAILY_LIMIT,
     IMAGE_INFERENCE_PER_MINUTE,
-    MAX_IMAGE_UPLOAD_BYTES,
+    MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
     UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
@@ -57,6 +57,8 @@ async def detect_image(
     accuracy: Optional[float] = Form(None),
 ):
     """Detect disease in an uploaded image (POST-FLIGHT approach with EXIF GPS extraction)."""
+    request_started = time.perf_counter()
+    performance_ms: dict[str, float] = {}
     from model import detector  # noqa: PLC0415
     from drone_gps import get_drone_gps, init_drone_gps  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
@@ -85,19 +87,50 @@ async def detect_image(
                 raise HTTPException(status_code=413, detail="Image upload is too large")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+    read_started = time.perf_counter()
     contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    performance_ms["upload_read"] = (time.perf_counter() - read_started) * 1000
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image upload is too large")
+    inference_contents = contents
+    validation_started = time.perf_counter()
     try:
         with Image.open(BytesIO(contents)) as source_image:
-            if source_image.format not in {"JPEG", "PNG"} or source_image.width * source_image.height > 40_000_000:
-                raise ValueError("Upload must be a JPEG or PNG image of at most 40 megapixels")
-            expected_content_type = "image/jpeg" if source_image.format == "JPEG" else "image/png"
+            image_format = source_image.format
+            if image_format not in {"JPEG", "MPO", "PNG", "WEBP", "BMP", "TIFF"}:
+                raise ValueError(f"Unsupported image format: {source_image.format or 'unknown'}. Upload JPEG, MPO, PNG, WebP, BMP or TIFF")
+            if image_format != "MPO" and getattr(source_image, "n_frames", 1) != 1:
+                raise ValueError("Upload a single-frame photograph, not an animation or multi-page image")
+            pixels = source_image.width * source_image.height
+            if pixels > MAX_IMAGE_UPLOAD_PIXELS:
+                raise ValueError(
+                    f"Image resolution is {source_image.width} x {source_image.height} "
+                    f"({pixels / 1_000_000:.2f} megapixels); "
+                    f"the upload limit is {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels"
+                )
             source_image.verify()
+        if image_format == "MPO":
+            # Read metadata from the untouched MPO first; convert only its primary
+            # JPEG frame so inference and durable evidence use the same pixels.
+            with Image.open(BytesIO(contents)) as mpo:
+                mpo.seek(0)
+                exif = mpo.info.get("exif")
+                icc_profile = mpo.info.get("icc_profile")
+                with mpo.convert("RGB") as primary:
+                    output = BytesIO()
+                    save_options = {"format": "JPEG", "quality": 100, "subsampling": 0}
+                    if exif:
+                        save_options["exif"] = exif
+                    if icc_profile:
+                        save_options["icc_profile"] = icc_profile
+                    primary.save(output, **save_options)
+                    inference_contents = output.getvalue()
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
-    if file.content_type != expected_content_type:
-        raise HTTPException(status_code=400, detail="Image MIME type does not match its contents")
+    performance_ms["validation"] = (time.perf_counter() - validation_started) * 1000
+    # The decoded signature identifies the format; camera/browser MIME labels
+    # can be empty, generic or incorrect, especially for uppercase extensions.
+    metadata_started = time.perf_counter()
     metadata_reader = get_drone_gps() or init_drone_gps()
     image_metadata = metadata_reader.extract_image_metadata(contents, file.filename)
 
@@ -129,13 +162,15 @@ async def detect_image(
             image_metadata["gps_source"] = "unknown"
     else:
         lat, lng = None, None
+    performance_ms["metadata_gps"] = (time.perf_counter() - metadata_started) * 1000
 
-    inference_started = time.perf_counter()
+    decode_started = time.perf_counter()
     # --- Inference ---
-    np_arr = np.frombuffer(contents, np.uint8)
+    np_arr = np.frombuffer(inference_contents, np.uint8)
     image = imdecode(np_arr, IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
+    performance_ms["decode"] = (time.perf_counter() - decode_started) * 1000
     # The first valid image with embedded coordinates establishes the farm,
     # even if it contains no disease detection.
     farm_center = None
@@ -143,6 +178,7 @@ async def detect_image(
         farm_center = await asyncio.to_thread(set_initial_farm_center, user_id, lat, lng, gps_source)
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
+    inference_started = time.perf_counter()
     try:
         result = await asyncio.to_thread(run_image_inference, detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
     except InferenceUnavailable as exc:
@@ -152,13 +188,27 @@ async def detect_image(
             detail="Disease analysis is temporarily unavailable. Your image was not saved.",
         ) from exc
     inference_ms = (time.perf_counter() - inference_started) * 1000
+    performance_ms["inference"] = inference_ms
     all_detections = result["detections"]
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
 
-    # --- Encode annotated image ---
-    _, buffer = imencode(".jpg", result["image"], [cv2.IMWRITE_JPEG_QUALITY, 70])
+    # --- Encode a compact annotated preview ---
+    # The full-resolution image is still analyzed and stored as evidence. Sending
+    # that entire image back as base64 made the result wait on a large response.
+    preview_started = time.perf_counter()
+    preview_image = result["image"]
+    preview_scale = min(1.0, 1280 / max(preview_image.shape[:2]))
+    if preview_scale < 1.0:
+        preview_image = cv2.resize(
+            preview_image,
+            (max(1, round(preview_image.shape[1] * preview_scale)),
+             max(1, round(preview_image.shape[0] * preview_scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    _, buffer = imencode(".jpg", preview_image, [cv2.IMWRITE_JPEG_QUALITY, 84])
     encoded = base64.b64encode(buffer).decode("utf-8")
+    performance_ms["preview_encode"] = (time.perf_counter() - preview_started) * 1000
 
     # --- Persist ---
     persistence_started = time.perf_counter()
@@ -170,6 +220,7 @@ async def detect_image(
             "timestamp": datetime.now().isoformat(),
         }
         record_id = f"upload_{user_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
+        persistence_timings: dict[str, float] = {}
         try:
             await asyncio.to_thread(
                 save_detection_record,
@@ -177,9 +228,10 @@ async def detect_image(
                 detections=high_confidence_detections, gps_data=gps_data,
                 filename=file.filename, source="upload",
                 image_metadata=image_metadata,
-                original_bytes=contents, annotated_image=result["image"],
+                original_bytes=inference_contents, annotated_image=result["image"],
                 is_offline=is_offline,
                 image_dimensions={"width": int(image.shape[1]), "height": int(image.shape[0])},
+                timings=persistence_timings,
             )
         except DetectionPersistenceError as exc:
             logger.warning("New detection %s could not be durably saved: %s", record_id, exc)
@@ -188,9 +240,12 @@ async def detect_image(
                 detail="Image storage is temporarily unavailable. The detection was not saved.",
             ) from exc
 
-    logger.info("Upload processing inference_ms=%.0f persistence_ms=%.0f recorded=%s",
-                inference_ms, (time.perf_counter() - persistence_started) * 1000,
-                bool(record_id))
+        performance_ms.update(persistence_timings)
+    performance_ms["persistence"] = (time.perf_counter() - persistence_started) * 1000
+    performance_ms["total"] = (time.perf_counter() - request_started) * 1000
+    logger.info("Upload stages %s recorded=%s bytes=%d", " ".join(
+        f"{name}_ms={duration:.0f}" for name, duration in performance_ms.items()),
+        bool(record_id), len(contents))
     return {
         "detections": all_detections,
         "recorded_count": len(high_confidence_detections),
@@ -211,6 +266,7 @@ async def detect_image(
         "gps_source": gps_source, "gps_metadata_found": lat is not None and lng is not None,
         "image_metadata": image_metadata,
         "image_dimensions": {"width": int(image.shape[1]), "height": int(image.shape[0])},
+        "performance_ms": {name: round(duration, 1) for name, duration in performance_ms.items()},
         "farm_center": farm_center,
     }
 

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.core.security import verify_verified_firebase_token
 from app.domain.expert import is_expert_identity
 from app.infrastructure.firebase.auth import verify_token
-from app.schemas.auth import LoginRequest, UserResponse
+from app.schemas.auth import LoginRequest, UserProfileRequest, UserResponse
 from app.core.config import AUTH_TOKEN_CHECKS_PER_MINUTE
 from app.core.rate_limit import client_ip, limiter
 
@@ -53,6 +53,36 @@ async def get_current_user(decoded: dict = Depends(verify_verified_firebase_toke
         "is_expert": is_expert,
         "authenticated": True,
     }
+
+
+@router.post("/profile")
+async def save_user_profile(
+    profile: UserProfileRequest,
+    decoded: dict = Depends(verify_verified_firebase_token),
+):
+    """Save signup profile details to the verified user's Firestore document."""
+    try:
+        from firebase_admin import firestore
+
+        uid = decoded["uid"]
+        firestore.client().collection("users").document(uid).set(
+            {
+                "uid": uid,
+                "email": decoded.get("email"),
+                "first_name": profile.first_name.strip(),
+                "last_name": profile.last_name.strip(),
+                "contact_number": profile.contact_number.strip(),
+                "display_name": f"{profile.first_name.strip()} {profile.last_name.strip()}".strip(),
+            },
+            merge=True,
+        )
+        return {"message": "Profile saved"}
+    except Exception as exc:
+        logger.error("Could not save Firebase user profile: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not save your profile details. Please try again.",
+        )
 
 
 @router.post("/logout")
