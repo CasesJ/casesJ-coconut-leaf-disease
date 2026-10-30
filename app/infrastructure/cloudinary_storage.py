@@ -111,6 +111,18 @@ def _configure() -> tuple[str, str, str]:
                     cloudinary.config(
                         cloud_name=values[0], api_key=values[1],
                         api_secret=values[2], secure=True,
+                        timeout=config.CLOUDINARY_UPLOAD_TIMEOUT_SECONDS,
+                    )
+                    # Cloudinary 1.46 creates its uploader PoolManager at module
+                    # import with urllib3's default maxsize=1. Replace that one
+                    # process-wide connector with a bounded reusable pool.
+                    from cloudinary import uploader, utils  # noqa: PLC0415
+                    uploader._http = utils.get_http_connector(  # noqa: SLF001
+                        cloudinary.config(),
+                        {**cloudinary.CERT_KWARGS,
+                         "num_pools": 4,
+                         "maxsize": config.CLOUDINARY_POOL_MAXSIZE,
+                         "block": True},
                     )
                     _CONFIGURED_VALUES = values
                 except Exception as error:
@@ -154,7 +166,19 @@ def _destroy_public_id(public_id: str) -> bool:
         return False
 
 
-def upload_asset(content: bytes, content_type: str, category: str) -> dict:
+def _upload_error_category(error: object = None, provider_error: object = None) -> str:
+    text = f"{type(error).__name__} {error} {provider_error}".lower()
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if any(value in text for value in ("connection", "protocolerror", "socket", "reset", "dns")):
+        return "connection"
+    if provider_error is not None or _http_status(error, provider_error) is not None:
+        return "api_rejection"
+    return "unexpected"
+
+
+def upload_asset(content: bytes, content_type: str, category: str, *,
+                 operation_id: str = "unknown", source_bytes: int | None = None) -> dict:
     """Upload bytes as an authenticated asset and return a durable Firestore ref."""
     if not isinstance(content, bytes) or not content:
         raise CloudinaryStorageError("Image content is empty")
@@ -165,12 +189,28 @@ def upload_asset(content: bytes, content_type: str, category: str) -> dict:
     if not isinstance(category, str) or not re.fullmatch(r"[a-z0-9_-]{1,40}", category):
         raise CloudinaryStorageError("Invalid image category")
 
+    upload_started = time.perf_counter()
+    logger.info(
+        "Cloudinary upload start operation_id=%s source_bytes=%d stored_bytes=%d image_type=%s category=%s",
+        operation_id, source_bytes if source_bytes is not None else len(content),
+        len(content), content_type, category,
+    )
     try:
         _configure()
         from cloudinary import uploader  # noqa: PLC0415
     except CloudinaryStorageError:
+        logger.warning(
+            "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=failed error_category=configuration",
+            operation_id, (time.perf_counter() - upload_started) * 1000,
+            source_bytes if source_bytes is not None else len(content), len(content),
+        )
         raise
     except Exception as error:
+        logger.warning(
+            "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=failed error_category=configuration",
+            operation_id, (time.perf_counter() - upload_started) * 1000,
+            source_bytes if source_bytes is not None else len(content), len(content),
+        )
         _log_cloudinary_failure("SDK initialization", error)
         raise CloudinaryStorageError("Cloudinary storage is unavailable") from None
 
@@ -187,8 +227,15 @@ def upload_asset(content: bytes, content_type: str, category: str) -> dict:
             use_filename=False,
             invalidate=True,
             return_error=True,
+            timeout=config.CLOUDINARY_UPLOAD_TIMEOUT_SECONDS,
         )
         if isinstance(result, dict) and isinstance(result.get("error"), dict):
+            duration_ms = (time.perf_counter() - upload_started) * 1000
+            logger.warning(
+                "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=failed error_category=%s",
+                operation_id, duration_ms, source_bytes if source_bytes is not None else len(content),
+                len(content), _upload_error_category(provider_error=result["error"]),
+            )
             _log_cloudinary_failure("upload", provider_error=result["error"])
             _destroy_public_id(public_id)
             raise CloudinaryStorageError("Cloudinary image upload failed") from None
@@ -197,12 +244,17 @@ def upload_asset(content: bytes, content_type: str, category: str) -> dict:
                 or result.get("public_id") != public_id
                 or not result.get("asset_id") or not result.get("version")
                 or result.get("format") not in expected_formats):
+            logger.warning(
+                "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=failed error_category=api_rejection",
+                operation_id, (time.perf_counter() - upload_started) * 1000,
+                source_bytes if source_bytes is not None else len(content), len(content),
+            )
             _log_cloudinary_failure(
                 "upload", message="Cloudinary returned incomplete asset metadata",
             )
             _destroy_public_id(public_id)
             raise CloudinaryStorageError("Cloudinary returned incomplete asset metadata")
-        return {
+        reference = {
             "provider": "cloudinary",
             "asset_id": str(result["asset_id"]),
             "public_id": public_id,
@@ -214,11 +266,23 @@ def upload_asset(content: bytes, content_type: str, category: str) -> dict:
             "byte_size": int(result.get("bytes") or len(content)),
             "sha256": hashlib.sha256(content).hexdigest(),
         }
+        logger.info(
+            "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=success",
+            operation_id, (time.perf_counter() - upload_started) * 1000,
+            source_bytes if source_bytes is not None else len(content), len(content),
+        )
+        return reference
     except CloudinaryStorageError:
         raise
     except Exception as error:
         # The request may have reached Cloudinary before timing out. This ID is
         # unique to this attempt, so exact-ID compensation cannot hit history.
+        duration_ms = (time.perf_counter() - upload_started) * 1000
+        logger.warning(
+            "Cloudinary upload end operation_id=%s duration_ms=%.0f source_bytes=%d stored_bytes=%d status=failed error_category=%s",
+            operation_id, duration_ms, source_bytes if source_bytes is not None else len(content),
+            len(content), _upload_error_category(error=error),
+        )
         _destroy_public_id(public_id)
         _log_cloudinary_failure("upload", error)
         raise CloudinaryStorageError("Cloudinary image upload failed") from None

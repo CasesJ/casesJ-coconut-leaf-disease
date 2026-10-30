@@ -13,7 +13,10 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from app.domain.detection import _serialize_detection_payload, apply_record_defaults
-from app.infrastructure.imaging.image_utils import save_upload_image_assets
+from app.infrastructure.imaging.image_utils import (
+    DetectionImageProcessingError,
+    save_upload_image_assets,
+)
 from app.infrastructure.cloudinary_storage import CloudinaryStorageError, delete_asset
 
 logger = logging.getLogger(__name__)
@@ -269,6 +272,7 @@ def save_detection_record(
     is_offline: bool,
     image_dimensions: dict | None = None,
     timings: dict[str, float] | None = None,
+    operation_id: str = "unknown",
 ) -> bool:
     """Persist authenticated Cloudinary image references and a Firestore record.
 
@@ -304,9 +308,18 @@ def save_detection_record(
         # original source bytes are persisted to Cloudinary.
         del annotated_image
         if timings is None:
-            image_fields = save_upload_image_assets(record_id, original_bytes)
+            if operation_id == "unknown":
+                image_fields = save_upload_image_assets(record_id, original_bytes)
+            else:
+                image_fields = save_upload_image_assets(
+                    record_id, original_bytes, operation_id=operation_id,
+                )
         else:
-            image_fields = save_upload_image_assets(record_id, original_bytes, timings=timings)
+            image_fields = save_upload_image_assets(
+                record_id, original_bytes, timings=timings, operation_id=operation_id,
+            )
+    except DetectionImageProcessingError as error:
+        raise DetectionPersistenceError(str(error)) from None
     except CloudinaryStorageError:
         raise DetectionPersistenceError("Cloudinary image upload failed") from None
     detection_record.update(image_fields)

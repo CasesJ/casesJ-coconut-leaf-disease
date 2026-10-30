@@ -92,13 +92,20 @@ class DroneGPS:
             source="dji_exif" if metadata.get("is_dji") else "exif",
         )
 
-    def extract_gps_from_image(self, contents: bytes, filename: str, fallback_coords: Optional[dict] = None) -> Optional[EXIFGPS]:
+    def extract_gps_from_image(
+        self,
+        contents: bytes,
+        filename: str,
+        fallback_coords: Optional[dict] = None,
+        parsed_metadata: Optional[dict] = None,
+    ) -> Optional[EXIFGPS]:
         """Attempt to extract GPS EXIF from image bytes using piexif/Pillow.
 
         Returns an EXIFGPS on success, or a fallback EXIFGPS when fallback_coords provided.
         Returns None if no GPS info and no fallback provided.
         """
-        metadata = self.extract_image_metadata(contents, filename)
+        metadata = (parsed_metadata if isinstance(parsed_metadata, dict)
+                    else self.extract_image_metadata(contents, filename))
         try:
             img = Image.open(BytesIO(contents))
             exif_bytes = img.info.get("exif")

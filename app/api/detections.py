@@ -46,6 +46,7 @@ from app.services.media_service import present_detection_record
 
 router = APIRouter(tags=["detections"])
 logger = logging.getLogger(__name__)
+_background_tasks: set[asyncio.Task] = set()
 
 
 @router.post("/detect/image")
@@ -58,6 +59,7 @@ async def detect_image(
 ):
     """Detect disease in an uploaded image (POST-FLIGHT approach with EXIF GPS extraction)."""
     request_started = time.perf_counter()
+    operation_id = uuid.uuid4().hex[:12]
     performance_ms: dict[str, float] = {}
     from model import detector  # noqa: PLC0415
     from drone_gps import get_drone_gps, init_drone_gps  # noqa: PLC0415
@@ -89,7 +91,7 @@ async def detect_image(
             raise HTTPException(status_code=400, detail="Invalid Content-Length header")
     read_started = time.perf_counter()
     contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
-    performance_ms["upload_read"] = (time.perf_counter() - read_started) * 1000
+    performance_ms["upload_read_ms"] = (time.perf_counter() - read_started) * 1000
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image upload is too large")
     inference_contents = contents
@@ -127,7 +129,7 @@ async def detect_image(
                     inference_contents = output.getvalue()
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
-    performance_ms["validation"] = (time.perf_counter() - validation_started) * 1000
+    performance_ms["validation_ms"] = (time.perf_counter() - validation_started) * 1000
     # The decoded signature identifies the format; camera/browser MIME labels
     # can be empty, generic or incorrect, especially for uppercase extensions.
     metadata_started = time.perf_counter()
@@ -141,7 +143,9 @@ async def detect_image(
     gps_source = "unknown"
     gps_accuracy = None
     if drone_gps:
-        exif_gps = drone_gps.extract_gps_from_image(contents, file.filename)
+        exif_gps = drone_gps.extract_gps_from_image(
+            contents, file.filename, None, image_metadata,
+        )
         if (
             exif_gps
             and math.isfinite(exif_gps.latitude)
@@ -162,7 +166,7 @@ async def detect_image(
             image_metadata["gps_source"] = "unknown"
     else:
         lat, lng = None, None
-    performance_ms["metadata_gps"] = (time.perf_counter() - metadata_started) * 1000
+    performance_ms["metadata_gps_ms"] = (time.perf_counter() - metadata_started) * 1000
 
     decode_started = time.perf_counter()
     # --- Inference ---
@@ -170,12 +174,30 @@ async def detect_image(
     image = imdecode(np_arr, IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
-    performance_ms["decode"] = (time.perf_counter() - decode_started) * 1000
+    performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
     # The first valid image with embedded coordinates establishes the farm,
     # even if it contains no disease detection.
     farm_center = None
+    farm_center_task = None
     if lat is not None and lng is not None and gps_source in {"exif", "dji_exif"}:
-        farm_center = await asyncio.to_thread(set_initial_farm_center, user_id, lat, lng, gps_source)
+        farm_lookup_started = time.perf_counter()
+
+        def establish_farm_center():
+            center = set_initial_farm_center(
+                user_id, lat, lng, gps_source, operation_id=operation_id,
+            )
+            duration = (time.perf_counter() - farm_lookup_started) * 1000
+            logger.info(
+                "Farm centre operation operation_id=%s duration_ms=%.0f established=%s",
+                operation_id, duration, bool(center),
+            )
+            return center, duration
+
+        # This optional location initialization runs beside inference. It never
+        # delays the required detection response if it is still in progress.
+        farm_center_task = asyncio.create_task(asyncio.to_thread(establish_farm_center))
+        _background_tasks.add(farm_center_task)
+        farm_center_task.add_done_callback(_background_tasks.discard)
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     inference_started = time.perf_counter()
@@ -188,7 +210,14 @@ async def detect_image(
             detail="Disease analysis is temporarily unavailable. Your image was not saved.",
         ) from exc
     inference_ms = (time.perf_counter() - inference_started) * 1000
-    performance_ms["inference"] = inference_ms
+    performance_ms["inference_ms"] = inference_ms
+    if farm_center_task is not None and farm_center_task.done():
+        farm_center, farm_center_ms = farm_center_task.result()
+        performance_ms["farm_center_lookup_ms"] = farm_center_ms
+    else:
+        performance_ms["farm_center_lookup_ms"] = 0.0
+        if farm_center_task is not None:
+            logger.info("Farm centre operation pending operation_id=%s", operation_id)
     all_detections = result["detections"]
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
@@ -208,7 +237,7 @@ async def detect_image(
         )
     _, buffer = imencode(".jpg", preview_image, [cv2.IMWRITE_JPEG_QUALITY, 84])
     encoded = base64.b64encode(buffer).decode("utf-8")
-    performance_ms["preview_encode"] = (time.perf_counter() - preview_started) * 1000
+    performance_ms["preview_encode_ms"] = (time.perf_counter() - preview_started) * 1000
 
     # --- Persist ---
     persistence_started = time.perf_counter()
@@ -232,19 +261,20 @@ async def detect_image(
                 is_offline=is_offline,
                 image_dimensions={"width": int(image.shape[1]), "height": int(image.shape[0])},
                 timings=persistence_timings,
+                operation_id=operation_id,
             )
         except DetectionPersistenceError as exc:
             logger.warning("New detection %s could not be durably saved: %s", record_id, exc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Image storage is temporarily unavailable. The detection was not saved.",
+                detail=f"The detection was not saved: {exc}",
             ) from exc
 
         performance_ms.update(persistence_timings)
-    performance_ms["persistence"] = (time.perf_counter() - persistence_started) * 1000
-    performance_ms["total"] = (time.perf_counter() - request_started) * 1000
-    logger.info("Upload stages %s recorded=%s bytes=%d", " ".join(
-        f"{name}_ms={duration:.0f}" for name, duration in performance_ms.items()),
+    performance_ms["persistence_total_ms"] = (time.perf_counter() - persistence_started) * 1000
+    performance_ms["request_total_ms"] = (time.perf_counter() - request_started) * 1000
+    logger.info("Upload stages operation_id=%s %s recorded=%s bytes=%d", operation_id, " ".join(
+        f"{name}={duration:.0f}" for name, duration in performance_ms.items()),
         bool(record_id), len(contents))
     return {
         "detections": all_detections,
@@ -267,6 +297,7 @@ async def detect_image(
         "image_metadata": image_metadata,
         "image_dimensions": {"width": int(image.shape[1]), "height": int(image.shape[0])},
         "performance_ms": {name: round(duration, 1) for name, duration in performance_ms.items()},
+        "operation_id": operation_id,
         "farm_center": farm_center,
     }
 

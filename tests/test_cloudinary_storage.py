@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 import pytest
 import requests
+from cloudinary.exceptions import Error as CloudinaryError
 
 from app.infrastructure import cloudinary_storage as store
 from app.infrastructure.imaging import image_utils
@@ -75,16 +76,55 @@ def test_upload_uses_authenticated_type_and_returns_only_durable_reference(monke
     assert options["resource_type"] == "image"
     assert options["overwrite"] is False
     assert options["return_error"] is True
+    assert options["timeout"] == store.config.CLOUDINARY_UPLOAD_TIMEOUT_SECONDS
     assert reference["provider"] == "cloudinary"
     assert reference["public_id"].startswith("neuralcoco/detection-original/")
     assert reference["delivery_type"] == "authenticated"
     assert "secure_url" not in reference and "api_secret" not in str(reference)
 
 
+def test_cloudinary_configures_reusable_pool_and_bounded_upload_timeout(
+        monkeypatch, cloudinary_config):
+    connector_options = []
+    connector = object()
+    monkeypatch.setattr("cloudinary.utils.get_http_connector", lambda conf, options:
+                        connector_options.append(options) or connector)
+    monkeypatch.setattr(store.config, "CLOUDINARY_POOL_MAXSIZE", 8)
+    monkeypatch.setattr(store.config, "CLOUDINARY_UPLOAD_TIMEOUT_SECONDS", 90)
+
+    store._configure()
+
+    import cloudinary.uploader as uploader
+    assert uploader._http is connector
+    assert connector_options[0]["maxsize"] == 8
+    assert connector_options[0]["block"] is True
+    assert cloudinary.config().timeout == 90
+
+
+@pytest.mark.parametrize("error,category", [
+    (CloudinaryError("write operation timed out"), "timeout"),
+    (CloudinaryError("Connection reset by peer"), "connection"),
+])
+def test_upload_failure_logs_sanitized_category_and_sizes(
+        monkeypatch, cloudinary_config, caplog, error, category):
+    monkeypatch.setattr("cloudinary.uploader.upload", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(store, "_destroy_public_id", lambda public_id: True)
+    with pytest.raises(store.CloudinaryStorageError):
+        store.upload_asset(
+            b"stored", "image/jpeg", "detection-original",
+            operation_id="safe-op", source_bytes=12345678,
+        )
+    assert "operation_id=safe-op" in caplog.text
+    assert "source_bytes=12345678" in caplog.text
+    assert "stored_bytes=6" in caplog.text
+    assert f"error_category={category}" in caplog.text
+    assert "api_secret" not in caplog.text.lower()
+
+
 def test_detection_persists_only_one_authenticated_original_asset(monkeypatch):
     uploads = []
 
-    def upload(content, content_type, category):
+    def upload(content, content_type, category, **kwargs):
         reference = {"provider": "cloudinary", "public_id": f"neuralcoco/{category}/{uuid4().hex}"}
         uploads.append((content, content_type, category, reference))
         return reference
