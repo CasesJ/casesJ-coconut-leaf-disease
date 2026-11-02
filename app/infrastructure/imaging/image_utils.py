@@ -17,65 +17,184 @@ from app.infrastructure.cloudinary_storage import (
 
 logger = logging.getLogger(__name__)
 _JPEG_QUALITIES = (95, 92, 90, 88, 85, 82, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35)
-_XMP_IDENTIFIERS = (b"http://ns.adobe.com/xap/1.0/", b"http://ns.adobe.com/xmp/extension/", b"drone-dji", b"<x:xmpmeta")
+_XMP_HEADER = b"http://ns.adobe.com/xap/1.0/\x00"
+_EXTENDED_XMP_HEADER = b"http://ns.adobe.com/xmp/extension/\x00"
+_ICC_HEADER = b"ICC_PROFILE\x00"
+_MAX_JPEG_MARKERS = 100_000
+_MAX_PROTECTED_METADATA_BYTES = 16 * 1024 * 1024
 
 
 class DetectionImageProcessingError(CloudinaryStorageError):
     """The storage copy could not be made without damaging evidence metadata."""
 
 
-def _jpeg_xmp_segments(content: bytes) -> list[bytes]:
-    """Return complete JPEG APP1 XMP segments, without decoding private values."""
+def _protected_segment_kind(marker: int, payload: bytes) -> str | None:
+    if marker == 0xE1:
+        if payload.startswith(b"Exif\x00\x00"):
+            return "exif"
+        if payload.startswith(_XMP_HEADER):
+            return "xmp"
+        if payload.startswith(_EXTENDED_XMP_HEADER):
+            return "extended_xmp"
+        # Unknown APP1 data cannot safely be reconstructed after re-encoding.
+        raise DetectionImageProcessingError("JPEG contains unsupported APP1 metadata")
+    if marker == 0xE2:
+        if payload.startswith(_ICC_HEADER):
+            return "icc"
+        # APP2 is also used by FlashPix and vendor-specific metadata. Fail closed.
+        raise DetectionImageProcessingError("JPEG contains unsupported APP2 metadata")
+    return None
+
+
+def _raw_segment_payload(raw: bytes) -> bytes:
+    marker_offset = 0
+    while marker_offset < len(raw) and raw[marker_offset] == 0xFF:
+        marker_offset += 1
+    return raw[marker_offset + 3:]
+
+
+def _validate_protected_layout(segments: list[tuple[str, bytes]]) -> None:
+    icc_segments = [raw for kind, raw in segments if kind == "icc"]
+    if icc_segments:
+        sequence = []
+        for raw in icc_segments:
+            payload = _raw_segment_payload(raw)
+            if len(payload) < len(_ICC_HEADER) + 2:
+                raise DetectionImageProcessingError("JPEG contains malformed ICC metadata")
+            sequence.append((payload[len(_ICC_HEADER)], payload[len(_ICC_HEADER) + 1]))
+        expected_count = len(icc_segments)
+        if sequence != [(index, expected_count) for index in range(1, expected_count + 1)]:
+            raise DetectionImageProcessingError("JPEG contains ambiguous ICC metadata ordering")
+
+    extended_groups: dict[bytes, tuple[int, list[tuple[int, int]]]] = {}
+    header_size = len(_EXTENDED_XMP_HEADER)
+    for kind, raw in segments:
+        if kind != "extended_xmp":
+            continue
+        payload = _raw_segment_payload(raw)
+        if len(payload) < header_size + 40:
+            raise DetectionImageProcessingError("JPEG contains malformed extended XMP metadata")
+        guid = payload[header_size:header_size + 32]
+        try:
+            int(guid, 16)
+        except ValueError:
+            raise DetectionImageProcessingError("JPEG contains malformed extended XMP metadata") from None
+        total = int.from_bytes(payload[header_size + 32:header_size + 36], "big")
+        offset = int.from_bytes(payload[header_size + 36:header_size + 40], "big")
+        chunk_size = len(payload) - header_size - 40
+        if total <= 0 or offset + chunk_size > total:
+            raise DetectionImageProcessingError("JPEG contains malformed extended XMP metadata")
+        key = guid.lower()
+        if key in extended_groups and extended_groups[key][0] != total:
+            raise DetectionImageProcessingError("JPEG contains inconsistent extended XMP metadata")
+        extended_groups.setdefault(key, (total, []))[1].append((offset, offset + chunk_size))
+    for total, ranges in extended_groups.values():
+        if sorted(ranges) != ranges or not ranges or ranges[0][0] != 0:
+            raise DetectionImageProcessingError("JPEG contains ambiguous extended XMP ordering")
+        if any(previous[1] != current[0] for previous, current in zip(ranges, ranges[1:])):
+            raise DetectionImageProcessingError("JPEG contains incomplete extended XMP metadata")
+        if ranges[-1][1] != total:
+            raise DetectionImageProcessingError("JPEG contains incomplete extended XMP metadata")
+
+
+def _jpeg_protected_segments(content: bytes) -> list[tuple[str, bytes]]:
+    """Inventory protected JPEG metadata across all structurally valid scans."""
     if not content.startswith(b"\xff\xd8"):
-        return []
-    segments: list[bytes] = []
+        raise DetectionImageProcessingError("Compressed storage copy is not a JPEG")
+    segments: list[tuple[str, bytes]] = []
+    protected_bytes = 0
+    marker_count = 0
     offset = 2
-    while offset + 4 <= len(content) and content[offset] == 0xFF:
+    in_scan = False
+    found_eoi = False
+
+    while offset < len(content):
+        if in_scan:
+            marker_start = content.find(b"\xff", offset)
+            if marker_start < 0:
+                break
+            offset = marker_start + 1
+            while offset < len(content) and content[offset] == 0xFF:
+                offset += 1
+            if offset >= len(content):
+                break
+            marker = content[offset]
+            if marker == 0x00 or 0xD0 <= marker <= 0xD7:
+                offset += 1
+                continue
+            offset = marker_start
+            in_scan = False
+            continue
+
         marker_start = offset
+        if content[offset] != 0xFF:
+            raise DetectionImageProcessingError("JPEG contains an unsupported marker layout")
         while offset < len(content) and content[offset] == 0xFF:
             offset += 1
-        if offset >= len(content) or content[offset] in {0xDA, 0xD9}:
+        if offset >= len(content):
             break
         marker = content[offset]
         offset += 1
-        if marker in {0x01} or 0xD0 <= marker <= 0xD7:
+        marker_count += 1
+        if marker_count > _MAX_JPEG_MARKERS:
+            raise DetectionImageProcessingError("JPEG contains too many markers")
+        if marker == 0x00 or marker == 0xD8:
+            raise DetectionImageProcessingError("JPEG contains an unsupported marker layout")
+        if marker == 0xD9:
+            found_eoi = True
+            if offset != len(content):
+                raise DetectionImageProcessingError("JPEG contains unsupported trailing data")
+            break
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:
             continue
         if offset + 2 > len(content):
-            break
+            raise DetectionImageProcessingError("JPEG contains a truncated marker")
         length = int.from_bytes(content[offset:offset + 2], "big")
         end = offset + length
         if length < 2 or end > len(content):
-            break
-        segment = content[marker_start:end]
+            raise DetectionImageProcessingError("JPEG contains an invalid marker length")
         payload = content[offset + 2:end]
-        if marker == 0xE1 and any(identifier.lower() in payload.lower() for identifier in _XMP_IDENTIFIERS):
-            segments.append(segment)
+        kind = _protected_segment_kind(marker, payload)
+        if kind is not None:
+            raw = content[marker_start:end]
+            protected_bytes += len(raw)
+            if protected_bytes > _MAX_PROTECTED_METADATA_BYTES:
+                raise DetectionImageProcessingError("JPEG protected metadata is too large")
+            segments.append((kind, raw))
         offset = end
+        if marker == 0xDA:
+            in_scan = True
+
+    if not found_eoi:
+        raise DetectionImageProcessingError("JPEG is missing its end marker")
+    _validate_protected_layout(segments)
     return segments
 
 
-def _inject_xmp_segments(jpeg: bytes, segments: list[bytes]) -> bytes:
+def _inject_protected_segments(jpeg: bytes, segments: list[tuple[str, bytes]]) -> bytes:
     if not segments:
         return jpeg
     if not jpeg.startswith(b"\xff\xd8"):
         raise DetectionImageProcessingError("Compressed storage copy is not a JPEG")
-    return b"\xff\xd8" + b"".join(segments) + jpeg[2:]
+    return b"\xff\xd8" + b"".join(raw for _, raw in segments) + jpeg[2:]
 
 
-def _metadata_snapshot(content: bytes) -> dict:
+def _metadata_snapshot(
+    content: bytes,
+    protected_segments: list[tuple[str, bytes]] | None = None,
+) -> dict:
     try:
         with Image.open(BytesIO(content)) as image:
             exif = image.getexif()
-            exif_bytes = image.info.get("exif")
+            inventory = (protected_segments if protected_segments is not None
+                         else _jpeg_protected_segments(content))
             return {
                 "dimensions": tuple(image.size),
                 "orientation": exif.get(274),
-                "exif_sha256": hashlib.sha256(exif_bytes).hexdigest()
-                if exif_bytes else None,
-                "icc_sha256": hashlib.sha256(image.info["icc_profile"]).hexdigest()
-                if image.info.get("icc_profile") else None,
-                "xmp_sha256": [hashlib.sha256(segment).hexdigest()
-                               for segment in _jpeg_xmp_segments(content)],
+                "protected_segments": [
+                    (kind, len(raw), hashlib.sha256(raw).hexdigest())
+                    for kind, raw in inventory
+                ],
             }
     except Exception as exc:
         raise DetectionImageProcessingError("Detection image metadata could not be read") from exc
@@ -86,11 +205,7 @@ def _metadata_matches(original: dict, candidate: dict) -> bool:
         return False
     if original["orientation"] != candidate["orientation"]:
         return False
-    if original["exif_sha256"] != candidate["exif_sha256"]:
-        return False
-    if original["icc_sha256"] != candidate["icc_sha256"]:
-        return False
-    if original["xmp_sha256"] != candidate["xmp_sha256"]:
+    if original["protected_segments"] != candidate["protected_segments"]:
         return False
     return True
 
@@ -109,25 +224,19 @@ def _prepare_cloudinary_copy(
         )
 
     metadata_started = time.perf_counter()
-    original_metadata = _metadata_snapshot(content)
-    xmp_segments = _jpeg_xmp_segments(content)
+    protected_segments = _jpeg_protected_segments(content)
+    original_metadata = _metadata_snapshot(content, protected_segments)
     metadata_ms = (time.perf_counter() - metadata_started) * 1000
     compression_ms = 0.0
     try:
         with Image.open(BytesIO(content)) as source:
             source.load()
-            exif = source.info.get("exif")
-            icc_profile = source.info.get("icc_profile")
             for quality in _JPEG_QUALITIES:
                 compression_started = time.perf_counter()
                 output = BytesIO()
                 options = {"format": "JPEG", "quality": quality, "optimize": True}
-                if exif:
-                    options["exif"] = exif
-                if icc_profile:
-                    options["icc_profile"] = icc_profile
                 source.save(output, **options)
-                candidate = _inject_xmp_segments(output.getvalue(), xmp_segments)
+                candidate = _inject_protected_segments(output.getvalue(), protected_segments)
                 compression_ms += (time.perf_counter() - compression_started) * 1000
                 if len(candidate) > config.DETECTION_STORAGE_MAX_BYTES:
                     continue

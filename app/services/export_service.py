@@ -10,12 +10,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
+from threading import Lock
 from typing import Any, Optional
 
 from app.domain.detection import normalize_verification_status
 from app.services.detection_service import get_all_user_records
 
 logger = logging.getLogger(__name__)
+_PDF_RENDER_LOCK = Lock()
 
 
 # ── CSV export ─────────────────────────────────────────────────────────────────
@@ -122,6 +124,12 @@ def generate_detections_csv() -> str:
 # ── PDF report ─────────────────────────────────────────────────────────────────
 
 def build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
+    # Matplotlib's pyplot state is shared across report worker threads.
+    with _PDF_RENDER_LOCK:
+        return _build_executive_user_records_pdf(records, email)
+
+
+def _build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
     """Render the authenticated user's records as an executive-grade PDF dashboard.
 
     Enhanced version with real analytics:

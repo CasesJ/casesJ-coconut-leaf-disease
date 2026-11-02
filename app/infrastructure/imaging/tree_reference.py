@@ -5,6 +5,7 @@ from io import BytesIO
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS
 from app.domain.tree_identity import normalize_gps
@@ -16,6 +17,10 @@ async def read_reference_image(file: UploadFile) -> tuple[bytes, str]:
         raise HTTPException(413, "Whole-tree image upload is too large")
     if not contents:
         raise HTTPException(400, "Whole-tree image upload is empty")
+    return await run_in_threadpool(_validate_reference_image, contents, file.content_type)
+
+
+def _validate_reference_image(contents: bytes, declared_type: str | None) -> tuple[bytes, str]:
     try:
         with Image.open(BytesIO(contents)) as image:
             if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
@@ -24,7 +29,7 @@ async def read_reference_image(file: UploadFile) -> tuple[bytes, str]:
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("Use a single-frame whole-tree photograph")
             image.verify()
-        if file.content_type != content_type:
+        if declared_type != content_type:
             raise ValueError("Whole-tree image MIME type does not match its contents")
         with Image.open(BytesIO(contents)) as image:
             image.load()

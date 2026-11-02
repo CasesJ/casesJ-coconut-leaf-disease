@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer
+from starlette.concurrency import run_in_threadpool
 
 from app.infrastructure.firebase.auth import verify_token
 
@@ -20,7 +21,7 @@ async def verify_firebase_token(credentials: Any = Depends(_security)) -> dict:
     """Mandatory Bearer token verification — raises 401 on failure."""
     token = credentials.credentials
     try:
-        return verify_token(token)
+        return await run_in_threadpool(verify_token, token)
     except Exception as exc:
         logger.warning("Firebase bearer-token verification failed: %s", exc)
         raise HTTPException(
@@ -49,7 +50,7 @@ async def verify_firebase_token_optional(
     if not credentials or not credentials.credentials:
         return None
     try:
-        return verify_token(credentials.credentials)
+        return await run_in_threadpool(verify_token, credentials.credentials)
     except Exception as exc:
         logger.debug("[OFFLINE] Token verification failed (offline mode): %s", exc)
         return None
@@ -62,7 +63,7 @@ async def verify_token_from_request(request: Request) -> Optional[dict]:
         return None
     try:
         token = auth_header.split(" ", 1)[1]
-        return verify_token(token)
+        return await run_in_threadpool(verify_token, token)
     except Exception as exc:
         logger.debug("[OFFLINE] Token verification failed: %s", exc)
         return None

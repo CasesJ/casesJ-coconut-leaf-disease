@@ -88,9 +88,10 @@ def farmer_detection_image(record_id: str, kind: str, background_tasks: Backgrou
     record = _detection_record(farmer_id, record_id)
     assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
     should_cache_thumbnail = kind == "thumbnail" and not assets.get("thumbnail")
-    after_read = (lambda contents: background_tasks.add_task(
-        media_service.persist_detection_thumbnail, record, contents
-    )) if should_cache_thumbnail else None
+    def after_read(contents):
+        if (should_cache_thumbnail
+                and media_service.claim_detection_thumbnail_persistence(record)):
+            background_tasks.add_task(media_service.persist_detection_thumbnail, record, contents)
     return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
 
 
@@ -103,9 +104,10 @@ def expert_detection_image(farmer_id: str, record_id: str, kind: str, background
     record = _detection_record(farmer_id, record_id)
     assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
     should_cache_thumbnail = kind == "thumbnail" and not assets.get("thumbnail")
-    after_read = (lambda contents: background_tasks.add_task(
-        media_service.persist_detection_thumbnail, record, contents
-    )) if should_cache_thumbnail else None
+    def after_read(contents):
+        if (should_cache_thumbnail
+                and media_service.claim_detection_thumbnail_persistence(record)):
+            background_tasks.add_task(media_service.persist_detection_thumbnail, record, contents)
     return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
 
 

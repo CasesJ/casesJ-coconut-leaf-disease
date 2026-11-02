@@ -2,6 +2,7 @@
 app/api/notifications.py — In-app notification endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 
 from app.core.security import verify_verified_firebase_token
 from app.domain.notification import get_user_notifications
@@ -15,7 +16,7 @@ async def get_notifications(decoded: dict = Depends(verify_verified_firebase_tok
     user_id = str(decoded.get("uid") or "").strip()
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
-    notices = get_user_notifications(user_id)
+    notices = await run_in_threadpool(get_user_notifications, user_id)
     return {"notifications": notices[:30], "unread_count": sum(1 for n in notices if not n.get("read"))}
 
 
@@ -24,7 +25,7 @@ async def clear_user_notifications(decoded: dict = Depends(verify_verified_fireb
     user_id = str(decoded.get("uid") or "").strip()
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
-    clear_notifications(user_id)
+    await run_in_threadpool(clear_notifications, user_id)
     return {"message": "Notifications cleared"}
 
 
@@ -33,5 +34,5 @@ async def mark_read(decoded: dict = Depends(verify_verified_firebase_token)):
     user_id = str(decoded.get("uid") or "").strip()
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
-    mark_notifications_read(user_id)
+    await run_in_threadpool(mark_notifications_read, user_id)
     return {"message": "Notifications marked as read"}

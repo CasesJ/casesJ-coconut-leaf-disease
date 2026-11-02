@@ -270,9 +270,29 @@ class DroneGPS:
             # OpenCV will produce the validation/inference error for non-images.
             pass
 
-        # DJI XMP is UTF-8 XML inside JPEG APP1; matching its known scalar fields
-        # also handles files whose XMP namespace prefixes are malformed.
-        text = contents.decode("latin-1", errors="ignore")
+        # DJI XMP is stored in JPEG APP1. Avoid decoding and regex-scanning the
+        # entire compressed pixel stream for large drone photographs. The
+        # structural parser also finds XMP between progressive JPEG scans. Keep
+        # the historical whole-input path for non-JPEG or unsupported layouts.
+        text = None
+        if contents.startswith(b"\xff\xd8"):
+            try:
+                from app.infrastructure.imaging.image_utils import (  # noqa: PLC0415
+                    _jpeg_protected_segments,
+                    _raw_segment_payload,
+                )
+                xmp_payloads = [
+                    _raw_segment_payload(raw)
+                    for kind, raw in _jpeg_protected_segments(contents)
+                    if kind in {"xmp", "extended_xmp"}
+                ]
+                text = b"\n".join(xmp_payloads).decode("latin-1", errors="ignore")
+            except Exception:
+                # Metadata extraction is best-effort here. Compression performs
+                # the strict fail-closed inventory before evidence persistence.
+                pass
+        if text is None:
+            text = contents.decode("latin-1", errors="ignore")
         metadata["is_dji"] = bool(
             (metadata["camera_make"] and "dji" in metadata["camera_make"].lower())
             or re.search(r"dji:(?:AbsoluteAltitude|RelativeAltitude|FlightYawDegree)|DJI", text, re.IGNORECASE)

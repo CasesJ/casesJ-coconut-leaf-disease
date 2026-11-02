@@ -8,6 +8,7 @@ import math
 import time
 import uuid
 from collections import deque
+from contextlib import suppress
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional
@@ -49,51 +50,10 @@ logger = logging.getLogger(__name__)
 _background_tasks: set[asyncio.Task] = set()
 
 
-@router.post("/detect/image")
-async def detect_image(
-    request: Request,
-    file: UploadFile = File(...),
-    lat: Optional[float] = Form(None),
-    lng: Optional[float] = Form(None),
-    accuracy: Optional[float] = Form(None),
-):
-    """Detect disease in an uploaded image (POST-FLIGHT approach with EXIF GPS extraction)."""
-    request_started = time.perf_counter()
-    operation_id = uuid.uuid4().hex[:12]
-    performance_ms: dict[str, float] = {}
-    from model import detector  # noqa: PLC0415
-    from drone_gps import get_drone_gps, init_drone_gps  # noqa: PLC0415
-    from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
-
-    # --- Auth (requires a verified Firebase identity) ---
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authentication is required for image inference")
-    try:
-        decoded = await asyncio.to_thread(verify_token, auth_header.split(" ", 1)[1])
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
-    user_id = str(decoded.get("uid") or "").strip()
-    if not user_id or decoded.get("token_verified_offline"):
-        raise HTTPException(status_code=401, detail="Verified Firebase authentication is required")
-    email = decoded.get("email", "unknown")
-    is_offline = False
-
-    # --- Read upload ---
-    declared_size = request.headers.get("content-length")
-    # Content-Length includes multipart boundaries and form fields, hence the
-    # small allowance; the actual file bytes are still capped exactly below.
-    if declared_size:
-        try:
-            if int(declared_size) > MAX_IMAGE_UPLOAD_BYTES + 1_000_000:
-                raise HTTPException(status_code=413, detail="Image upload is too large")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
-    read_started = time.perf_counter()
-    contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
-    performance_ms["upload_read_ms"] = (time.perf_counter() - read_started) * 1000
-    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Image upload is too large")
+def _prepare_upload(contents: bytes, filename: str | None):
+    """Validate, extract GPS and decode unchanged source pixels in a worker."""
+    from drone_gps import get_drone_gps, init_drone_gps
+    performance_ms = {}
     inference_contents = contents
     validation_started = time.perf_counter()
     try:
@@ -134,7 +94,7 @@ async def detect_image(
     # can be empty, generic or incorrect, especially for uppercase extensions.
     metadata_started = time.perf_counter()
     metadata_reader = get_drone_gps() or init_drone_gps()
-    image_metadata = metadata_reader.extract_image_metadata(contents, file.filename)
+    image_metadata = metadata_reader.extract_image_metadata(contents, filename)
 
     # --- GPS extraction ---
     drone_gps = get_drone_gps()
@@ -144,7 +104,7 @@ async def detect_image(
     gps_accuracy = None
     if drone_gps:
         exif_gps = drone_gps.extract_gps_from_image(
-            contents, file.filename, None, image_metadata,
+            contents, filename, None, image_metadata,
         )
         if (
             exif_gps
@@ -175,6 +135,71 @@ async def detect_image(
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
     performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
+    return inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy, image, performance_ms
+
+
+def _encode_upload_preview(preview_image: np.ndarray) -> str:
+    """Keep the existing preview dimensions and JPEG quality off the event loop."""
+    preview_scale = min(1.0, 1280 / max(preview_image.shape[:2]))
+    if preview_scale < 1.0:
+        preview_image = cv2.resize(
+            preview_image,
+            (max(1, round(preview_image.shape[1] * preview_scale)),
+             max(1, round(preview_image.shape[0] * preview_scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    _, buffer = imencode(".jpg", preview_image, [cv2.IMWRITE_JPEG_QUALITY, 84])
+    encoded = base64.b64encode(buffer).decode("utf-8")
+    return encoded
+
+
+@router.post("/detect/image")
+async def detect_image(
+    request: Request,
+    file: UploadFile = File(...),
+    lat: Optional[float] = Form(None),
+    lng: Optional[float] = Form(None),
+    accuracy: Optional[float] = Form(None),
+):
+    """Detect disease in an uploaded image (POST-FLIGHT approach with EXIF GPS extraction)."""
+    request_started = time.perf_counter()
+    operation_id = uuid.uuid4().hex[:12]
+    performance_ms: dict[str, float] = {}
+    from model import detector  # noqa: PLC0415
+    from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
+
+    # --- Auth (requires a verified Firebase identity) ---
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication is required for image inference")
+    try:
+        decoded = await asyncio.to_thread(verify_token, auth_header.split(" ", 1)[1])
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
+    user_id = str(decoded.get("uid") or "").strip()
+    if not user_id or decoded.get("token_verified_offline"):
+        raise HTTPException(status_code=401, detail="Verified Firebase authentication is required")
+    email = decoded.get("email", "unknown")
+    is_offline = False
+
+    # --- Read upload ---
+    declared_size = request.headers.get("content-length")
+    # Content-Length includes multipart boundaries and form fields, hence the
+    # small allowance; the actual file bytes are still capped exactly below.
+    if declared_size:
+        try:
+            if int(declared_size) > MAX_IMAGE_UPLOAD_BYTES + 1_000_000:
+                raise HTTPException(status_code=413, detail="Image upload is too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+    read_started = time.perf_counter()
+    contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    performance_ms["upload_read_ms"] = (time.perf_counter() - read_started) * 1000
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image upload is too large")
+    (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
+     image, preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
+    performance_ms.update(preparation_ms)
     # The first valid image with embedded coordinates establishes the farm,
     # even if it contains no disease detection.
     farm_center = None
@@ -226,17 +251,7 @@ async def detect_image(
     # The full-resolution image is still analyzed and stored as evidence. Sending
     # that entire image back as base64 made the result wait on a large response.
     preview_started = time.perf_counter()
-    preview_image = result["image"]
-    preview_scale = min(1.0, 1280 / max(preview_image.shape[:2]))
-    if preview_scale < 1.0:
-        preview_image = cv2.resize(
-            preview_image,
-            (max(1, round(preview_image.shape[1] * preview_scale)),
-             max(1, round(preview_image.shape[0] * preview_scale))),
-            interpolation=cv2.INTER_AREA,
-        )
-    _, buffer = imencode(".jpg", preview_image, [cv2.IMWRITE_JPEG_QUALITY, 84])
-    encoded = base64.b64encode(buffer).decode("utf-8")
+    encoded = await asyncio.to_thread(_encode_upload_preview, result["image"])
     performance_ms["preview_encode_ms"] = (time.perf_counter() - preview_started) * 1000
 
     # --- Persist ---
@@ -303,7 +318,7 @@ async def detect_image(
 
 
 @router.get("/farm/location")
-async def get_my_farm_location(decoded: dict = Depends(verify_verified_firebase_token)):
+def get_my_farm_location(decoded: dict = Depends(verify_verified_firebase_token)):
     """Return the authenticated user's established farm centre."""
     user_id = str(decoded.get("uid") or "").strip()
     if not user_id:
@@ -313,7 +328,7 @@ async def get_my_farm_location(decoded: dict = Depends(verify_verified_firebase_
 
 
 @router.put("/detections/my-records/{record_id}/low-confidence-recommendation")
-async def save_farmer_low_confidence_recommendation(
+def save_farmer_low_confidence_recommendation(
     record_id: str,
     payload: FarmerRecommendationUpdate,
     decoded: dict = Depends(verify_verified_firebase_token),
@@ -557,4 +572,6 @@ async def detect_stream(websocket: WebSocket):
         logger.exception("Streaming detection failed")
     finally:
         saver_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await saver_task
         await limiter.release_connection(connection_key)

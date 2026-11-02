@@ -103,10 +103,6 @@ def create_case(farmer_id: str, tree_id: str | None, baseline_id: str, next_date
         raise ValueError("Baseline has no treatment recommendation")
     if snapshot.get("disease") and snapshot["disease"].strip().lower() != disease.strip().lower():
         raise ValueError("Treatment disease does not match baseline")
-    existing_tree = str(baseline.get("tree_id") or "").strip()
-    if existing_tree and existing_tree != tree_id:
-        raise ValueError("Tree does not match baseline")
-
     # These snapshots intentionally capture the verified baseline as it was at
     # case creation. Later edits to a detection record must not change the
     # evidence, disease predictions, or recommendation provenance of an

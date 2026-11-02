@@ -15,15 +15,17 @@ const expertRecommendationCache = new Map();
 const USER_RECORDS_CACHE_TTL_MS = 45_000;
 let userRecordsCache = null;
 let userRecordsRequest = null;
+let userRecordsVersion = 0;
 
 function clearUserRecordsCache() {
+  userRecordsVersion++;
   userRecordsCache = null;
   userRecordsRequest = null;
 }
 
 function getCachedUserRecords() {
   if (!userRecordsCache || userRecordsCache.userId !== currentUser?.uid) return null;
-  return Date.now() - userRecordsCache.loadedAt < USER_RECORDS_CACHE_TTL_MS
+  return navigator.onLine === false || Date.now() - userRecordsCache.loadedAt < USER_RECORDS_CACHE_TTL_MS
     ? userRecordsCache.payload
     : null;
 }
@@ -33,15 +35,21 @@ async function fetchUserRecords({ force = false } = {}) {
 
   const requestUserId = currentUser.uid;
   const requestToken = currentToken;
+  const requestVersion = userRecordsVersion;
+  if (navigator.onLine === false) {
+    const offline = getCachedUserRecords();
+    if (!offline) throw new Error('Offline. Load your records while connected first.');
+    showToast('Offline: showing previously loaded records.');
+    return offline;
+  }
   const cached = !force && getCachedUserRecords();
   if (cached) return cached;
   if (userRecordsRequest) return userRecordsRequest;
 
-  const request = fetch('/detections/my-records?limit=100', {
-    headers: { Authorization: `Bearer ${requestToken}` }
-  }).then(async (response) => {
-    if (!response.ok) throw new Error('Failed to load records');
-    const payload = await response.json();
+  const request = fetchRecordsJson('/detections/my-records?limit=100', requestToken).then(payload => {
+    if (requestVersion !== userRecordsVersion || currentUser?.uid !== requestUserId) {
+      throw new Error('Records changed. Please refresh.');
+    }
     if (currentUser?.uid === requestUserId && currentToken === requestToken) {
       userRecordsCache = { userId: requestUserId, loadedAt: Date.now(), payload };
     }
@@ -61,15 +69,17 @@ async function fetchUserRecords({ force = false } = {}) {
 const EXPERT_RECORDS_CACHE_TTL_MS = 45_000;
 let expertRecordsCache = null;
 let expertRecordsRequest = null;
+let expertRecordsVersion = 0;
 
 function clearExpertRecordsCache() {
+  expertRecordsVersion++;
   expertRecordsCache = null;
   expertRecordsRequest = null;
 }
 
 function getCachedExpertRecords() {
   if (!expertRecordsCache || expertRecordsCache.userId !== currentUser?.uid) return null;
-  return Date.now() - expertRecordsCache.loadedAt < EXPERT_RECORDS_CACHE_TTL_MS
+  return navigator.onLine === false || Date.now() - expertRecordsCache.loadedAt < EXPERT_RECORDS_CACHE_TTL_MS
     ? expertRecordsCache.payload
     : null;
 }
@@ -81,15 +91,21 @@ async function fetchExpertRecords({ force = false } = {}) {
 
   const requestUserId = currentUser.uid;
   const requestToken = currentToken;
+  const requestVersion = expertRecordsVersion;
+  if (navigator.onLine === false) {
+    const offline = getCachedExpertRecords();
+    if (!offline) throw new Error('Offline. Load the expert records while connected first.');
+    showToast('Offline: showing previously loaded expert records.');
+    return offline;
+  }
   const cached = !force && getCachedExpertRecords();
   if (cached) return cached;
   if (expertRecordsRequest) return expertRecordsRequest;
 
-  const request = fetch('/expert/records?status=all&limit=500', {
-    headers: { Authorization: `Bearer ${requestToken}` }
-  }).then(async (response) => {
-    if (!response.ok) throw new Error('Failed to load expert records');
-    const payload = await response.json();
+  const request = fetchRecordsJson('/expert/records?status=all&limit=500', requestToken).then(payload => {
+    if (requestVersion !== expertRecordsVersion || currentUser?.uid !== requestUserId || !currentUserIsExpert) {
+      throw new Error('Expert records changed. Please refresh.');
+    }
     if (currentUser?.uid === requestUserId && currentToken === requestToken) {
       expertRecordsCache = { userId: requestUserId, loadedAt: Date.now(), payload };
     }
@@ -101,6 +117,16 @@ async function fetchExpertRecords({ force = false } = {}) {
   } finally {
     if (expertRecordsRequest === request) expertRecordsRequest = null;
   }
+}
+
+async function fetchRecordsJson(url, token) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+    if (!response.ok) throw new Error(`Failed to load records (${response.status}).`);
+    return await response.json();
+  } finally { clearTimeout(timer); }
 }
 
 // ── Auth UI Functions ──
@@ -1008,7 +1034,10 @@ function exportDashboardRecords() {
 
 // ──────────────────────────────────────────────────────────
 // ── Init with 3D Terrain & Disease Heatmap ──
-window.addEventListener('load', () => {
+let mapsInitialized = false;
+function initializeMaps() {
+  if (mapsInitialized) return;
+  mapsInitialized = true;
   // Enhanced style with disease heatmap
   const rasterStyle = {
     version: 8,
@@ -1126,6 +1155,7 @@ window.addEventListener('load', () => {
     
     mapsReady = true;
     applyUiSettings();
+    attachPendingMapPins();
 
     mainMap.addSource('area-monitoring-src', {
       type: 'geojson',
@@ -1180,7 +1210,7 @@ window.addEventListener('load', () => {
   // ✅ Don't request geolocation on page load - only request when user uploads or uses drone
   // This prevents the permission prompt on every login
   // The default Davao coordinates are used if location is not available
-});
+}
 
 // ── Tabs ──
 function switchTab(name, btn) {
@@ -1210,6 +1240,7 @@ function switchTab(name, btn) {
     document.querySelector('.sidebar').classList.remove('active');
   }
   if(name!=='drone') stopDrone();
+  if (name === 'map' || name === 'drone') initializeMaps();
   if(name==='dashboard' && typeof loadDashboardStats === 'function') loadDashboardStats();
   if(name==='expert' && typeof loadExpertReview === 'function') loadExpertReview();
   if(name==='records' && !currentUserIsExpert && typeof loadUserRecords === 'function') loadUserRecords();
@@ -1247,6 +1278,7 @@ function showToast(msg){
 // ── Analytics Charts ──
 let weeklyTrendChart = null;
 let healthDistributionChart = null;
+let analyticsRenderState = null;
 
 window.refreshAnalyticsCharts = async function refreshAnalyticsCharts() {
   if (!currentUser?.uid) return;
@@ -1275,6 +1307,16 @@ function renderAnalyticsCharts(records) {
   
   const weeklyData = aggregateWeeklyDetections(records);
   const classDistribution = aggregateClassDistribution(records);
+  const signature = JSON.stringify([weeklyData, classDistribution]);
+  const weeklyCanvas = document.getElementById('weekly-trend-chart');
+  const healthCanvas = document.getElementById('health-distribution-chart');
+  const colorKey = document.getElementById('detection-color-key');
+  if (analyticsRenderState?.signature === signature
+      && analyticsRenderState.weeklyCanvas === weeklyCanvas
+      && analyticsRenderState.healthCanvas === healthCanvas
+      && analyticsRenderState.colorKey === colorKey
+      && analyticsRenderState.weeklyChart === weeklyTrendChart
+      && analyticsRenderState.healthChart === healthDistributionChart) return;
   console.log('📊 Analytics Data:', {
     recordCount: records.length,
     weeklyData,
@@ -1284,6 +1326,8 @@ function renderAnalyticsCharts(records) {
   renderWeeklyTrendChart(weeklyData);
   renderHealthDistributionChart(classDistribution);
   renderDetectionColorKey(classDistribution);
+  analyticsRenderState = { signature, weeklyCanvas, healthCanvas, colorKey,
+    weeklyChart: weeklyTrendChart, healthChart: healthDistributionChart };
 }
 
 function aggregateWeeklyDetections(records) {
@@ -1513,10 +1557,27 @@ function getGPS(cb){
 }
 
 // ── Reverse Geocoding with Nominatim API ──
-const geoCache = {}; // Cache to avoid duplicate API calls
+const geoCache = new Map();
+const geoRequests = new Map();
 async function reverseGeocode(lat, lng) {
   const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
-  if(geoCache[key]) return geoCache[key];
+  if (geoCache.has(key)) return geoCache.get(key);
+  const fallback = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  if (navigator.onLine === false) return fallback;
+  if (geoRequests.has(key)) return geoRequests.get(key);
+  const request = lookupAddress(lat, lng, key, fallback);
+  geoRequests.set(key, request);
+  try { return await request; }
+  finally { if (geoRequests.get(key) === request) geoRequests.delete(key); }
+}
+
+function rememberAddress(key, address) {
+  if (geoCache.size >= 500) geoCache.delete(geoCache.keys().next().value);
+  geoCache.set(key, address);
+  return address;
+}
+
+async function lookupAddress(lat, lng, key, fallback) {
   
   // Use the configured Catipunan map area name for points inside its boundary.
   const farmLongMin = 125.63019;
@@ -1526,15 +1587,17 @@ async function reverseGeocode(lat, lng) {
   
   if (lng >= farmLongMin && lng <= farmLongMax && lat >= farmLatMin && lat <= farmLatMax) {
     const customLocation = "Catipunan, Panabo City, Davao del Norte";
-    geoCache[key] = customLocation;
-    return customLocation;
+    return rememberAddress(key, customLocation);
   }
   
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-      { headers: { 'Accept-Language': 'en' } }
+      { headers: { 'Accept-Language': 'en' }, signal: controller.signal }
     );
+    if (!response.ok) throw new Error('Location lookup failed');
     const data = await response.json();
     
     // Extract human-readable address - prioritize neighborhood/village/town
@@ -1543,12 +1606,11 @@ async function reverseGeocode(lat, lng) {
     const province = addr.state || addr.province || '';
     const address = province ? `${location}, ${province}` : location;
     
-    geoCache[key] = address;
-    return address;
+    return rememberAddress(key, address);
   } catch(err) {
     console.warn('Geocoding failed:', err);
-    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; // Fallback to coordinates
-  }
+    return fallback;
+  } finally { clearTimeout(timer); }
 }
 
 // ✅ Save a single pin to Firebase
@@ -1577,38 +1639,43 @@ async function savePinToFirebase(lat, lng, label, confidence, source) {
 }
 
 // ✅ Load all saved pins from Firebase and restore them on the map
+let mapPinsLoadId = 0;
 async function loadSavedMapPins(userId) {
+  const loadId = ++mapPinsLoadId;
+  if (navigator.onLine === false) return;
   try {
     const db = firebase.database();
     const userPinsRef = db.ref(`users/${userId}/map_pins`);
     
-    userPinsRef.once('value', async snapshot => {
-      const pinsData = snapshot.val();
-      
-      if (!pinsData) {
-        console.log('ℹ️  No saved pins found for this user');
-        return;
+    const snapshot = await userPinsRef.once('value');
+    if (loadId !== mapPinsLoadId || currentUser?.uid !== userId) return;
+    const pinsData = snapshot.val();
+    if (!pinsData) {
+      console.log('ℹ️  No saved pins found for this user');
+      return;
+    }
+    console.log('📍 Loading saved pins from Firebase:', Object.keys(pinsData).length, 'pins');
+    log = [];
+    mainMarkers.forEach(item => item?.marker?.remove());
+    miniMarkers.forEach(marker => marker?.remove());
+    mainMarkers = [];
+    miniMarkers = [];
+
+    let restored = 0;
+    for (const pinId in pinsData) {
+      if (loadId !== mapPinsLoadId || currentUser?.uid !== userId) return;
+      const pin = pinsData[pinId];
+      if (pin.lat && pin.lng && pin.source !== 'farm_default') {
+        // Restoring a remote pin must never push a new copy back to Firebase.
+        addPin(pin.lat, pin.lng, pin.label, pin.confidence, pin.source,
+          { persist: false, deferRender: true });
+        if (++restored % 25 === 0) await new Promise(resolve => setTimeout(resolve, 0));
       }
-      
-      console.log('📍 Loading saved pins from Firebase:', Object.keys(pinsData).length, 'pins');
-      
-      // Clear current log and markers
-      log = [];
-      mainMarkers.forEach(item => item?.marker?.remove());
-      miniMarkers.forEach(marker => marker?.remove());
-      mainMarkers = [];
-      miniMarkers = [];
-      
-      // Restore each pin
-      for (const pinId in pinsData) {
-        const pin = pinsData[pinId];
-        if (pin.lat && pin.lng && pin.source !== 'farm_default') {
-          addPin(pin.lat, pin.lng, pin.label, pin.confidence, pin.source);
-        }
-      }
-      
-      console.log('✅ Restored', Object.keys(pinsData).length, 'pins from Firebase');
-    });
+    }
+    if (loadId !== mapPinsLoadId || currentUser?.uid !== userId) return;
+    syncSessionMapPins();
+    refreshMapPins();
+    console.log('✅ Restored', Object.keys(pinsData).length, 'pins from Firebase');
   } catch (error) {
     console.warn('⚠️  Failed to load pins from Firebase:', error);
   }
@@ -1695,9 +1762,10 @@ window.applyMapFilters = function() {
   const area = document.getElementById('map-filter-area')?.value || '';
   const severity = document.getElementById('map-filter-severity')?.value || '';
   const matchingEntries = log.filter(entry => matchesMapFilters(entry, disease, area, severity));
+  const matchingSet = new Set(matchingEntries);
 
   log.forEach(entry => {
-    const show = matchingEntries.includes(entry);
+    const show = matchingSet.has(entry);
     if (entry.mainMarker?.getElement) entry.mainMarker.getElement().style.display = show ? '' : 'none';
     if (entry.miniMarker?.getElement) entry.miniMarker.getElement().style.display = show ? '' : 'none';
   });
@@ -1708,90 +1776,80 @@ window.applyMapFilters = function() {
 };
 window.viewDetection = index => flyTo(index);
 
-function addPin(lat,lng,label,confidence,source){
-  const c=cls(label,confidence), color=getDetectionClassColor(label), pct=Math.round(confidence*100);
+function syncSessionMapPins() {
+  try {
+    sessionStorage.setItem('farmPins', JSON.stringify(log.map(({lat, lng, label, confidence, time, source}) =>
+      ({lat, lng, label, confidence, time, source}))));
+  } catch (error) { console.warn('Could not save map pins to sessionStorage:', error); }
+}
+
+function refreshMapPins() {
+  applyMapFilters();
+  updateStats();
+  const pinCountEl = document.getElementById('pin-count');
+  if (pinCountEl) pinCountEl.textContent = log.length + ' pins';
+}
+
+let mapLogRenderTimer = null;
+function scheduleMapLogRender() {
+  if (mapLogRenderTimer !== null) return;
+  mapLogRenderTimer = setTimeout(() => { mapLogRenderTimer = null; renderLog(); }, 16);
+}
+
+function attachPinMarkers(entry) {
+  if (!mapsReady || entry.mainMarker) return;
+  const popup = new maplibregl.Popup({ offset: 25 });
+  entry.mainMarker = new maplibregl.Marker({ element: createMarkerElement(entry.color) })
+    .setLngLat([entry.lng, entry.lat]).setPopup(popup).addTo(mainMap);
+  entry.miniMarker = new maplibregl.Marker({ element: createMarkerElement(entry.color) })
+    .setLngLat([entry.lng, entry.lat]).addTo(miniMap);
+  entry.popup = popup;
+  popup.setHTML(popupHtml(entry, log.indexOf(entry)));
+  mainMarkers.push({ marker: entry.mainMarker, popup });
+  miniMarkers.push(entry.miniMarker);
+}
+
+async function attachPendingMapPins() {
+  const entries = log;
+  let attached = 0;
+  for (const entry of [...entries].reverse()) {
+    if (log !== entries) return;
+    attachPinMarkers(entry);
+    if (++attached % 25 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  if (log === entries) refreshMapPins();
+}
+
+function addPin(lat,lng,label,confidence,source,{ persist = true, deferRender = false } = {}){
+  const c=cls(label,confidence), color=getDetectionClassColor(label);
   const time=new Date().toLocaleTimeString();
   const date=new Date().toISOString().slice(0,10);
-  
-  // Build popup with loading state for address
-  let popupContent=`<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>Source: ${source}<br><span style="font-size:11px;color:#666">Loading location...</span><br>Time: ${time}`;
-  
-  let markerElement = null;
-  let mainMarker = null;
-  let popup = null;
-  let miniPopup = null;
-  let miniMarker = null;
-  
-  if(mapsReady){
-    // Main map marker
-    markerElement = createMarkerElement(color);
-    popup = new maplibregl.Popup({offset: 25});
-    mainMarker = new maplibregl.Marker({element: markerElement})
-      .setLngLat([lng, lat])
-      .setPopup(popup)
-      .addTo(mainMap);
-    
-    // Mini map marker
-    const miniElement = createMarkerElement(color);
-    miniMarker = new maplibregl.Marker({element: miniElement})
-      .setLngLat([lng, lat])
-      .addTo(miniMap);
-    
-    mainMarkers.push({marker: mainMarker, popup: popup}); 
-    miniMarkers.push(miniMarker);
-    miniMap.flyTo({center: [lng, lat], zoom: 16});
-    
-    // 📊 Add disease point to heatmap layer
-    const diseaseSource = mainMap.getSource('disease-source');
-    if (diseaseSource) {
-      const diseaseData = diseaseSource._data;
-      const severity = (c === 'd') ? confidence : (c === 'w') ? confidence * 0.6 : 0.1;
-      diseaseData.features.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [lng, lat] },
-        properties: { mag: severity * 100, label, confidence: pct }
-      });
-      diseaseSource.setData(diseaseData);
-    }
-  }
-  
-  // Keep the Marker instance, not its DOM element. Filters and map controls
-  // need Marker#getElement(), while the DOM element does not provide it.
-  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',mainMarker, miniMarker, popup: popup};
+  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',
+    mainMarker: null, miniMarker: null, popup: null};
   log.unshift(entry);
-  if (popup) popup.setHTML(popupHtml(entry, 0));
+  attachPinMarkers(entry);
+  if (mapsReady && !deferRender) miniMap.flyTo({center: [lng, lat], zoom: 16});
   
   // ✅ Save pin to sessionStorage for farm location map
-  try {
-    const existingPins = JSON.parse(sessionStorage.getItem('farmPins') || '[]');
-    existingPins.unshift({lat, lng, label, confidence, time, source});
-    sessionStorage.setItem('farmPins', JSON.stringify(existingPins));
-  } catch(e) {
-    console.log('Could not save to sessionStorage:', e);
-  }
+  if (!deferRender) syncSessionMapPins();
   
   // ✅ Save pin to Firebase if user is logged in
-  if (currentUser && getUiSettings().autosave) {
+  if (persist && currentUser && getUiSettings().autosave) {
     savePinToFirebase(lat, lng, label, confidence, source);
   }
   
   // Fetch and update address asynchronously
   reverseGeocode(lat, lng).then(address => {
+    if (!log.includes(entry)) return;
     entry.address = address;
     
     // Update marker popup with real address
-    if(popup) {
-      const updatedPopup = `<b style="text-transform:capitalize">${label.replace(/_/g,' ')}</b><br>Confidence: <b>${pct}%</b><br>📍 <b>${address}</b><br>Source: ${source}<br>Time: ${time}`;
-      popup.setHTML(popupHtml(entry, log.indexOf(entry)));
-    }
+    if(entry.popup) entry.popup.setHTML(popupHtml(entry, log.indexOf(entry)));
     
-    renderLog(); // Re-render with address
+    scheduleMapLogRender();
   });
   
-  applyMapFilters();
-  updateStats();
-  const pinCountEl = document.getElementById('pin-count');
-  if (pinCountEl) pinCountEl.textContent = log.length + ' pins';
+  if (!deferRender) refreshMapPins();
 }
 
 function renderLog(){
@@ -1865,7 +1923,7 @@ function applyFarmLocation(center) {
   return true;
 }
 async function loadFarmLocation() {
-  if (!currentToken) return;
+  if (!currentToken || navigator.onLine === false) return;
   try {
     const response = await fetch('/farm/location', { headers: { Authorization: `Bearer ${currentToken}` } });
     if (!response.ok) return;
@@ -1948,12 +2006,16 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
 
 function flyTo(i){
   const d=log[i];
-  if(mapsReady){
+  if (!d) return;
+  const focus = () => {
+    if (!log.includes(d)) return;
+    attachPinMarkers(d);
     mainMap.flyTo({center: [d.lng, d.lat], zoom: 17});
-    const markerData = mainMarkers[mainMarkers.length-1-i];
-    if(markerData && markerData.popup) markerData.popup.addTo(mainMap);
-  }
+    if (d.popup) d.popup.setHTML(popupHtml(d, log.indexOf(d))).addTo(mainMap);
+  };
   switchTab('map',document.querySelectorAll('.ntab')[2]);
+  if (mapsReady) focus();
+  else mainMap.once('load', focus);
 }
 function updateStats(){
   const total=log.length, dis=log.filter(d=>isDiseaseClass(d.label)).length, ok=total-dis;
@@ -1963,6 +2025,7 @@ function updateStats(){
   });
 }
 function clearPins(){
+  mapPinsLoadId++;
   mainMarkers.forEach(m=>{
     if(m && m.marker) m.marker.remove();
   });
@@ -2266,6 +2329,7 @@ async function detectImage(file, onUploadProgress){
   const data = await new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', '/detect/image');
+    request.timeout = 300_000;
     if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
     request.upload.addEventListener('progress', event => {
       if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
@@ -2284,7 +2348,7 @@ async function detectImage(file, onUploadProgress){
       }
     });
     request.addEventListener('error', () => reject(new Error('Network error while uploading image.')));
-    request.addEventListener('timeout', () => reject(new Error('Image upload timed out.')));
+    request.addEventListener('timeout', () => reject(new Error('Image upload timed out. Check your records before retrying.')));
     request.send(fd);
   });
   if (data.record_id) clearUserRecordsCache();

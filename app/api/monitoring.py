@@ -1,6 +1,7 @@
 """Authenticated treatment monitoring endpoints."""
 
 import logging
+from starlette.concurrency import run_in_threadpool
 import re
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -321,6 +322,24 @@ def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
                            for item in store.list_follow_ups(farmer_id, case_id)]}
 
 
+def _decode_follow_up(contents: bytes, declared_type: str | None):
+    try:
+        with Image.open(BytesIO(contents)) as image:
+            if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
+                raise ValueError(f"Upload must be a JPEG or PNG image of at most {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels")
+            content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
+            image.verify()
+        if declared_type != content_type:
+            raise ValueError("Image MIME type does not match its contents")
+        decoded_image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+        if decoded_image is None:
+            raise ValueError("Upload must be a valid image")
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(400, str(exc) or "Upload must be a valid image") from exc
+
+    return decoded_image, content_type
+
+
 @router.post("/monitoring/cases/{case_id}/follow-ups", status_code=201)
 async def upload_follow_up(case_id: str, file: UploadFile = File(...),
                            preliminary_status: str = Form("needs_review"),
@@ -329,8 +348,8 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
                            decoded: dict = Depends(verify_firebase_token)):
     _case_id(case_id)
     farmer_id = _farmer(decoded)
-    case = _require_case(farmer_id, case_id)
-    allowance = store.follow_up_upload_allowance(farmer_id, case["tree_id"])
+    case = await run_in_threadpool(_require_case, farmer_id, case_id)
+    allowance = await run_in_threadpool(store.follow_up_upload_allowance, farmer_id, case["tree_id"])
     if allowance["remaining"] == 0:
         raise HTTPException(409, store.FOLLOW_UP_LIMIT_MESSAGE)
     if preliminary_status not in {"needs_review", "improving", "no_visible_change", "worsening"}:
@@ -340,7 +359,7 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     if follow_up_schedule_id:
         if not _ID.fullmatch(follow_up_schedule_id):
             raise HTTPException(404, "Follow-up schedule not found")
-        follow_up_schedule = store.get_follow_up_schedule(farmer_id, case_id, follow_up_schedule_id)
+        follow_up_schedule = await run_in_threadpool(store.get_follow_up_schedule, farmer_id, case_id, follow_up_schedule_id)
         if not follow_up_schedule:
             raise HTTPException(404, "Follow-up schedule not found")
         treatment_application_id = follow_up_schedule.get("treatment_application_id")
@@ -354,22 +373,24 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         raise HTTPException(413, "Image upload is too large")
     if not contents:
         raise HTTPException(400, "Image upload is empty")
-    try:
-        with Image.open(BytesIO(contents)) as image:
-            if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
-                raise ValueError(f"Upload must be a JPEG or PNG image of at most {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels")
-            content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
-            image.verify()
-        if file.content_type != content_type:
-            raise ValueError("Image MIME type does not match its contents")
-        decoded_image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-        if decoded_image is None:
-            raise ValueError("Upload must be a valid image")
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
-        raise HTTPException(400, str(exc) or "Upload must be a valid image") from exc
+    decoded_image, content_type = await run_in_threadpool(
+        _decode_follow_up, contents, file.content_type,
+    )
 
     await limiter.rolling(f"image-minute:{farmer_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{farmer_id}", IMAGE_INFERENCE_DAILY_LIMIT)
+    return await run_in_threadpool(
+        _process_follow_up, case, farmer_id, case_id, contents, file.filename,
+        decoded_image, content_type, tree_contents, tree_mime,
+        tree_reference_file.filename if tree_reference_file is not None else "",
+        preliminary_status, follow_up_schedule_id, treatment_application_id,
+    )
+
+
+def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_image,
+                       content_type, tree_contents, tree_mime, tree_filename,
+                       preliminary_status, follow_up_schedule_id, treatment_application_id):
+    """Keep evidence uploads and the commit/cleanup sequence together in one worker."""
     from model import detector  # noqa: PLC0415
     from drone_gps import DroneGPS  # noqa: PLC0415
 
@@ -387,7 +408,7 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
     image_dimensions = {"width": int(image_width), "height": int(image_height)}
     predictions = _annotated_detections(result["detections"], (image_width, image_height))
     gps_reader = DroneGPS()
-    gps = gps_reader.extract_gps_from_image(contents, file.filename or "")
+    gps = gps_reader.extract_gps_from_image(contents, filename or "")
     gps_data = ({"latitude": gps.latitude, "longitude": gps.longitude,
                  "accuracy": gps.accuracy, "source": gps.source} if gps else None)
     follow_up_id = uuid4().hex
@@ -404,7 +425,7 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         uploaded_evidence.append(original_asset)
         if tree_contents is not None:
             metadata = reference_metadata(case, uuid4().hex, farmer_id, tree_contents,
-                                          tree_mime, tree_reference_file.filename or "", follow_up_id)
+                                          tree_mime, tree_filename or "", follow_up_id)
             tree_asset = upload_asset(tree_contents, tree_mime, "whole-tree-reference")
             uploaded_evidence.append(tree_asset)
             tree_reference = {**metadata, "image_asset": tree_asset}
@@ -420,7 +441,7 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         follow_up_schedule_id=follow_up_schedule_id,
         treatment_application_id=treatment_application_id,
         created_at=_audit_timestamp(),
-        filename=file.filename or "", predictions=predictions,
+        filename=filename or "", predictions=predictions,
         image_dimensions=image_dimensions,
         annotation_format="xyxy-normalized-v1",
         image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/original",

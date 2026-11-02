@@ -1,0 +1,534 @@
+{
+  "date": "2026-11-02",
+  "timezone": "Asia/Manila",
+  "baseline": "Working tree at task start; pre-existing edits retained",
+  "python_baseline_passed": 274,
+  "python_final_passed": 280,
+  "javascript_baseline_passed": 25,
+  "javascript_final_passed": 39,
+  "responsiveness_before": {
+    "fixture": "synthetic 4000x3000 JPEG; fake inference 20ms, persistence 30ms",
+    "python": "3.13.0 (tags/v3.13.0:60403a5, Oct  7 2024, 09:38:07) [MSC v.1941 64 bit (AMD64)]",
+    "stages": {
+      "upload_read_ms": {
+        "n": 12,
+        "median_ms": 0.5,
+        "p95_ms": 0.9
+      },
+      "validation_ms": {
+        "n": 12,
+        "median_ms": 0.2,
+        "p95_ms": 0.2
+      },
+      "metadata_gps_ms": {
+        "n": 12,
+        "median_ms": 10.5,
+        "p95_ms": 12.4
+      },
+      "decode_ms": {
+        "n": 12,
+        "median_ms": 283.15,
+        "p95_ms": 287.8
+      },
+      "inference_ms": {
+        "n": 12,
+        "median_ms": 21.4,
+        "p95_ms": 22.0
+      },
+      "farm_center_lookup_ms": {
+        "n": 12,
+        "median_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "preview_encode_ms": {
+        "n": 12,
+        "median_ms": 67.65,
+        "p95_ms": 72.6
+      },
+      "cloudinary_upload_ms": {
+        "n": 12,
+        "median_ms": 20.0,
+        "p95_ms": 20.0
+      },
+      "firestore_write_ms": {
+        "n": 12,
+        "median_ms": 10.0,
+        "p95_ms": 10.0
+      },
+      "persistence_total_ms": {
+        "n": 12,
+        "median_ms": 31.45,
+        "p95_ms": 31.7
+      },
+      "request_total_ms": {
+        "n": 12,
+        "median_ms": 414.0,
+        "p95_ms": 432.4
+      }
+    },
+    "workloads": {
+      "upload": {
+        "total": {
+          "n": 12,
+          "median_ms": 417.738,
+          "p95_ms": 436.795
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 296.247,
+          "p95_ms": 300.54
+        }
+      },
+      "records_read": {
+        "total": {
+          "n": 12,
+          "median_ms": 40.439,
+          "p95_ms": 41.076
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 40.689,
+          "p95_ms": 41.26
+        }
+      },
+      "notifications_read": {
+        "total": {
+          "n": 12,
+          "median_ms": 40.496,
+          "p95_ms": 40.661
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 40.699,
+          "p95_ms": 40.868
+        }
+      },
+      "auth_dependency": {
+        "total": {
+          "n": 12,
+          "median_ms": 40.476,
+          "p95_ms": 40.704
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 40.715,
+          "p95_ms": 40.938
+        }
+      }
+    },
+    "upload_bytes": 11652877
+  },
+  "responsiveness_after": {
+    "fixture": "synthetic 4000x3000 JPEG; fake inference 20ms, persistence 30ms",
+    "python": "3.13.0 (tags/v3.13.0:60403a5, Oct  7 2024, 09:38:07) [MSC v.1941 64 bit (AMD64)]",
+    "stages": {
+      "upload_read_ms": {
+        "n": 12,
+        "median_ms": 0.5,
+        "p95_ms": 0.9
+      },
+      "validation_ms": {
+        "n": 12,
+        "median_ms": 0.2,
+        "p95_ms": 0.2
+      },
+      "metadata_gps_ms": {
+        "n": 12,
+        "median_ms": 10.75,
+        "p95_ms": 11.5
+      },
+      "decode_ms": {
+        "n": 12,
+        "median_ms": 288.1,
+        "p95_ms": 305.1
+      },
+      "inference_ms": {
+        "n": 12,
+        "median_ms": 21.2,
+        "p95_ms": 21.5
+      },
+      "farm_center_lookup_ms": {
+        "n": 12,
+        "median_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "preview_encode_ms": {
+        "n": 12,
+        "median_ms": 71.3,
+        "p95_ms": 77.7
+      },
+      "cloudinary_upload_ms": {
+        "n": 12,
+        "median_ms": 20.0,
+        "p95_ms": 20.0
+      },
+      "firestore_write_ms": {
+        "n": 12,
+        "median_ms": 10.0,
+        "p95_ms": 10.0
+      },
+      "persistence_total_ms": {
+        "n": 12,
+        "median_ms": 31.3,
+        "p95_ms": 31.9
+      },
+      "request_total_ms": {
+        "n": 12,
+        "median_ms": 424.6,
+        "p95_ms": 447.3
+      }
+    },
+    "workloads": {
+      "upload": {
+        "total": {
+          "n": 12,
+          "median_ms": 426.859,
+          "p95_ms": 447.446
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 18.537,
+          "p95_ms": 20.316
+        }
+      },
+      "records_read": {
+        "total": {
+          "n": 12,
+          "median_ms": 41.366,
+          "p95_ms": 41.517
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 16.615,
+          "p95_ms": 18.261
+        }
+      },
+      "notifications_read": {
+        "total": {
+          "n": 12,
+          "median_ms": 41.359,
+          "p95_ms": 41.651
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 16.318,
+          "p95_ms": 17.062
+        }
+      },
+      "auth_dependency": {
+        "total": {
+          "n": 12,
+          "median_ms": 41.247,
+          "p95_ms": 41.556
+        },
+        "max_heartbeat_gap": {
+          "n": 12,
+          "median_ms": 16.22,
+          "p95_ms": 20.065
+        }
+      }
+    },
+    "upload_bytes": 11652877
+  },
+  "map_before": {
+    "fixture": "200 saved pins, VM DOM/MapLibre/Firebase doubles",
+    "n": 12,
+    "median_ms": 215.37279999999998,
+    "p95_ms": 270.53520000000003,
+    "counts": {
+      "writes": 200,
+      "renders": 400,
+      "heatmaps": 400,
+      "flights": 400,
+      "sessionWrites": 200,
+      "geocodes": 0
+    }
+  },
+  "map_after": {
+    "fixture": "200 saved pins, VM DOM/MapLibre/Firebase doubles",
+    "n": 12,
+    "median_ms": 63.356599999999986,
+    "p95_ms": 83.6644,
+    "counts": {
+      "writes": 0,
+      "renders": 3,
+      "heatmaps": 1,
+      "flights": 1,
+      "sessionWrites": 1,
+      "geocodes": 0
+    }
+  },
+  "expert_cache_before": {
+    "fixture": "4 simultaneous readers, 500 records, 40ms fake query delay",
+    "runs": [
+      {
+        "duration_ms": 161.93090000888333,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 165.63780000433326,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 154.93269998114556,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 227.23000001860783,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 177.50329995760694,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 165.4811999760568,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 169.09019998274744,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 165.51739996066317,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 173.9971000351943,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 185.58649998158216,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 208.0217999755405,
+        "queries": 4,
+        "documents": 2000
+      },
+      {
+        "duration_ms": 213.8313000323251,
+        "queries": 4,
+        "documents": 2000
+      }
+    ]
+  },
+  "expert_cache_after": {
+    "fixture": "4 simultaneous readers, 500 records, 40ms fake query delay",
+    "runs": [
+      {
+        "duration_ms": 94.25409999676049,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 91.41489997273311,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 93.31259998725727,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 92.76500000851229,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 94.59940000670031,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 167.171299981419,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 95.0721999979578,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 94.58020003512502,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 95.74040002189577,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 88.77640002174303,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 92.91319997282699,
+        "queries": 1,
+        "documents": 500
+      },
+      {
+        "duration_ms": 93.80889998283237,
+        "queries": 1,
+        "documents": 500
+      }
+    ]
+  },
+  "real_model_paired": {
+    "fixture": "synthetic 4000x3000 JPEG, real model, fake auth/persistence; alternating order",
+    "weights_sha256": "1576d2fff5f8e653e51acd792bb3d43d3c7621891517841c868b41fee631497b",
+    "cold_model_import_ms": 14134.445899981074,
+    "first_handler_call_ms": 1123.094199982006,
+    "identical_outputs": true,
+    "measurements": {
+      "before": {
+        "upload_read_ms": {
+          "n": 8,
+          "median_ms": 0.3,
+          "p95_ms": 0.4
+        },
+        "validation_ms": {
+          "n": 8,
+          "median_ms": 0.15000000000000002,
+          "p95_ms": 0.2
+        },
+        "metadata_gps_ms": {
+          "n": 8,
+          "median_ms": 9.25,
+          "p95_ms": 10.9
+        },
+        "decode_ms": {
+          "n": 8,
+          "median_ms": 218.15,
+          "p95_ms": 283.6
+        },
+        "inference_ms": {
+          "n": 8,
+          "median_ms": 199.05,
+          "p95_ms": 217.2
+        },
+        "farm_center_lookup_ms": {
+          "n": 8,
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "preview_encode_ms": {
+          "n": 8,
+          "median_ms": 93.5,
+          "p95_ms": 115.9
+        },
+        "persistence_total_ms": {
+          "n": 8,
+          "median_ms": 0.6,
+          "p95_ms": 0.8
+        },
+        "request_total_ms": {
+          "n": 8,
+          "median_ms": 534.35,
+          "p95_ms": 615.8
+        },
+        "handler_wall_ms": {
+          "n": 8,
+          "median_ms": 537.2879499918781,
+          "p95_ms": 621.3745000422932
+        },
+        "model_preprocess_ms": {
+          "n": 8,
+          "median_ms": 3.1430000090040267,
+          "p95_ms": 4.09960001707077
+        },
+        "model_inference_ms": {
+          "n": 8,
+          "median_ms": 179.902449977817,
+          "p95_ms": 194.67160000931472
+        },
+        "model_postprocess_ms": {
+          "n": 8,
+          "median_ms": 2.7929000207223,
+          "p95_ms": 4.490199964493513
+        }
+      },
+      "after": {
+        "upload_read_ms": {
+          "n": 8,
+          "median_ms": 0.35,
+          "p95_ms": 0.5
+        },
+        "validation_ms": {
+          "n": 8,
+          "median_ms": 0.2,
+          "p95_ms": 0.3
+        },
+        "metadata_gps_ms": {
+          "n": 8,
+          "median_ms": 10.5,
+          "p95_ms": 11.6
+        },
+        "decode_ms": {
+          "n": 8,
+          "median_ms": 216.95,
+          "p95_ms": 280.5
+        },
+        "inference_ms": {
+          "n": 8,
+          "median_ms": 197.55,
+          "p95_ms": 237.2
+        },
+        "farm_center_lookup_ms": {
+          "n": 8,
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "preview_encode_ms": {
+          "n": 8,
+          "median_ms": 103.0,
+          "p95_ms": 133.5
+        },
+        "persistence_total_ms": {
+          "n": 8,
+          "median_ms": 0.5,
+          "p95_ms": 0.5
+        },
+        "request_total_ms": {
+          "n": 8,
+          "median_ms": 535.15,
+          "p95_ms": 638.8
+        },
+        "handler_wall_ms": {
+          "n": 8,
+          "median_ms": 537.425999995321,
+          "p95_ms": 641.2805000436492
+        },
+        "model_preprocess_ms": {
+          "n": 8,
+          "median_ms": 3.1313500076066703,
+          "p95_ms": 4.21509996522218
+        },
+        "model_inference_ms": {
+          "n": 8,
+          "median_ms": 180.7023499859497,
+          "p95_ms": 220.58879997348413
+        },
+        "model_postprocess_ms": {
+          "n": 8,
+          "median_ms": 2.9206500039435923,
+          "p95_ms": 3.9481999701820314
+        }
+      }
+    }
+  }
+}

@@ -90,7 +90,7 @@ def get_pending_records(
 
 
 @router.post("/records/{user_id}/{record_id}/verify")
-async def verify_expert_record(
+def verify_expert_record(
     user_id: str,
     record_id: str,
     payload: VerificationUpdate,
@@ -181,7 +181,7 @@ async def verify_expert_record(
 
 
 @router.get("/recommendations")
-async def get_expert_recommendations(decoded: dict = Depends(verify_firebase_token)):
+def get_expert_recommendations(decoded: dict = Depends(verify_firebase_token)):
     """List expert-edited recommendation overrides."""
     _require_expert(decoded)
     overrides = load_expert_recommendations()
@@ -196,7 +196,7 @@ async def get_expert_diseases(decoded: dict = Depends(verify_firebase_token)):
 
 
 @router.get("/recommendations/{disease}")
-async def get_expert_recommendation(disease: str, decoded: dict = Depends(verify_firebase_token)):
+def get_expert_recommendation(disease: str, decoded: dict = Depends(verify_firebase_token)):
     """Fetch a single disease recommendation override."""
     _require_expert(decoded)
     overrides = load_expert_recommendations()
@@ -205,7 +205,7 @@ async def get_expert_recommendation(disease: str, decoded: dict = Depends(verify
 
 
 @router.put("/recommendations/{disease}")
-async def update_expert_recommendation(
+def update_expert_recommendation(
     disease: str,
     payload: ExpertRecommendationUpdate,
     decoded: dict = Depends(verify_firebase_token),

@@ -45,7 +45,17 @@ def commit_care_identity(farmer_id, baseline_id, selected_id, write_case):
         data = snap.to_dict() if snap.exists else None
         if not data or data.get("user_id", farmer_id) != farmer_id:
             raise ValueError("Baseline detection not found for farmer")
-        existing = data.get("tree_id") or next(iter(historical_ids), None)
+        detection_tree_id = data.get("tree_id")
+        detection_tree = (parent.collection("trees").document(detection_tree_id)
+                          if detection_tree_id else None)
+        detection_tree_registered = bool(
+            detection_tree and detection_tree.get(transaction=transaction).exists
+        )
+        # Some older detections contain a label parsed from the upload (for
+        # example ``O1``) even though no tree was ever registered.  Such a
+        # label is not a permanent identity.  Generate and reserve a real ID
+        # when the first care record is created.
+        existing = (detection_tree_id if detection_tree_registered else None) or next(iter(historical_ids), None)
         if historical_ids and data.get("tree_id") and data["tree_id"] not in historical_ids:
             raise ValueError("Detection and historical care record tree identities conflict")
         if existing and selected_id != existing:
@@ -61,7 +71,7 @@ def commit_care_identity(farmer_id, baseline_id, selected_id, write_case):
             if tree_id == candidate:
                 transaction.create(db.collection("tree_id_reservations").document(tree_id), registration)
             transaction.create(tree, registration)
-        if not data.get("tree_id"):
+        if data.get("tree_id") != tree_id:
             transaction.update(detection, {"tree_id": tree_id})
         return write_case(transaction, tree_id)
 

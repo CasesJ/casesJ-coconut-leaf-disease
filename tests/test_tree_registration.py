@@ -98,7 +98,18 @@ def test_collision_fails_without_committing_care(database, monkeypatch):
 
 def test_legacy_detection_identity_preserved(database):
     database["/users/farmer/detections/old"] = {"user_id": "farmer", "tree_id": "old-tree"}
+    database["/users/farmer/trees/old-tree"] = {"id": "old-tree", "farmer_id": "farmer"}
     assert create(database, "farmer", "old", "old-tree") == "old-tree"
+
+
+def test_unregistered_detection_label_is_replaced_by_random_permanent_id(database):
+    database["/users/farmer/detections/old"] = {"user_id": "farmer", "tree_id": "O1"}
+
+    assigned = create(database, "farmer", "old")
+
+    assert assigned.startswith("TREE-") and len(assigned) == 15
+    assert database["/users/farmer/detections/old"]["tree_id"] == assigned
+    assert database[f"/users/farmer/trees/{assigned}"]["id"] == assigned
 
 
 def test_historical_case_link_is_preserved(database, monkeypatch):

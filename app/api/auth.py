@@ -4,6 +4,7 @@ app/api/auth.py — Authentication endpoints.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from starlette.concurrency import run_in_threadpool
 
 from app.core.security import verify_verified_firebase_token
 from app.domain.expert import is_expert_identity
@@ -21,7 +22,7 @@ async def verify_user_token(request: LoginRequest, http_request: Request):
     """Verify Firebase ID token (called after Firebase client login)."""
     await limiter.rolling(f"auth:{client_ip(http_request)}", AUTH_TOKEN_CHECKS_PER_MINUTE, 60)
     try:
-        decoded = verify_token(request.token)
+        decoded = await run_in_threadpool(verify_token, request.token)
         if decoded.get("token_verified_offline") or not decoded.get("uid"):
             raise ValueError("Firebase ID token could not be verified")
         is_expert = is_expert_identity(decoded)
@@ -56,7 +57,7 @@ async def get_current_user(decoded: dict = Depends(verify_verified_firebase_toke
 
 
 @router.post("/profile")
-async def save_user_profile(
+def save_user_profile(
     profile: UserProfileRequest,
     decoded: dict = Depends(verify_verified_firebase_token),
 ):

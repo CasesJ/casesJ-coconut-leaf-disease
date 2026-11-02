@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
-from threading import RLock
+from threading import Lock, RLock
 from time import monotonic
 from typing import Optional
 from io import BytesIO
@@ -33,6 +33,8 @@ class DetectionPersistenceError(RuntimeError):
 EXPERT_RECORDS_CACHE_TTL_SECONDS = 45
 _expert_records_cache: dict[str, object] = {"records": None, "limit": 0, "loaded_at": 0.0}
 _expert_records_cache_lock = RLock()
+_expert_records_load_lock = Lock()
+_expert_records_cache_version = 0
 
 
 def _image_size(image_bytes: bytes, dimensions: dict | None) -> tuple[int, int] | None:
@@ -85,7 +87,9 @@ def _annotated_detections(detections: list[dict], dimensions: tuple[int, int] | 
 
 def invalidate_expert_records_cache() -> None:
     """Discard the short-lived expert queue cache after a record mutation."""
+    global _expert_records_cache_version
     with _expert_records_cache_lock:
+        _expert_records_cache_version += 1
         _expert_records_cache.update({"records": None, "limit": 0, "loaded_at": 0.0})
 
 
@@ -171,6 +175,41 @@ def update_record_everywhere(user_id: str, record_id: str, updates: dict) -> boo
     return True
 
 
+def publish_thumbnail_if_absent(
+    user_id: str, record_id: str, thumbnail: dict,
+) -> tuple[bool, dict | None]:
+    """Atomically publish *thumbnail* without replacing an existing reference."""
+    fs = _require_firestore()
+    ref = _record_ref(fs, user_id, record_id)
+    if ref is None:
+        return False, None
+    try:
+        from firebase_admin import firestore  # noqa: PLC0415
+
+        @firestore.transactional
+        def commit(transaction):
+            snapshot = ref.get(transaction=transaction)
+            record = _record_from_snapshot(snapshot, user_id, record_id)
+            if record is None:
+                return False, None
+            assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
+            existing = assets.get("thumbnail")
+            if isinstance(existing, dict) and existing:
+                return False, existing
+            transaction.update(ref, {"image_assets.thumbnail": thumbnail})
+            return True, None
+
+        published, existing = commit(fs.transaction())
+    except DetectionStoreUnavailableError:
+        raise
+    except Exception as error:
+        logger.warning("Firestore thumbnail publication failed (%s)", type(error).__name__)
+        raise DetectionStoreUnavailableError("Firestore thumbnail publication failed") from None
+    if published:
+        invalidate_expert_records_cache()
+    return bool(published), existing
+
+
 def _prepare_listed_record(record: dict, user_id: str, record_id: str) -> dict:
     """Format an already ownership-checked Firestore record for list consumers."""
     record["id"] = record_id
@@ -183,9 +222,17 @@ def _prepare_listed_record(record: dict, user_id: str, record_id: str) -> dict:
 
 def get_all_user_records(limit: int = 500) -> list[dict]:
     """Return the expert queue from the canonical Firestore detections group."""
+    # Simultaneous dashboard/audit readers share the first completed query.
+    # Mutations use the separate cache lock and can still invalidate a load.
+    with _expert_records_load_lock:
+        return _load_all_user_records(limit)
+
+
+def _load_all_user_records(limit: int) -> list[dict]:
     safe_limit = max(1, min(int(limit), 2_000))
     now = monotonic()
     with _expert_records_cache_lock:
+        version = _expert_records_cache_version
         cached_records = _expert_records_cache["records"]
         cache_is_fresh = now - float(_expert_records_cache["loaded_at"]) < EXPERT_RECORDS_CACHE_TTL_SECONDS
         if cached_records is not None and cache_is_fresh and int(_expert_records_cache["limit"]) >= safe_limit:
@@ -221,11 +268,13 @@ def get_all_user_records(limit: int = 500) -> list[dict]:
 
     records = records[:safe_limit]
     with _expert_records_cache_lock:
-        _expert_records_cache.update({
-            "records": deepcopy(records),
-            "limit": safe_limit,
-            "loaded_at": monotonic(),
-        })
+        # An older snapshot must not repopulate the cache after a write.
+        if version == _expert_records_cache_version:
+            _expert_records_cache.update({
+                "records": deepcopy(records),
+                "limit": safe_limit,
+                "loaded_at": monotonic(),
+            })
     return records
 
 

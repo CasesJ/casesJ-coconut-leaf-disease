@@ -5,12 +5,14 @@ This is the only place that creates the FastAPI app, registers middleware,
 mounts static files, and includes all API routers.
 """
 import logging
+import importlib
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import configure_logging
 from app.core.config import CORS_ALLOWED_ORIGINS
@@ -32,6 +34,10 @@ async def lifespan(app: FastAPI):
     # Initialise Firebase Admin SDK (side-effect import).
     import app.infrastructure.firebase.admin  # noqa: F401
 
+    # Import once during startup so the first upload does not initialize YOLO
+    # on the event loop. Every inference path reuses model.detector.
+    await run_in_threadpool(importlib.import_module, "model")
+
     # Initialise Drone GPS.
     try:
         from drone_gps import init_drone_gps  # noqa: PLC0415
@@ -48,8 +54,8 @@ async def lifespan(app: FastAPI):
     try:
         from app.core.config import EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD  # noqa: PLC0415
         from app.infrastructure.firebase.auth import ensure_user_account  # noqa: PLC0415
-        expert_user, created = ensure_user_account(
-            EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD, {"role": "expert"}
+        expert_user, created = await run_in_threadpool(
+            ensure_user_account, EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD, {"role": "expert"}
         )
         logger.info("✅ Expert account ready: %s (%s)", expert_user.email, "created" if created else "updated")
     except Exception as exc:

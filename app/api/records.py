@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.domain.detection import apply_record_defaults
 from app.services.detection_service import get_user_records
@@ -32,7 +33,7 @@ async def get_records(decoded: dict = Depends(verify_verified_firebase_token)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Verified Firebase sign-in is required")
     try:
-        records = get_user_records(user_id)
+        records = await run_in_threadpool(get_user_records, user_id)
         for record in records:
             apply_record_defaults(record)
         return [present_detection_record(record) for record in records]
@@ -51,7 +52,7 @@ async def export_detections_csv(decoded: dict = Depends(verify_verified_firebase
     user_id = str(decoded.get("uid") or "")
     await limiter.rolling(f"export:{user_id}", EXPORTS_PER_MINUTE, 60)
     try:
-        csv_content = generate_detections_csv()
+        csv_content = await run_in_threadpool(generate_detections_csv)
         return StreamingResponse(
             iter([csv_content]),
             media_type="text/csv",

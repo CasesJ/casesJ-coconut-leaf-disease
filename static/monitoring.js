@@ -367,10 +367,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const data = await monitoringRequest(`/expert/monitoring/trees/${encodeURIComponent(record.user_id)}`);
       if (event.target.value !== value) return;
-      const ids = [...new Set([...(data.trees || []).map(tree => tree.id), record.tree_id].filter(Boolean))];
-      select.innerHTML = record.tree_id
+      const registeredIds = [...new Set((data.trees || []).map(tree => tree.id).filter(Boolean))];
+      const linkedTreeIsRegistered = record.tree_id && registeredIds.includes(record.tree_id);
+      const ids = registeredIds.filter(id => id !== record.tree_id);
+      select.innerHTML = linkedTreeIsRegistered
         ? `<option value="${monitoringText(record.tree_id)}">${monitoringText(record.tree_id)} (linked detection)</option>`
-        : '<option value="">Choose a physical tree</option><option value="__new__">Register a new tree</option>' + ids.map(id => `<option value="${monitoringText(id)}">${monitoringText(id)}</option>`).join('');
+        : '<option value="__new__">Create automatic unique Tree ID</option>' + ids.map(id => `<option value="${monitoringText(id)}">${monitoringText(id)}</option>`).join('');
       select.required = true;
       select.disabled = false;
     } catch (error) { select.innerHTML = '<option value="">Could not load trees</option>'; showToast(error.message); }

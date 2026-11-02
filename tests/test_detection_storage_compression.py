@@ -34,6 +34,25 @@ def photo(size=(80, 60), noisy=False, metadata=True):
     return output.getvalue()
 
 
+def _jpeg_segment(marker, payload):
+    return b"\xff" + bytes([marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
+
+
+def _with_segments(source, segments, *, after_scan=False):
+    if after_scan:
+        end = source.rfind(b"\xff\xd9")
+        assert end > 0
+        return source[:end] + b"".join(segments) + source[end:]
+    return source[:2] + b"".join(segments) + source[2:]
+
+
+def _compressed_copy(monkeypatch, source, limit=500_000):
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", limit)
+    stored, representation = images._prepare_cloudinary_copy(source, "image/jpeg")
+    assert representation == "compressed_jpeg_storage_copy"
+    return stored
+
+
 def test_source_is_uploaded_once_and_byte_identical(monkeypatch):
     source = photo()
     uploads = []
@@ -82,6 +101,7 @@ def test_oversized_jpeg_is_compressed_without_resizing_or_metadata_loss(monkeypa
         assert after.info.get("icc_profile") == before.info.get("icc_profile")
     before_metadata = DroneGPS.extract_image_metadata(source)
     after_metadata = DroneGPS.extract_image_metadata(stored)
+    assert before_metadata["dji_telemetry"]["relative_altitude_m"] == 35.5
     for field in ("gps", "captured_at", "camera_make", "camera_model", "is_dji", "dji_telemetry"):
         assert after_metadata[field] == before_metadata[field]
 
@@ -102,9 +122,126 @@ def test_storage_copy_rejects_any_exif_payload_change():
     source = photo()
     original = images._metadata_snapshot(source)
     changed = dict(original)
-    changed["exif_sha256"] = "0" * 64
+    changed["protected_segments"] = list(original["protected_segments"])
+    kind, size, _digest = changed["protected_segments"][0]
+    changed["protected_segments"][0] = (kind, size, "0" * 64)
 
     assert images._metadata_matches(original, changed) is False
+
+
+def test_xmp_after_scan_is_preserved_byte_identically(monkeypatch):
+    source = photo((1000, 1000), noisy=True, metadata=False)
+    xmp = _jpeg_segment(
+        0xE1, images._XMP_HEADER + b'<x:xmpmeta xmlns:x="adobe:ns:meta/">DJI</x:xmpmeta>',
+    )
+    source = _with_segments(source, [xmp], after_scan=True)
+
+    stored = _compressed_copy(monkeypatch, source)
+
+    assert xmp in source and xmp in stored
+    assert images._jpeg_protected_segments(source) == images._jpeg_protected_segments(stored)
+
+
+def test_multiple_exif_segments_are_preserved_byte_identically(monkeypatch):
+    source = photo((1000, 1000), noisy=True)
+    extra_exif = _jpeg_segment(
+        0xE1, piexif.dump({"0th": {piexif.ImageIFD.Software: b"NeuralCoco-audit"}}),
+    )
+    source = _with_segments(source, [extra_exif])
+
+    stored = _compressed_copy(monkeypatch, source)
+    source_exif = [raw for kind, raw in images._jpeg_protected_segments(source) if kind == "exif"]
+    stored_exif = [raw for kind, raw in images._jpeg_protected_segments(stored) if kind == "exif"]
+
+    assert len(source_exif) == 2
+    assert stored_exif == source_exif
+
+
+def test_multiple_icc_segments_are_preserved_byte_identically(monkeypatch):
+    source = photo((1000, 1000), noisy=True, metadata=False)
+    icc = [
+        _jpeg_segment(0xE2, images._ICC_HEADER + bytes([1, 2]) + b"first-half"),
+        _jpeg_segment(0xE2, images._ICC_HEADER + bytes([2, 2]) + b"second-half"),
+    ]
+    source = _with_segments(source, icc)
+
+    stored = _compressed_copy(monkeypatch, source)
+    stored_icc = [raw for kind, raw in images._jpeg_protected_segments(stored) if kind == "icc"]
+
+    assert stored_icc == icc
+
+
+def test_extended_dji_xmp_chunks_are_preserved_byte_identically(monkeypatch):
+    source = photo((1000, 1000), noisy=True, metadata=False)
+    guid = b"0123456789ABCDEF0123456789ABCDEF"
+    body = b'<drone-dji:RelativeAltitude>35.5</drone-dji:RelativeAltitude>'
+    split = len(body) // 2
+    standard = _jpeg_segment(
+        0xE1, images._XMP_HEADER + b'<x:xmpmeta xmpNote:HasExtendedXMP="' + guid + b'"/>',
+    )
+    extended = [
+        _jpeg_segment(0xE1, images._EXTENDED_XMP_HEADER + guid
+                      + len(body).to_bytes(4, "big") + (0).to_bytes(4, "big") + body[:split]),
+        _jpeg_segment(0xE1, images._EXTENDED_XMP_HEADER + guid
+                      + len(body).to_bytes(4, "big") + split.to_bytes(4, "big") + body[split:]),
+    ]
+    protected = [standard, *extended]
+    source = _with_segments(source, protected, after_scan=True)
+
+    stored = _compressed_copy(monkeypatch, source)
+
+    assert [raw for _, raw in images._jpeg_protected_segments(stored)] == protected
+
+
+def test_progressive_multiscan_jpeg_metadata_is_preserved(monkeypatch):
+    pixels = np.random.default_rng(7).integers(0, 256, (1000, 1000, 3), dtype=np.uint8)
+    output = BytesIO()
+    Image.fromarray(pixels, "RGB").save(output, "JPEG", quality=100, progressive=True)
+    source = output.getvalue()
+    assert source.count(b"\xff\xda") > 1
+    xmp = _jpeg_segment(0xE1, images._XMP_HEADER + b"<x:xmpmeta>multiscan</x:xmpmeta>")
+    source = _with_segments(source, [xmp], after_scan=True)
+
+    stored = _compressed_copy(monkeypatch, source)
+
+    assert xmp in stored
+    assert images._jpeg_protected_segments(source) == images._jpeg_protected_segments(stored)
+
+
+@pytest.mark.parametrize("change", ["missing", "reordered"])
+def test_missing_or_reordered_protected_segments_fail_verification(change):
+    source = photo(metadata=False)
+    segments = [
+        ("exif", _jpeg_segment(0xE1, piexif.dump({"0th": {piexif.ImageIFD.Make: b"DJI"}}))),
+        ("xmp", _jpeg_segment(0xE1, images._XMP_HEADER + b"<x:xmpmeta/>")),
+    ]
+    source = images._inject_protected_segments(source, segments)
+    candidate_segments = segments[:-1] if change == "missing" else list(reversed(segments))
+    candidate = images._inject_protected_segments(photo(metadata=False), candidate_segments)
+
+    assert images._metadata_matches(
+        images._metadata_snapshot(source), images._metadata_snapshot(candidate),
+    ) is False
+
+
+@pytest.mark.parametrize("layout", ["bad-length", "unknown-app1", "reordered-icc"])
+def test_malformed_or_unsupported_marker_layout_is_rejected(monkeypatch, layout):
+    source = photo((1000, 1000), noisy=True, metadata=False)
+    if layout == "bad-length":
+        source = source[:2] + b"\xff\xe1\x00\x01" + source[2:]
+    elif layout == "unknown-app1":
+        source = _with_segments(source, [_jpeg_segment(0xE1, b"vendor-private")])
+    else:
+        source = _with_segments(source, [
+            _jpeg_segment(0xE2, images._ICC_HEADER + bytes([2, 2]) + b"second"),
+            _jpeg_segment(0xE2, images._ICC_HEADER + bytes([1, 2]) + b"first"),
+        ])
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
+    monkeypatch.setattr(images, "upload_asset", lambda *_args, **_kwargs:
+                        pytest.fail("Unverified evidence must not be uploaded"))
+
+    with pytest.raises(images.DetectionImageProcessingError):
+        images.save_upload_image_assets("unsafe-layout", source)
 
 
 def test_unattainable_limit_rejects_copy_without_upload(monkeypatch):
