@@ -177,11 +177,11 @@ window.switchAuthMode = function switchAuthMode() {
   if (authMode === 'login') {
     title.textContent = 'Login';
     btnText.textContent = 'Login';
-    toggleText.innerHTML = 'Don\'t have an account? <a onclick="switchAuthMode()">Sign Up</a>';
+    toggleText.innerHTML = 'Don\'t have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Sign Up</button>';
   } else {
     title.textContent = 'Sign Up';
     btnText.textContent = 'Sign Up';
-    toggleText.innerHTML = 'Already have an account? <a onclick="switchAuthMode()">Login</a>';
+    toggleText.innerHTML = 'Already have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Login</button>';
   }
 
   const loginTab = document.getElementById('login-tab');
@@ -1864,7 +1864,7 @@ function renderLog(){
   if(!log.length){el.innerHTML='<div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image.</div>';return;}
   el.innerHTML=log.map((d,i)=>{
     return `
-    <div class="eitem" onclick="flyTo(${i})">
+    <button type="button" class="eitem" onclick="flyTo(${i})" aria-label="View ${escapeHtml(d.label.replace(/_/g,' '))} detection on map">
       <div class="edot" style="background:${d.color}"></div>
       <div class="ebody">
         <div class="elabel">${d.label.replace(/_/g,' ')}</div>
@@ -1872,7 +1872,7 @@ function renderLog(){
         <div class="etime">${d.time} &middot; ${d.source}</div>
         <div class="econf" style="color:${d.color}">${Math.round(d.confidence*100)}% confidence</div>
       </div>
-    </div>`
+    </button>`
   }).join('');
 }
 
@@ -2053,7 +2053,7 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
     const diseasedSamples = areas.reduce((sum, area) => sum + area.diseased, 0);
     const highest = [...areas].sort((a, b) => b.prevalence - a.prevalence)[0];
     if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Disease Prevalence</h4><div class="stat-value">${gpsSamples ? Math.round(diseasedSamples / gpsSamples * 100) : 0}%</div><div class="stat-subtext">Across mapped areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${gpsSamples && highest.prevalence ? highest.name : '—'}</div><div class="stat-subtext">Highest disease prevalence</div></div>`;
-    gridEl.innerHTML = areas.map(area => `<div class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">Disease prevalence</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : 'No samples'}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></div>`).join('');
+    gridEl.innerHTML = areas.map(area => `<button type="button" class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})" aria-label="Show ${area.name} on map, ${area.prevalence}% disease prevalence"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">Disease prevalence</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : 'No samples'}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></button>`).join('');
     if (mapsReady && mainMap.getSource('area-monitoring-src')) mainMap.getSource('area-monitoring-src').setData({ type: 'FeatureCollection', features: buildAreaFeatures(areas) });
     areaMonitoringLoaded = true;
   } catch (error) {

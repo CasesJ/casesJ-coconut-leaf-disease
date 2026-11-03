@@ -823,8 +823,8 @@
                 <div id="videoFeed" class="stream-placeholder">
                     <span id="streamStatus">Click "Start Stream" to begin</span>
                 </div>
-                <img id="streamImage" class="video-feed" style="display:none;" />
-                <div id="statusOverlay" class="status-overlay stopped">
+                <img id="streamImage" class="video-feed" alt="Live coconut disease detection stream" style="display:none;" />
+                <div id="statusOverlay" class="status-overlay stopped" role="status" aria-live="polite">
                     Stream: <span id="streamState">Stopped</span>
                 </div>
             </div>
@@ -866,7 +866,7 @@
                     <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">⚙️ Settings</h3>
 
                     <div class="setting-group">
-                        <label class="setting-label">Confidence Threshold</label>
+                        <label class="setting-label" for="confidenceSlider">Confidence Threshold</label>
                         <input
                             type="range"
                             id="confidenceSlider"
@@ -881,7 +881,7 @@
                     </div>
 
                     <div class="setting-group">
-                        <label class="setting-label">Video Source</label>
+                        <label class="setting-label" for="videoSource">Video Source</label>
                         <select id="videoSource">
                             <option value="0">📷 Webcam (Default)</option>
                             <option value="1">📹 USB Camera</option>
@@ -1040,6 +1040,7 @@
 
         // ⌨️ Keyboard controls
         document.addEventListener('keydown', (e) => {
+            if (e.target.closest('button, input, select, textarea, a, [contenteditable="true"]')) return;
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (isStreaming) stopStream();
