@@ -5,20 +5,26 @@ from pathlib import Path
 import pickle
 from datetime import datetime
 import json
+import re
+
+from app.core.config import INFERENCE_BACKEND, OPENVINO_MODEL_DIR
 
 # Keep Ultralytics from touching the user's profile directory on Windows.
 _ultralytics_config_dir = Path(__file__).resolve().parent / ".ultralytics"
 _ultralytics_config_dir.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("YOLO_CONFIG_DIR", str(_ultralytics_config_dir))
 
-try:
-    from ultralytics import YOLO
-    ULTRALYTICS_AVAILABLE = True
-except Exception:
+if INFERENCE_BACKEND == "ultralytics":
+    try:
+        from ultralytics import YOLO
+        ULTRALYTICS_AVAILABLE = True
+    except Exception:
+        YOLO = None
+        ULTRALYTICS_AVAILABLE = False
+else:
+    # Do not import Ultralytics/PyTorch in the Render OpenVINO process.
     YOLO = None
     ULTRALYTICS_AVAILABLE = False
-
-from openvino import Core
 
 # These labels belong to older model datasets and must not be returned by the
 # current application.  A model trained with Stem Bleeding examples is required
@@ -30,7 +36,7 @@ class CoconutDiseaseDetector:
         """Initialize the required local YOLO26 v6 weights for inference."""
         current_dir = Path(__file__).parent
         self.current_dir = current_dir
-        self.backend = "ultralytics"
+        self.backend = INFERENCE_BACKEND
         self.active_model_path = None
 
         # Default class names from the existing dataset
@@ -43,31 +49,24 @@ class CoconutDiseaseDetector:
             5: "bud rot",
         }
 
-        model_pt = current_dir / "weights.pt"
-        if not model_pt.is_file():
-            raise FileNotFoundError(
-                f"Required YOLO26 v6 model weights were not found: {model_pt}"
-            )
-        if not ULTRALYTICS_AVAILABLE:
-            raise RuntimeError(
-                "Ultralytics is required to run the local YOLO26 v6 weights.pt model. "
-                "Install the dependencies and restart the application."
-            )
-
-        try:
-            print(f"[OK] Loading required YOLO26 v6 model from {model_pt}")
-            self.yolo_model = YOLO(str(model_pt))
-            self.active_model_path = model_pt
-            self.model_height = 640
-            self.model_width = 640
-            self.class_names = self._normalize_class_names(
-                getattr(self.yolo_model, "names", self.class_names)
-            )
-            print("[OK] YOLO26 v6 weights loaded successfully")
-        except Exception as exc:
-            raise RuntimeError(
-                f"Unable to load the required YOLO26 v6 weights from {model_pt}."
-            ) from exc
+        self.model_height = 640
+        self.model_width = 640
+        if self.backend == "ultralytics":
+            model_pt = current_dir / "weights.pt"
+            if not model_pt.is_file():
+                raise FileNotFoundError(f"Required YOLO26 v6 model weights were not found: {model_pt}")
+            if not ULTRALYTICS_AVAILABLE:
+                raise RuntimeError("Ultralytics is required to run the local YOLO26 v6 weights.pt model.")
+            try:
+                print(f"[OK] Loading required YOLO26 v6 model from {model_pt}")
+                self.yolo_model = YOLO(str(model_pt))
+                self.active_model_path = model_pt
+                self.class_names = self._normalize_class_names(getattr(self.yolo_model, "names", self.class_names))
+                print("[OK] YOLO26 v6 weights loaded successfully")
+            except Exception as exc:
+                raise RuntimeError(f"Unable to load required YOLO26 v6 weights from {model_pt}.") from exc
+        else:
+            self._load_openvino_model()
         
         # ──── Load ML Recommendation Models ────
         print("[OK] Loading ML recommendation classifiers...")
@@ -139,6 +138,31 @@ class CoconutDiseaseDetector:
             8: "Use drip irrigation for consistent moisture delivery",
             9: "Apply mulch (10cm) around base to retain soil moisture"
         }
+
+    def _load_openvino_model(self) -> None:
+        """Load only the reviewed dynamic IR exported from the current weights.pt."""
+        xml_path = OPENVINO_MODEL_DIR / "weights.xml"
+        bin_path = OPENVINO_MODEL_DIR / "weights.bin"
+        metadata_path = OPENVINO_MODEL_DIR / "metadata.yaml"
+        if not (xml_path.is_file() and bin_path.is_file() and metadata_path.is_file()):
+            raise FileNotFoundError(f"Required OpenVINO model files are missing in {OPENVINO_MODEL_DIR}")
+        metadata = metadata_path.read_text(encoding="utf-8")
+        if "description: Ultralytics YOLO26s" not in metadata or "dynamic: true" not in metadata:
+            raise RuntimeError("OpenVINO model provenance check failed; expected the reviewed dynamic YOLO26s export")
+        names = {int(key): value.strip() for key, value in re.findall(r"^  (\d+):\s*(.+)$", metadata, re.MULTILINE)}
+        expected = {0: "bud root", 1: "healthy", 2: "pestalotiopsis", 3: "stem bleeding"}
+        if names != expected:
+            raise RuntimeError("OpenVINO model class mapping does not match the current weights.pt export")
+        try:
+            from openvino import Core
+            core = Core()
+            compiled = core.compile_model(core.read_model(xml_path), "CPU")
+            self.infer_request = compiled.create_infer_request()
+            self.active_model_path = xml_path
+            self.class_names = names
+            print(f"[OK] Loaded reviewed dynamic OpenVINO YOLO26s model from {xml_path}")
+        except Exception as exc:
+            raise RuntimeError(f"Unable to load required OpenVINO model from {xml_path}.") from exc
 
     def _normalize_class_names(self, names) -> dict[int, str]:
         """Convert Ultralytics class metadata into a simple integer->label map."""
@@ -335,138 +359,45 @@ class CoconutDiseaseDetector:
         }
 
     def _predict_with_openvino(self, image: np.ndarray, conf: float = 50, *, annotate: bool = True) -> dict:
-        """Run inference using the OpenVINO export."""
-        print(f"[PREDICT] Starting OpenVINO prediction with confidence threshold: {conf}")
-        # Normalize confidence to 0-1 range if needed
-        confidence_threshold = conf / 100.0 if conf > 1 else conf
-        image_height, image_width = image.shape[:2]
-        box_thickness = 4
-        font_scale = 0.9
-        text_thickness = 2
-        text_padding = 8
-
-        # Store original image dimensions
+        """Run the reviewed dynamic IR with the exact single-image Ultralytics transform."""
+        threshold = conf / 100.0 if conf > 1 else conf
         original_height, original_width = image.shape[:2]
-        image_total_area = original_width * original_height  # For disease severity calculation
-
-        # Preprocess image for model input
-        # YOLO26s expects 640x640 RGB images normalized to 0-1
-        resized_image = cv2.resize(image, (self.model_width, self.model_height))
-        resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
-
-        # Normalize to 0-1 range
-        input_data = resized_image.astype(np.float32) / 255.0
-
-        # Add batch dimension (1, 3, 640, 640)
-        input_data = np.transpose(input_data, (2, 0, 1))
-        input_data = np.expand_dims(input_data, 0)
-
-        print(f"[OK] Input prepared - shape: {input_data.shape}")
-
-        # Run inference
+        gain = min(self.model_height / original_height, self.model_width / original_width)
+        resized_size = (round(original_width * gain), round(original_height * gain))
+        pad_x = (self.model_width - resized_size[0]) % 32
+        pad_y = (self.model_height - resized_size[1]) % 32
+        transformed = cv2.resize(image, resized_size, interpolation=cv2.INTER_LINEAR) if resized_size != (original_width, original_height) else image
+        left, right = round(pad_x / 2 - 0.1), round(pad_x / 2 + 0.1)
+        top, bottom = round(pad_y / 2 - 0.1), round(pad_y / 2 + 0.1)
+        transformed = cv2.copyMakeBorder(transformed, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        input_data = np.ascontiguousarray(transformed[..., ::-1].transpose(2, 0, 1))[None].astype(np.float32) / 255.0
         self.infer_request.infer([input_data])
-        output = self.infer_request.get_output_tensor(0).data
-
-        print(f"[MODEL] Output shape: {output.shape}")
-
-        # Parse YOLO26 output format: [1, 300, 6]
-        # Each detection: [x1, y1, x2, y2, confidence, class_id]
-        # Output is already in pixel coordinates (0-640) and post-processed
-
-        raw_detections = []  # Collect all detections first
-
-        # Extract predictions from output shape [1, 300, 6]
-        if len(output.shape) == 3:
-            predictions = output[0]  # [300, 6]
-        else:
-            predictions = output  # Already [300, 6]
-
-        print(f"[DATA] Predictions shape: {predictions.shape}")
-
-        # First pass: Collect all predictions above confidence threshold
-        if predictions.shape[0] > 0:
-            for pred in predictions:
-                try:
-                    # Extract bbox coordinates and confidence
-                    # Format: [x1, y1, x2, y2, confidence, class_id]
-                    x1_norm, y1_norm, x2_norm, y2_norm = pred[:4]
-                    class_conf = pred[4]
-                    class_id = int(pred[5])
-
-                    # Filter by confidence threshold
-                    if class_conf < confidence_threshold:
-                        continue
-
-                    # Coordinates are in normalized 0-640 pixel space
-                    # Scale to actual image dimensions
-                    scale_x = original_width / self.model_width
-                    scale_y = original_height / self.model_height
-
-                    x1 = int(max(0, x1_norm * scale_x))
-                    y1 = int(max(0, y1_norm * scale_y))
-                    x2 = int(min(original_width, x2_norm * scale_x))
-                    y2 = int(min(original_height, y2_norm * scale_y))
-
-                    # Skip invalid boxes or very small detections
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-
-                    class_name = self.class_names.get(class_id, 'unknown')
-                    if class_name.lower().strip().replace('_', ' ') in RETIRED_DETECTION_CLASSES:
-                        continue
-
-                    raw_detections.append({
-                        "class": class_name,
-                        "class_id": class_id,
-                        "confidence": float(class_conf),
-                        "bbox": [x1, y1, x2, y2]
-                    })
-                except Exception:
-                    continue
-
-        print(f"[NMS] Found {len(raw_detections)} raw detections before NMS")
-
-        # Second pass: Apply NMS to remove overlapping boxes
+        predictions = self.infer_request.get_output_tensor(0).data[0]
+        raw_detections = []
+        for x1, y1, x2, y2, score, class_value in predictions:
+            if float(score) <= threshold:  # Matches Ultralytics end-to-end confidence filtering.
+                continue
+            class_id = int(class_value)
+            class_name = self.class_names.get(class_id, "unknown")
+            if class_name.lower().strip().replace("_", " ") in RETIRED_DETECTION_CLASSES:
+                continue
+            x1, x2 = (x1 - left) / gain, (x2 - left) / gain
+            y1, y2 = (y1 - top) / gain, (y2 - top) / gain
+            box = [int(max(0, x1)), int(max(0, y1)), int(min(original_width, x2)), int(min(original_height, y2))]
+            if box[2] > box[0] and box[3] > box[1]:
+                raw_detections.append({"class": class_name, "class_id": class_id, "confidence": float(score), "bbox": box})
         detections = self._non_max_suppression(raw_detections, nms_threshold=0.45)
-
-        print(f"[FILTER] After NMS: {len(detections)} detections")
-
-        # Draw detections on image
+        annotated_image = image.copy() if annotate else image
         for det in detections if annotate else ():
-            x1, y1, x2, y2 = det['bbox']
-            class_name = det['class']
-            confidence = det['confidence']
-
-            print(f"   [+] {class_name} - Confidence: {confidence:.2%}")
-
-            # Draw bounding box (Green for Healthy, Red for diseases)
-            color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
-            cv2.rectangle(image, (x1, y1), (x2, y2), color, box_thickness)
-
-            # Draw text with background
-            text = f"{class_name} {confidence:.2%}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            text_size = cv2.getTextSize(text, font, font_scale, text_thickness)[0]
-
-            text_x = x1
-            text_y = max(text_size[1] + text_padding, y1 - text_padding)
-            cv2.rectangle(image, (text_x - text_padding, text_y - text_size[1] - text_padding),
-                          (text_x + text_size[0] + text_padding, text_y + text_padding), color, -1)
-            cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), text_thickness)
-
-        # Format output detections
-        output_detections = [{
-            "class": d['class'],
-            "confidence": round(d['confidence'], 3),
-            "bbox": d['bbox']
-        } for d in detections]
-
-        print(f"[OK] Successfully processed with {len(output_detections)} final detections")
-
-        return {
-            "detections": output_detections,
-            "image": image
-        }
+            x1, y1, x2, y2 = det["bbox"]
+            color = (0, 200, 100) if det["class"].lower() == "healthy" else (0, 60, 220)
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 4)
+            text = f"{det['class']} {det['confidence']:.2%}"
+            size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)[0]
+            text_y = max(size[1] + 8, y1 - 8)
+            cv2.rectangle(annotated_image, (x1 - 8, text_y - size[1] - 8), (x1 + size[0] + 8, text_y + 8), color, -1)
+            cv2.putText(annotated_image, text, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        return {"detections": [{"class": d["class"], "confidence": round(d["confidence"], 3), "bbox": d["bbox"]} for d in detections], "image": annotated_image}
 
     def get_fertilizer_recommendation(self, disease_name: str, confidence: float, gps_data: dict = None, user_location: dict = None) -> dict:
         """

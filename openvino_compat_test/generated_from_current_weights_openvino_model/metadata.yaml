@@ -1,0 +1,26 @@
+description: Ultralytics YOLO26s model trained on /train/cache/dataset/data.yaml
+author: Ultralytics
+date: '2026-11-04T01:20:36.293929'
+version: 8.4.23
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: bud root
+  1: healthy
+  2: pestalotiopsis
+  3: stem bleeding
+args:
+  batch: 1
+  fraction: 1.0
+  half: false
+  int8: false
+  dynamic: false
+  nms: false
+channels: 3
+end2end: true

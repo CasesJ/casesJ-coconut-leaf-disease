@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: coconut-disease-detector
+    runtime: python
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: INFERENCE_BACKEND
+        value: openvino
+      - key: OPENVINO_MODEL_DIR
+        value: models/yolo26s_openvino_model

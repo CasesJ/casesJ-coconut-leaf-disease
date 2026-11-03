@@ -74,6 +74,12 @@ FARM_CENTER_CACHE_TTL_SECONDS = _positive_int_env("FARM_CENTER_CACHE_TTL_SECONDS
 TREE_IDENTITY_GPS_TOLERANCE_METERS = _positive_int_env("TREE_IDENTITY_GPS_TOLERANCE_METERS", 25)
 TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
 
+# Inference backend. Render must opt in explicitly; local development keeps the
+# established Ultralytics/PyTorch path unless this value is changed.
+INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "ultralytics").strip().lower()
+if INFERENCE_BACKEND not in {"ultralytics", "openvino"}:
+    raise RuntimeError("INFERENCE_BACKEND must be 'ultralytics' or 'openvino'")
+
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05
@@ -123,6 +129,9 @@ EXPERT_DISEASE_OPTIONS: list[str] = [
 # ── Filesystem paths ───────────────────────────────────────────────────────────
 # All paths are relative to the project root (one level above app/).
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+OPENVINO_MODEL_DIR: Path = Path(os.getenv(
+    "OPENVINO_MODEL_DIR", str(_PROJECT_ROOT / "models" / "yolo26s_openvino_model")
+)).expanduser()
 
 UPLOAD_IMAGE_DIR: Path = _PROJECT_ROOT / "static" / "uploads"
 ANNOTATED_IMAGE_DIR: Path = _PROJECT_ROOT / "static" / "annotated_uploads"
