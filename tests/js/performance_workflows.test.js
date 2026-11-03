@@ -33,6 +33,15 @@ test('a new pin still autosaves exactly once', async () => {
   assert.equal(h.context.log.length, 1);
 });
 
+test('metadata-backed detection records restore pins without writes or geocoding', async () => {
+  const h = harness(0);
+  await h.context.restoreMetadataRecordPins([{ id: 'metadata-record', detections: [{ class: 'Bud Rot', confidence: .9 }], image_metadata: { gps: { latitude: 7.301, longitude: 125.631 } } }]);
+  assert.equal(h.context.log.length, 1);
+  assert.equal(h.context.log[0].source, 'Embedded image metadata');
+  assert.equal(h.counts.writes, 0);
+  assert.equal(h.counts.geocodes, 0);
+});
+
 test('offline map restoration does not wait for Firebase', async () => {
   const h = harness(0);
   h.context.navigator.onLine = false;

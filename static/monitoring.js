@@ -1,5 +1,5 @@
 // Treatment monitoring uses the existing auth globals and FastAPI routes.
-const monitoringState = { cases: [], selected: null, overview: null, expertRecords: [], search: '' };
+const monitoringState = { cases: [], selected: null, overview: null, expertRecords: [], search: '', filter: 'all', sort: 'latest', detailRequest: 0 };
 
 window.monitoringOpenTree = function (encodedTree, encodedFarmer) {
   monitoringState.requestedTree = { id: decodeURIComponent(encodedTree), farmer: decodeURIComponent(encodedFarmer) };
@@ -105,6 +105,64 @@ function monitoringCaseReview(item) {
   if (item.latest_review_status === 'pending_expert_review') return { text: 'Awaiting expert review', cls: 'review' };
   return { text: 'No inspection yet', cls: '' };
 }
+function monitoringTreatmentBadge(item) {
+  if (item.monitoring_status === 'finish') return { text: 'Completed', cls: '' };
+  return ({
+    awaiting_treatment: { text: 'Awaiting Treatment', cls: 'neutral' },
+    treatment_scheduled: { text: 'Treatment Scheduled', cls: 'due' },
+    treatment_applied: { text: 'In Treatment', cls: '' }
+  })[item.treatment_status] || { text: 'Not recorded', cls: 'neutral' };
+}
+function monitoringInspectionBadge(item) {
+  if (item.monitoring_status === 'finish') return { text: 'Expert Confirmed', cls: '' };
+  if (item.latest_review_status === 'pending_expert_review') return { text: 'Awaiting Expert Review', cls: 'review' };
+  const dates = [item.next_follow_up_date, item.next_post_treatment_follow_up_date].filter(Boolean);
+  if (dates.some(date => ['due', 'overdue'].includes(monitoringDue(date).cls))) return { text: 'Needs Inspection', cls: 'due' };
+  if (item.latest_review_status === 'expert_confirmed') return { text: 'Expert Confirmed', cls: '' };
+  return { text: 'Awaiting Inspection', cls: 'neutral' };
+}
+function monitoringLastActivity(item) {
+  return [item.created_at, item.updated_at, item.finished_at, item.last_inspection_at, item.schedule_updated_at,
+    item.planned_treatment_updated_at, item.treatment_updated_at,
+    item.latest_treatment_application_date].filter(value => value && Number.isFinite(Date.parse(value)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] || null;
+}
+function monitoringMatchesFilter(item) {
+  switch (monitoringState.filter) {
+    case 'awaiting': return item.monitoring_status !== 'finish' && item.treatment_status === 'awaiting_treatment';
+    case 'treatment': return item.monitoring_status !== 'finish' && ['treatment_scheduled', 'treatment_applied'].includes(item.treatment_status);
+    case 'inspection': return monitoringInspectionBadge(item).text === 'Needs Inspection';
+    case 'review': return item.latest_review_status === 'pending_expert_review';
+    case 'completed': return item.monitoring_status === 'finish';
+    default: return true;
+  }
+}
+function monitoringBadge(status) {
+  return `<span class="monitor-pill ${status.cls}">${monitoringText(status.text)}</span>`;
+}
+function monitoringOpenModal() {
+  const modal = document.getElementById('monitor-case-modal');
+  if (!modal || modal.open) return;
+  monitoringState.returnFocus = document.activeElement;
+  modal.showModal();
+  document.documentElement.classList.add('monitor-modal-open');
+}
+function monitoringCloseModal() {
+  const modal = document.getElementById('monitor-case-modal');
+  if (modal?.open) {
+    modal.close();
+    monitoringModalCleanup();
+  }
+}
+function monitoringModalCleanup() {
+  monitoringState.detailRequest++;
+  monitoringState.overview = null;
+  document.documentElement.classList.remove('monitor-modal-open');
+  document.getElementById('monitor-detail').replaceChildren();
+  if (monitoringState.returnFocus?.isConnected) monitoringState.returnFocus.focus();
+  else document.getElementById('monitor-case-search')?.focus();
+  monitoringState.returnFocus = null;
+}
 function monitoringEmptyState(title, description, steps = true) {
   return `<section class="monitor-card monitor-empty-state">
     <div class="monitor-empty-art" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20V10M12 10C7.6 10 5.6 7.3 5.6 4.6 9.1 4.5 11.3 6.6 12 10zm0 0c4.4 0 6.4-2.7 6.4-5.4C14.9 4.5 12.7 6.6 12 10zM7 20h10"/><path d="M5 20h14"/></svg></div>
@@ -115,14 +173,11 @@ function monitoringEmptyState(title, description, steps = true) {
 }
 function monitoringUpdateSummary() {
   const cases = monitoringState.cases;
-  const attention = cases.filter(item => {
-    const action = monitoringNextAction(item);
-    return action && ['due', 'overdue'].includes(monitoringDue(action.date).cls);
-  }).length;
+  const attention = cases.filter(item => monitoringInspectionBadge(item).text === 'Needs Inspection').length;
   const awaitingReview = cases.filter(item => item.latest_review_status === 'pending_expert_review').length;
   const confirmed = cases.filter(item => item.latest_review_status === 'expert_confirmed').length;
   const summary = [
-    ['monitor-total-cases', cases.length],
+    ['monitor-total-cases', cases.filter(item => item.monitoring_status !== 'finish').length],
     ['monitor-attention-cases', attention],
     ['monitor-review-cases', awaitingReview],
     ['monitor-confirmed-cases', confirmed],
@@ -138,26 +193,36 @@ function monitoringRenderCaseList() {
   if (!list) return;
   const query = monitoringState.search.trim().toLowerCase();
   const visibleCases = monitoringState.cases.map((item, index) => ({ item, index })).filter(({ item }) => {
-    if (!query) return true;
-    return [item.tree_id, item.disease, item.farmer_id].some(value => String(value || '').toLowerCase().includes(query));
+    return monitoringMatchesFilter(item) && (!query || [item.tree_id, item.disease, item.farmer_id]
+      .some(value => String(value || '').toLowerCase().includes(query)));
   });
+  visibleCases.sort((a, b) => monitoringState.sort === 'status'
+    ? monitoringTreatmentBadge(a.item).text.localeCompare(monitoringTreatmentBadge(b.item).text)
+    : (Date.parse(monitoringLastActivity(a.item)) || 0) - (Date.parse(monitoringLastActivity(b.item)) || 0));
+  if (monitoringState.sort === 'latest') visibleCases.reverse();
+  const count = document.getElementById('monitor-visible-count');
+  if (count) count.textContent = `${visibleCases.length} of ${monitoringState.cases.length} cases`;
   if (!visibleCases.length) {
-    list.innerHTML = `<div class="monitor-list-empty">${monitoringState.cases.length ? 'No treatment case matches this search.' : 'No treatment cases yet.'}</div>`;
+    list.innerHTML = monitoringEmptyState(monitoringState.cases.length ? 'No matching treatment cases' : 'No treatment cases yet',
+      monitoringState.cases.length ? 'Try a different search or filter.' : 'No treatment monitoring records are currently available.', false);
     return;
   }
-  list.innerHTML = visibleCases.map(({ item, index }) => {
+  list.innerHTML = `<table class="monitor-table"><caption class="monitor-sr-only">Treatment cases. Open View Details for the complete care record.</caption>
+    <thead><tr><th scope="col">Tree ID</th><th scope="col">Detected disease</th><th scope="col">Treatment</th><th scope="col">Inspection</th><th scope="col" class="monitor-secondary-column">Recommendation</th><th scope="col" class="monitor-secondary-column">Last activity</th><th scope="col">Next check</th><th scope="col">Actions</th></tr></thead>
+    <tbody>${visibleCases.map(({ item, index }) => {
     const action = monitoringNextAction(item);
     const due = monitoringDue(action?.date);
-    const review = monitoringCaseReview(item);
-    const treatmentStatus = ({ awaiting_treatment: 'Awaiting Treatment',
-      treatment_scheduled: 'Treatment Scheduled', treatment_applied: 'Treatment Applied' })[item.treatment_status];
-    const farmer = currentUserIsExpert && item.farmer_id ? `<span>Farmer ${monitoringText(item.farmer_id)}</span>` : '';
-    return `<button type="button" class="monitor-case-button" data-monitor-case="${index}" aria-current="${monitoringState.selected === item.id}">
-      <span class="monitor-case-top"><span class="monitor-case-name">${monitoringText(item.tree_id)}</span><span class="monitor-pill ${due.cls}">${monitoringText(action ? `${action.label} · ${due.text}` : due.text)}</span></span>
-      <span class="monitor-case-meta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V10M12 10C7.6 10 5.6 7.3 5.6 4.6 9.1 4.5 11.3 6.6 12 10zm0 0c4.4 0 6.4-2.7 6.4-5.4C14.9 4.5 12.7 6.6 12 10z"/></svg><span>${monitoringText(item.disease)}</span>${farmer}</span>
-      <span class="monitor-case-footer">${treatmentStatus ? `<span class="monitor-pill">${treatmentStatus}</span>` : ''}<span class="monitor-pill ${review.cls}">${monitoringText(review.text)}</span></span>
-    </button>`;
-  }).join('');
+    return `<tr>
+      <td data-label="Tree ID"><span class="monitor-tree-id" title="${monitoringText(item.tree_id)}">${monitoringText(item.tree_id || 'Not recorded')}</span>${currentUserIsExpert && item.farmer_id ? `<small class="monitor-cell-note">Farmer ${monitoringText(item.farmer_id)}</small>` : ''}</td>
+      <td data-label="Disease" class="monitor-disease-cell">${monitoringText(item.disease || 'Not recorded')}</td>
+      <td data-label="Treatment">${monitoringBadge(monitoringTreatmentBadge(item))}</td>
+      <td data-label="Inspection">${monitoringBadge(monitoringInspectionBadge(item))}</td>
+      <td data-label="Recommendation" class="monitor-secondary-column"><span class="monitor-recommendation-state">${item.treatment_record_id ? 'On record' : 'Not available'}</span></td>
+      <td data-label="Last activity" class="monitor-secondary-column">${monitoringDate(monitoringLastActivity(item))}</td>
+      <td data-label="Next check">${action ? `<span>${monitoringDate(action.date)}</span><small class="monitor-cell-note ${due.cls}">${monitoringText(action.label)} · ${monitoringText(due.text)}</small>` : '<span class="monitor-muted">Not scheduled</span>'}</td>
+      <td class="monitor-action-cell"><button type="button" class="monitor-view-button" data-monitor-case="${index}" aria-haspopup="dialog" aria-label="View details for ${monitoringText(item.tree_id || item.disease)}">View Details <span aria-hidden="true">↗</span></button></td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
 }
 async function monitoringRequest(path, options = {}) {
   if (!currentToken) throw new Error('Please sign in first');
@@ -194,21 +259,18 @@ window.loadMonitoringDashboard = async function loadMonitoringDashboard() {
       if (search) search.value = requested.id;
       monitoringRenderCaseList();
       if (selectedIndex < 0) {
+        monitoringState.overview = null;
+        document.getElementById('monitor-modal-subtitle').textContent = requested.id;
+        document.getElementById('monitor-modal-status').textContent = '';
+        monitoringOpenModal();
         document.getElementById('monitor-detail').innerHTML = monitoringEmptyState('No care record linked',
           'This tree has no accessible monitoring case. Its audit history remains available.', false);
         return;
       }
     }
-    if (monitoringState.cases.length) await monitoringSelectCase(selectedIndex >= 0 ? selectedIndex : 0);
+    if (monitoringState.cases.length && (requested || document.getElementById('monitor-case-modal')?.open) && selectedIndex >= 0) await monitoringSelectCase(selectedIndex);
     else {
-      monitoringState.selected = null;
-      monitoringState.overview = null;
-      document.getElementById('monitor-detail').innerHTML = monitoringEmptyState(
-        'Your tree care record will appear here',
-        currentUserIsExpert
-          ? 'Create a care record from a verified detection to begin tracking a farmer’s treatment and inspection evidence.'
-          : 'When an expert assigns a verified detection to monitoring, you can add inspection photos and follow the treatment plan for that tree.'
-      );
+      if (!monitoringState.cases.length || selectedIndex < 0) monitoringCloseModal();
     }
   } catch (error) {
     if (list) list.innerHTML = `<div class="monitor-list-empty">${monitoringText(error.message)}</div>`;
@@ -234,6 +296,13 @@ async function monitoringSelectCase(index) {
   const item = monitoringState.cases[index];
   if (!item) return;
   monitoringState.selected = item.id;
+  monitoringState.overview = null;
+  const requestId = ++monitoringState.detailRequest;
+  const subtitle = document.getElementById('monitor-modal-subtitle');
+  if (subtitle) subtitle.textContent = `${item.tree_id || 'Not recorded'} · ${item.disease || 'Not recorded'}`;
+  const status = document.getElementById('monitor-modal-status');
+  if (status) status.innerHTML = monitoringBadge(monitoringTreatmentBadge(item));
+  monitoringOpenModal();
   document.querySelectorAll('[data-monitor-case]').forEach(button =>
     button.setAttribute('aria-current', String(Number(button.dataset.monitorCase) === index)));
   const detail = document.getElementById('monitor-detail');
@@ -243,11 +312,11 @@ async function monitoringSelectCase(index) {
       ? `/expert/monitoring/cases/${encodeURIComponent(item.farmer_id)}/${encodeURIComponent(item.id)}/overview`
       : `/monitoring/cases/${encodeURIComponent(item.id)}/overview`;
     const overview = await monitoringRequest(path);
-    if (monitoringState.selected !== item.id) return;
+    if (monitoringState.selected !== item.id || requestId !== monitoringState.detailRequest) return;
     monitoringState.overview = overview;
     monitoringRenderOverview(overview);
   } catch (error) {
-    detail.textContent = error.message;
+    if (requestId === monitoringState.detailRequest) detail.innerHTML = `<section class="monitor-card"><h3>Could not load this case</h3><p class="monitor-muted">${monitoringText(error.message)}</p><button type="button" class="monitor-view-button" data-monitor-retry>Try again</button></section>`;
   }
 }
 
@@ -257,8 +326,6 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const treatmentApplications = overview.treatment_applications || [];
   const followUpSchedules = overview.follow_up_schedules || [];
   const selected = followUps.find(followUp => followUp.id === selectedFollowUp) || followUps[followUps.length - 1] || null;
-  const progressionDue = monitoringDue(item.next_follow_up_date);
-  const due = progressionDue;
   const latestPostSchedule = [...followUpSchedules]
     .filter(schedule => schedule.schedule_type === 'post_treatment' && schedule.status !== 'superseded')
     .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || ''))).at(-1);
@@ -276,13 +343,27 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
     ? '<div class="monitor-detection-preview"><img data-private-src="' + monitoringText(after) + '" alt="Original follow-up image"></div>'
     : '';
   const fallback = '<div class="monitor-image-fallback">Image unavailable</div>';
-  const timeline = `<li><strong>Baseline detection · ${monitoringDate(overview.baseline?.timestamp || item.created_at)}</strong>
-    <p class="monitor-muted">${monitoringText(item.disease)} · ${monitoringText(overview.baseline?.filename || item.baseline_detection_id)}</p></li>` +
-    followUps.map((record, index) => `<li><button type="button" data-monitor-follow-up="${index}">
+  const treatment = overview.treatment || {};
+  const snapshot = treatment.recommendation_snapshot || {};
+  const recommendation = snapshot.recommendations || {};
+  const provenance = treatment.recommendation_provenance || item.baseline_recommendation_provenance || {};
+  const source = snapshot.source || provenance.source || provenance.record_recommendation_source;
+  const recommendationStatus = source === 'expert_override' ? 'Expert recommendation'
+    : source === 'default' ? 'Default recommendation' : source === 'farmer_review' ? 'Farmer-reviewed recommendation' : 'Recommendation source not recorded';
+  const field = (label, value) => `<div><dt>${monitoringText(label)}</dt><dd>${monitoringText(value || 'Not recorded')}</dd></div>`;
+  const next = monitoringNextAction(item);
+  const latestApplication = [...treatmentApplications].sort((a, b) => String(a.application_date || '').localeCompare(String(b.application_date || ''))).at(-1);
+  const events = [{ date: overview.baseline?.timestamp, html: `<strong>Baseline detection · ${monitoringDate(overview.baseline?.timestamp)}</strong><p class="monitor-muted">${monitoringText(item.disease)} · ${monitoringText(overview.baseline?.filename || item.baseline_detection_id)}</p>` }];
+  if (recommendation.treatment) events.push({ date: treatment.recorded_at, html: `<strong>Recommendation recorded · ${monitoringDate(treatment.recorded_at)}</strong><p class="monitor-muted">${monitoringText(recommendationStatus)}</p>` });
+  (overview.planned_treatments || []).forEach(plan => events.push({ date: plan.created_at, html: `<strong>Treatment scheduled · ${monitoringDate(plan.created_at)}</strong><p class="monitor-muted">Planned for ${monitoringDate(plan.planned_date)} · ${monitoringText(plan.status)}</p>` }));
+  treatmentApplications.forEach(application => events.push({ date: application.application_date, html: `<strong>Treatment applied · ${monitoringDate(application.application_date)}</strong><p class="monitor-muted">${monitoringText(application.treatment_performed)}</p>` }));
+  followUps.forEach((record, index) => events.push({ date: record.created_at, html: `<button type="button" data-monitor-follow-up="${index}" aria-pressed="${selected?.id === record.id}">
       Inspection ${index + 1} · ${monitoringDate(record.created_at)}</button>
       <p class="monitor-muted">Farmer observation: ${monitoringStatus(record.preliminary_status)} · ${record.review_status === 'expert_confirmed' ? `Outcome confirmed: ${monitoringStatus(record.confirmed_outcome)}` : 'Needs Review'}</p>
       <p class="monitor-muted">${monitoringIdentityStatus(record.identity_review)}</p>
-      ${record.expert_note ? `<p class="monitor-muted">Expert note: ${monitoringText(record.expert_note)}</p>` : ''}</li>`).join('');
+      ${record.expert_note ? `<p class="monitor-muted">Expert note: ${monitoringText(record.expert_note)}</p>` : ''}` }));
+  if (item.monitoring_status === 'finish') events.push({ date: item.finished_at, html: `<strong>Treatment completed · ${monitoringDate(item.finished_at)}</strong><p class="monitor-muted">Healthy · confirmed by expert</p>` });
+  const timeline = events.sort((a, b) => (Date.parse(a.date) || 0) - (Date.parse(b.date) || 0)).map(event => `<li>${event.html}</li>`).join('');
   const scheduleOptions = followUpSchedules.filter(schedule => schedule.status !== 'superseded').map(schedule => {
     const kind = schedule.schedule_type === 'post_treatment' ? 'Post-treatment' : 'Disease progression';
     const application = treatmentApplications.find(record => record.id === schedule.treatment_application_id);
@@ -292,7 +373,7 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const allowance = overview.follow_up_upload_allowance || {
     limit: 3, used: followUps.length, remaining: Math.max(0, 3 - followUps.length)
   };
-  const uploadForm = !currentUserIsExpert ? `<section class="monitor-card"><h3 class="monitor-section-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 5l1.5-2h5L16 5M8 14l2.5-2.5 2 2L15.5 10l3.5 4"/></svg>Add an inspection</h3><p class="monitor-muted" style="margin-top:7px;">Upload a clear image of this tree. Your observation stays preliminary until an expert reviews it.</p>
+  const uploadForm = !currentUserIsExpert && item.monitoring_status !== 'finish' ? `<section class="monitor-card"><h3 class="monitor-section-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 5l1.5-2h5L16 5M8 14l2.5-2.5 2 2L15.5 10l3.5 4"/></svg>Add an inspection</h3><p class="monitor-muted" style="margin-top:7px;">Upload a clear image of this tree. Your observation stays preliminary until an expert reviews it.</p>
     <p class="monitor-muted">${monitoringText(allowance.used)} of ${monitoringText(allowance.limit)} follow-up uploads used for this tree ID. ${monitoringText(allowance.remaining)} remaining.</p>
     ${allowance.remaining === 0 ? '<p class="monitor-muted" role="status">You have reached the limit of 3 follow-up image uploads for this tree ID.</p>' : ''}
     <form id="monitor-upload-form" class="monitor-form"><fieldset style="border:0;padding:0;margin:0;display:contents" ${allowance.remaining === 0 ? 'disabled' : ''}>
@@ -313,24 +394,61 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const treeLocation = `<section class="monitor-card"><h3 class="monitor-section-heading">Tree GPS location</h3>
     <p class="monitor-muted" style="margin-top:7px;">Tree ID: ${monitoringText(item.tree_id)}. Compare the recorded image locations alongside the whole-tree photos to check tree identity. GPS alone cannot confirm the exact tree.</p>
     <div class="monitor-compare-grid">${monitoringGpsCard('Baseline location', baselineGps)}${monitoringGpsCard(selected ? `Inspection location · ${monitoringDate(selected.created_at)}` : 'Inspection location', inspectionGps)}</div></section>`;
-  document.getElementById('monitor-detail').innerHTML = `<section class="monitor-card">
-    <div class="monitor-treatment-state"><span class="monitor-pill ${lifecycle.cls}">${monitoringText(lifecycle.text)}</span><span class="monitor-muted">${monitoringText(lifecycle.detail)}</span></div>
-    <div class="monitor-head"><div><p class="monitor-case-label">${monitoringText(item.tree_id)} · ${monitoringText(item.disease)}</p><h2>Care record</h2>
-    <p class="monitor-muted" style="margin-top:5px;">Baseline ${monitoringDate(overview.baseline?.timestamp || item.created_at)} · ${followUps.length} follow-up${followUps.length === 1 ? '' : 's'} recorded</p></div>
-    <div class="monitor-next-check"><span class="monitor-pill ${due.cls}">${monitoringText(due.text)}</span><small>Next check · ${monitoringDate(item.next_follow_up_date)}</small></div></div>
-    <div class="monitor-comparison"><figure>${original ? `${originalPreview}` : fallback}<figcaption>Baseline image</figcaption></figure>
-    <figure>${after ? `${afterPreview}` : fallback}<figcaption>${selected ? `Latest inspection · ${monitoringDate(selected.created_at)}` : 'Awaiting first inspection'}</figcaption></figure></div>
-    <div class="monitor-care-status">
-      <div><p class="monitor-muted">Status: <strong>${item.monitoring_status === 'finish' ? 'Finish / Healthy - confirmed by expert' : 'Waiting'}</strong></p>
-      ${item.monitoring_status === 'finish' ? `<p class="monitor-muted">Confirmed ${monitoringDateTime(item.finished_at)}</p>` : ''}</div>
-      ${item.monitoring_status !== 'finish' && currentUserIsExpert ? '<button type="button" class="btn btn-p" data-monitor-finish>Finish - confirm tree is healthy</button>' : ''}
-    </div></section>
-    <section class="monitor-card"><h3 class="monitor-section-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M5 12h5l2-3 2 3h5"/></svg>Inspection timeline</h3><ol class="monitor-timeline">${timeline}</ol></section>
-    ${treeLocation}
-    ${uploadForm}${reviewForm}`;
+  const plans = (overview.planned_treatments || []).filter(plan => plan.status === 'scheduled');
+  const treatmentForms = !currentUserIsExpert && item.monitoring_status !== 'finish' ? `<div class="monitor-detail-grid">
+    <details class="monitor-card"><summary>Schedule treatment</summary><form id="monitor-treatment-schedule-form" class="monitor-form">
+      <label>Planned treatment date<input id="monitor-planned-date" type="date" min="${monitoringTomorrow()}" required></label>
+      <label>Notes (optional)<textarea id="monitor-planned-notes" rows="2" maxlength="2000"></textarea></label><button type="submit" class="btn btn-p">Save planned date</button></form></details>
+    <details class="monitor-card"><summary>Record treatment application</summary><form id="monitor-treatment-application-form" class="monitor-form">
+      ${plans.length ? `<label>Scheduled treatment (optional)<select id="monitor-application-plan"><option value="">No linked plan</option>${plans.map(plan => `<option value="${monitoringText(plan.id)}">${monitoringDate(plan.planned_date)}</option>`).join('')}</select></label>` : ''}
+      <label>Treatment performed<textarea id="monitor-treatment-performed" rows="2" maxlength="1000" required></textarea></label>
+      <label>Application date<input id="monitor-application-date" type="date" max="${monitoringToday()}" required></label>
+      <label>Notes (optional)<textarea id="monitor-application-notes" rows="2" maxlength="2000"></textarea></label><button type="submit" class="btn btn-p">Record application</button></form></details></div>` : '';
+  document.getElementById('monitor-detail').innerHTML = `<section class="monitor-card"><h3 class="monitor-section-heading">Case summary</h3>
+    <dl class="monitor-info-grid">${field('Tree ID', item.tree_id)}${field('Detected disease', item.disease)}${field('Detection date', monitoringDate(overview.baseline?.timestamp))}
+    ${field('Current status', item.monitoring_status === 'finish' ? 'Completed · Healthy' : item.monitoring_status === 'waiting' ? 'Active monitoring' : null)}
+    ${field('Inspection status', monitoringInspectionBadge(item).text)}${field('Treatment status', monitoringTreatmentBadge(item).text)}
+    ${field('Expert review', monitoringCaseReview(item).text)}${field('Next scheduled check', next ? `${monitoringDate(next.date)} · ${next.label}` : 'Not scheduled')}</dl></section>
+    <section class="monitor-card"><h3 class="monitor-section-heading">Detection & inspection images</h3><div class="monitor-comparison">
+      <figure><figcaption>Baseline Detection</figcaption>${original ? originalPreview : fallback}</figure>
+      <figure><figcaption>${selected ? `${selected === followUps.at(-1) ? 'Latest Inspection' : `Inspection ${followUps.indexOf(selected) + 1}`} · ${monitoringDate(selected.created_at)}` : 'Follow-up inspection'}</figcaption>${after ? afterPreview : `<div class="monitor-image-fallback">${selected ? 'Inspection image unavailable' : 'No follow-up image yet'}</div>`}</figure></div></section>
+    <section class="monitor-card"><div class="monitor-section-title"><h3 class="monitor-section-heading">Recommended Treatment</h3><span class="monitor-pill neutral">${monitoringText(recommendationStatus)}</span></div>
+      <p class="monitor-treatment-copy">${monitoringText(recommendation.treatment || 'No treatment recommendation available.')}</p>
+      <dl class="monitor-info-grid">${field('Recommendation status', recommendation.treatment ? 'Available' : 'Not available')}${field('Date provided', monitoringDate(snapshot.updated_at))}${field('Recorded in care record', monitoringDate(treatment.recorded_at))}${field('Expert recommendation review', source === 'expert_override' ? 'Provided by expert' : 'Not recorded')}</dl>
+      ${['fertilizer', 'application', 'precaution'].filter(key => recommendation[key]).map(key => `<p class="monitor-treatment-copy"><strong>${monitoringText(key[0].toUpperCase() + key.slice(1))}:</strong> ${monitoringText(recommendation[key])}</p>`).join('')}
+      ${recommendation.prevention?.length ? `<h4 class="monitor-subheading">Prevention</h4><p class="monitor-treatment-copy">${monitoringText(Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : recommendation.prevention)}</p>` : ''}
+      ${snapshot.note ? `<p class="monitor-treatment-copy">${monitoringText(snapshot.note)}</p>` : ''}</section>
+    <section class="monitor-card"><h3 class="monitor-section-heading">Inspection & treatment timeline</h3><ol class="monitor-timeline">${timeline}</ol></section>
+    <section class="monitor-card"><h3 class="monitor-section-heading">Treatment monitoring</h3>
+      <dl class="monitor-info-grid">${field('Treatment status', item.monitoring_status === 'finish' ? 'Completed' : lifecycle.text)}${field('Latest application', monitoringDate(latestApplication?.application_date))}
+      ${field('Treatment notes', latestApplication?.notes)}${field('Follow-up status', monitoringCaseReview(item).text)}${field('Progression check', item.next_follow_up_date ? monitoringDate(item.next_follow_up_date) : 'Not scheduled')}
+      ${field('Post-treatment check', latestPostSchedule?.due_date || item.next_post_treatment_follow_up_date ? `${monitoringDate(latestPostSchedule?.due_date || item.next_post_treatment_follow_up_date)} · ${postTreatmentDue.text}` : 'Not scheduled')}
+      ${field('Expert confirmation', item.monitoring_status === 'finish' ? `Healthy · ${monitoringDateTime(item.finished_at)}` : item.latest_review_status === 'expert_confirmed' ? monitoringStatus(item.latest_confirmed_outcome) : 'Not recorded yet')}${field('Follow-up count', String(followUps.length))}</dl>
+      <h4 class="monitor-subheading">Application history</h4><ul class="monitor-treatment-history">${treatmentApplications.length ? treatmentApplications.map(application => `<li><div class="monitor-application-top"><strong>${monitoringText(application.treatment_performed)}</strong><time>${monitoringDate(application.application_date)}</time></div><p>${monitoringText(application.notes || 'No notes recorded')}</p></li>`).join('') : '<li class="monitor-history-empty">No treatment applications recorded yet.</li>'}</ul>
+      ${item.monitoring_status !== 'finish' && currentUserIsExpert ? '<div class="monitor-care-status"><button type="button" class="btn btn-p" data-monitor-finish>Finish - confirm tree is healthy</button></div>' : ''}</section>
+    ${treatmentForms}${treeLocation}${uploadForm}${reviewForm}`;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const modal = document.getElementById('monitor-case-modal');
+  modal?.addEventListener('close', () => { if (!modal.open && monitoringState.returnFocus) monitoringModalCleanup(); });
+  modal?.addEventListener('cancel', event => { event.preventDefault(); monitoringCloseModal(); });
+  modal?.addEventListener('click', event => {
+    if (event.target.closest('[data-monitor-close]')) monitoringCloseModal();
+    else if (event.target === modal) {
+      const rect = modal.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) monitoringCloseModal();
+    }
+  });
+  document.getElementById('monitor-case-sort')?.addEventListener('change', event => {
+    monitoringState.sort = event.target.value;
+    monitoringRenderCaseList();
+  });
+  document.querySelectorAll('[data-monitor-filter]').forEach(button => button.addEventListener('click', () => {
+    monitoringState.filter = button.dataset.monitorFilter;
+    document.querySelectorAll('[data-monitor-filter]').forEach(filter => filter.setAttribute('aria-pressed', String(filter === button)));
+    monitoringRenderCaseList();
+  }));
   document.getElementById('monitor-case-search')?.addEventListener('input', event => {
     monitoringState.search = event.target.value;
     monitoringRenderCaseList();
@@ -340,6 +458,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (button) monitoringSelectCase(Number(button.dataset.monitorCase));
   });
   document.getElementById('monitor-detail')?.addEventListener('click', async event => {
+    if (event.target.closest('[data-monitor-retry]')) {
+      monitoringSelectCase(monitoringState.cases.findIndex(item => item.id === monitoringState.selected));
+      return;
+    }
     const finish = event.target.closest('[data-monitor-finish]');
     if (finish && currentUserIsExpert && monitoringState.overview) {
       const item = monitoringState.overview.case;

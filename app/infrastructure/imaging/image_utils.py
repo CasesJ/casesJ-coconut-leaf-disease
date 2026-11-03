@@ -142,8 +142,10 @@ def _jpeg_protected_segments(content: bytes) -> list[tuple[str, bytes]]:
             raise DetectionImageProcessingError("JPEG contains an unsupported marker layout")
         if marker == 0xD9:
             found_eoi = True
-            if offset != len(content):
-                raise DetectionImageProcessingError("JPEG contains unsupported trailing data")
+            # Camera and browser encoders can append non-image padding after
+            # EOI. JPEG decoders ignore it, and it cannot affect the pixels or
+            # protected metadata already parsed above.  Treat EOI as the end
+            # of the JPEG instead of rejecting an otherwise valid upload.
             break
         if marker == 0x01 or 0xD0 <= marker <= 0xD7:
             continue

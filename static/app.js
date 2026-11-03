@@ -581,8 +581,9 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   const recordsSectionLabel = document.getElementById('records-section-label');
   if (recordsSectionLabel) recordsSectionLabel.textContent = currentUserIsExpert ? 'Expert Audit Log' : 'My Detection Records';
   
-  // ✅ Load saved map pins from Firebase when user logs in
-  loadSavedMapPins(user.uid);
+  // Restore legacy saved pins first. Metadata-backed record pins are merged
+  // after this promise settles so a delayed RTDB response cannot erase them.
+  mapPinsRestorePromise = loadSavedMapPins(user.uid);
   loadFarmLocation();
   // ✅ Load dashboard stats
   if (typeof loadDashboardStats === 'function') {
@@ -598,6 +599,8 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
 window.updateUIOnLogout = function updateUIOnLogout() {
   clearUserRecordsCache();
   clearExpertRecordsCache();
+  metadataPinOwnerId = '';
+  metadataPinRecordIds.clear();
   const loginBtn = document.getElementById('login-btn');
   const userBadge = document.getElementById('user-badge');
   const expertNavLink = document.getElementById('expert-nav-link');
@@ -669,6 +672,9 @@ window.loadDashboardStats = async function loadDashboardStats() {
     if (healthyEl) healthyEl.textContent = healthyCount;
     if (mappedEl) mappedEl.textContent = mappedLocations;
     renderDashboardHighlights(dashboardRecords);
+    // Detection records are authoritative for image GPS. This reuses the
+    // dashboard response instead of issuing an additional map request.
+    if (!currentUserIsExpert) void restoreMetadataRecordPins(normalized);
 
     // Render analytics charts instead of records list
     renderAnalyticsCharts(dashboardRecords);
@@ -1640,6 +1646,9 @@ async function savePinToFirebase(lat, lng, label, confidence, source) {
 
 // ✅ Load all saved pins from Firebase and restore them on the map
 let mapPinsLoadId = 0;
+let mapPinsRestorePromise = Promise.resolve();
+let metadataPinOwnerId = '';
+const metadataPinRecordIds = new Set();
 async function loadSavedMapPins(userId) {
   const loadId = ++mapPinsLoadId;
   if (navigator.onLine === false) return;
@@ -1820,11 +1829,11 @@ async function attachPendingMapPins() {
   if (log === entries) refreshMapPins();
 }
 
-function addPin(lat,lng,label,confidence,source,{ persist = true, deferRender = false } = {}){
+function addPin(lat,lng,label,confidence,source,{ persist = true, deferRender = false, skipGeocode = false, recordId = '' } = {}){
   const c=cls(label,confidence), color=getDetectionClassColor(label);
   const time=new Date().toLocaleTimeString();
   const date=new Date().toISOString().slice(0,10);
-  const entry = {lat,lng,label,confidence,time,date,source,c,color,address:'Loading...',
+  const entry = {lat,lng,label,confidence,time,date,source,c,color,address: skipGeocode ? 'Embedded image GPS' : 'Loading...', recordId,
     mainMarker: null, miniMarker: null, popup: null};
   log.unshift(entry);
   attachPinMarkers(entry);
@@ -1838,6 +1847,9 @@ function addPin(lat,lng,label,confidence,source,{ persist = true, deferRender = 
     savePinToFirebase(lat, lng, label, confidence, source);
   }
   
+  // Canonical metadata pins intentionally skip reverse geocoding: the image
+  // coordinates are already known and map restoration must not add network work.
+  if (skipGeocode) return;
   // Fetch and update address asynchronously
   reverseGeocode(lat, lng).then(address => {
     if (!log.includes(entry)) return;
@@ -1942,6 +1954,56 @@ function getRecordCoordinates(record) {
   const metadataLat = Number(metadataGps.latitude ?? metadataGps.lat);
   const metadataLng = Number(metadataGps.longitude ?? metadataGps.lng);
   return Number.isFinite(metadataLat) && Number.isFinite(metadataLng) && metadataLat >= -90 && metadataLat <= 90 && metadataLng >= -180 && metadataLng <= 180 ? { lat: metadataLat, lng: metadataLng } : null;
+}
+
+function metadataPinRecordId(record, index) {
+  const id = record?.id ?? record?.record_id ?? record?.key;
+  return id ? String(id) : `metadata:${index}:${record?.filename || ''}`;
+}
+
+function hasMatchingMapPin(point, label, confidence) {
+  return log.some(entry => Number(entry.lat) === point.lat
+    && Number(entry.lng) === point.lng
+    && normalizeDiseaseClass(entry.label) === normalizeDiseaseClass(label)
+    && Number(entry.confidence) === Number(confidence));
+}
+
+async function restoreMetadataRecordPins(records) {
+  const ownerId = currentUser?.uid;
+  if (!ownerId || !Array.isArray(records)) return;
+
+  // Saved RTDB pins currently replace the log during their initial restore.
+  // Wait without blocking rendering, then merge canonical image-GPS pins once.
+  await mapPinsRestorePromise.catch(() => {});
+  if (currentUser?.uid !== ownerId) return;
+  if (metadataPinOwnerId !== ownerId) {
+    metadataPinOwnerId = ownerId;
+    metadataPinRecordIds.clear();
+  }
+
+  let added = 0;
+  for (let index = 0; index < records.length; index++) {
+    if (currentUser?.uid !== ownerId) return;
+    const record = records[index];
+    const recordId = metadataPinRecordId(record, index);
+    if (metadataPinRecordIds.has(recordId)) continue;
+    const point = getRecordCoordinates(record);
+    const primary = getPrimaryDetection(record);
+    if (!point || !primary?.class) continue;
+
+    metadataPinRecordIds.add(recordId);
+    if (!hasMatchingMapPin(point, primary.class, primary.confidence)) {
+      addPin(point.lat, point.lng, primary.class, primary.confidence,
+        'Embedded image metadata', { persist: false, deferRender: true, skipGeocode: true, recordId });
+      added++;
+      // Keep long histories responsive while markers are attached.
+      if (added % 25 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+  if (added && currentUser?.uid === ownerId) {
+    syncSessionMapPins();
+    refreshMapPins();
+  }
 }
 
 function areaColor(prevalence) {

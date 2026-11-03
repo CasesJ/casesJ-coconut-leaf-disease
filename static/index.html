@@ -1624,7 +1624,8 @@
   <script src="/private_media.js?v=20261025-1"></script>
   <script src="/app.js?v=performance-20261102-1"></script>
   <script src="/tree_identity.js?v=20261025-1"></script>
-  <script src="/monitoring.js?v=automatic-tree-id-20261031-1"></script>
+  <link rel="stylesheet" href="/static/monitoring.css?v=20261102-1">
+  <script src="/monitoring.js?v=compact-monitoring-20261102-1"></script>
 </head>
 <body>
 
@@ -2028,9 +2029,9 @@
     <div class="panels">
       <section class="monitoring-hero" aria-labelledby="monitoring-title">
         <div class="monitoring-hero-copy">
-          <p class="monitoring-eyebrow">Treatment monitoring</p>
-          <h1 id="monitoring-title">Care that stays on track.</h1>
-          <p>Keep each coconut tree’s treatment, follow-up images, and expert guidance together in one clear care record.</p>
+          <p class="monitoring-eyebrow">Tree care workspace</p>
+          <h1 id="monitoring-title">Treatment Monitoring</h1>
+          <p>Track treatment, plan inspections, and follow expert guidance for every tree.</p>
         </div>
         <div class="monitoring-hero-actions">
           <button class="monitor-refresh" type="button" onclick="loadMonitoringDashboard()" aria-label="Refresh treatment cases">Refresh cases</button>
@@ -2054,16 +2055,29 @@
           <div><strong id="monitor-confirmed-cases">0</strong><span>Expert-confirmed outcomes</span></div>
         </article>
       </section>
-      <div class="monitor-grid">
-        <div id="monitor-detail" class="monitor-detail" aria-live="polite">
-          <section class="monitor-card monitor-empty-state">
-            <div class="monitor-empty-art" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20V10M12 10C7.6 10 5.6 7.3 5.6 4.6 9.1 4.5 11.3 6.6 12 10zm0 0c4.4 0 6.4-2.7 6.4-5.4C14.9 4.5 12.7 6.6 12 10zM7 20h10"/><path d="M5 20h14"/></svg></div>
-            <h2>Your tree care record will appear here</h2>
-            <p>Once a verified detection is assigned to monitoring, you can add inspection photos and follow the care plan for that tree.</p>
-            <div class="monitor-empty-steps" aria-label="Monitoring process"><span><b>1</b>Verify detection</span><span><b>2</b>Record treatment</span><span><b>3</b>Track inspections</span></div>
-          </section>
+      <section class="monitor-cases" aria-labelledby="monitor-cases-title">
+        <div class="monitor-cases-heading"><div><h2 id="monitor-cases-title">Treatment cases <span id="monitor-queue-count" class="monitor-count-badge">0</span></h2><p>Open a case to view evidence and manage its care record.</p></div><span id="monitor-visible-count" class="monitor-muted" role="status"></span></div>
+        <div class="monitor-toolbar">
+          <label class="monitor-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span class="monitor-sr-only">Search treatment cases</span><input id="monitor-case-search" type="search" placeholder="Search treatment cases…"></label>
+          <label class="monitor-sort">Sort by <select id="monitor-case-sort"><option value="latest">Latest activity</option><option value="oldest">Oldest activity</option><option value="status">Treatment status</option></select></label>
         </div>
-      </div>
+        <div class="monitor-filters" role="group" aria-label="Filter treatment cases">
+          <button type="button" data-monitor-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-monitor-filter="awaiting" aria-pressed="false">Awaiting Treatment</button>
+          <button type="button" data-monitor-filter="treatment" aria-pressed="false">In Treatment</button>
+          <button type="button" data-monitor-filter="inspection" aria-pressed="false">Needs Inspection</button>
+          <button type="button" data-monitor-filter="review" aria-pressed="false">Awaiting Expert Review</button>
+          <button type="button" data-monitor-filter="completed" aria-pressed="false">Completed</button>
+        </div>
+        <div id="monitor-case-list" aria-live="polite"><div class="monitor-list-empty">Loading treatment cases…</div></div>
+      </section>
+      <dialog id="monitor-case-modal" aria-labelledby="monitor-modal-title" aria-describedby="monitor-modal-subtitle">
+        <div class="monitor-modal-shell">
+          <header class="monitor-modal-header"><div><div class="monitor-modal-title-line"><h2 id="monitor-modal-title">Treatment Monitoring</h2><span id="monitor-modal-status"></span></div><p id="monitor-modal-subtitle"></p></div><button type="button" class="monitor-modal-close" data-monitor-close aria-label="Close treatment details" autofocus>×</button></header>
+          <div id="monitor-detail" class="monitor-detail" aria-live="polite"></div>
+          <footer class="monitor-modal-footer"><span>Tree care record</span><button type="button" class="btn btn-o" data-monitor-close>Close</button></footer>
+        </div>
+      </dialog>
       <section id="monitor-create-panel" class="monitor-card monitor-create-panel" style="display:none;" aria-labelledby="monitor-create-title"><h3 id="monitor-create-title">Start a treatment care record</h3><p class="monitor-muted">The verified detection’s recommendation is available as soon as the care record is created. Farmers can wait, schedule treatment, or record an application later. Disease-progression inspections are scheduled separately.</p><form id="monitor-create-form" class="monitor-form"><label>Verified detection<select id="monitor-baseline" required></select></label><label>Registered tree<select id="monitor-tree-select" disabled><option value="">Select a detection first</option></select></label><p class="monitor-muted">Select the physical tree or register a new tree with an automatic permanent ID.</p><label>Baseline whole-tree photo (optional)<input id="monitor-create-tree-file" type="file" accept="image/jpeg,image/png"></label><label>Post-treatment interval in days<input id="monitor-interval" type="number" min="1" max="90" value="6" required></label><button class="btn btn-p" type="submit">Create care record</button></form></section>
     </div>
   </div>

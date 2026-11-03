@@ -10,6 +10,8 @@ function monitoringIdentityBase(item) {
 }
 
 window.monitoringResetIdentity = function () {
+  monitoringCloseModal();
+  monitoringState.detailRequest++;
   monitoringState.cases = [];
   monitoringState.overview = null;
   monitoringState.selected = null;

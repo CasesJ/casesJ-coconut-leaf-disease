@@ -118,6 +118,16 @@ def test_missing_metadata_is_not_invented_during_compression(monkeypatch):
     assert metadata["dji_telemetry"] == {}
 
 
+def test_jpeg_trailing_data_does_not_block_storage_compression(monkeypatch):
+    source = photo((1000, 1000), noisy=True, metadata=False) + b"camera-export-padding"
+
+    stored = _compressed_copy(monkeypatch, source)
+
+    assert stored.endswith(b"\xff\xd9")
+    with Image.open(BytesIO(stored)) as image:
+        assert image.size == (1000, 1000)
+
+
 def test_storage_copy_rejects_any_exif_payload_change():
     source = photo()
     original = images._metadata_snapshot(source)
