@@ -7,7 +7,7 @@ import logging
 import time
 
 import numpy as np
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core import config
 from app.infrastructure.cloudinary_storage import (
@@ -22,6 +22,8 @@ _EXTENDED_XMP_HEADER = b"http://ns.adobe.com/xmp/extension/\x00"
 _ICC_HEADER = b"ICC_PROFILE\x00"
 _MAX_JPEG_MARKERS = 100_000
 _MAX_PROTECTED_METADATA_BYTES = 16 * 1024 * 1024
+_DETECTION_THUMBNAIL_SIZE = (480, 480)
+_DETECTION_THUMBNAIL_QUALITY = 78
 
 
 class DetectionImageProcessingError(CloudinaryStorageError):
@@ -277,6 +279,19 @@ def _image_content_type(content: bytes) -> str:
     raise CloudinaryStorageError("Detection original must be JPEG, PNG, WebP, BMP or TIFF")
 
 
+def _detection_thumbnail(original_bytes: bytes) -> bytes:
+    """Create a display-only JPEG without changing the stored evidence image."""
+    with Image.open(BytesIO(original_bytes)) as source:
+        with ImageOps.exif_transpose(source).convert("RGB") as image:
+            image.thumbnail(_DETECTION_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+            output = BytesIO()
+            image.save(
+                output, format="JPEG", quality=_DETECTION_THUMBNAIL_QUALITY,
+                optimize=True,
+            )
+            return output.getvalue()
+
+
 def save_upload_image_assets(
     record_id: str,
     original_bytes: bytes,
@@ -284,11 +299,13 @@ def save_upload_image_assets(
     timings: dict[str, float] | None = None,
     operation_id: str = "unknown",
 ) -> dict:
-    """Upload the byte-identical source image as one authenticated asset.
+    """Upload the byte-identical source image and a small display thumbnail.
 
-    Keeping one upload avoids duplicate provider work and preserves image quality,
-    EXIF/XMP metadata, and the exact evidence bytes used by the detector.
-    Annotation previews are rendered from Firestore metadata in the client.
+    The original preserves image quality, EXIF/XMP metadata, and the exact
+    evidence bytes used by the detector. The thumbnail is intentionally
+    metadata-free and display-only, so it can be fetched by record lists without
+    downloading the original. Annotation previews are rendered from Firestore
+    metadata in the client.
     ``annotated_image`` remains an accepted argument for callers during the
     transition, but is intentionally ignored. The function never writes local
     files or returns provider URLs.
@@ -333,10 +350,37 @@ def save_upload_image_assets(
         "stored_byte_size": len(storage_bytes),
         "stored_sha256": stored_sha256,
     })
+    assets = {"original": original}
+
+    # The thumbnail is only a list-preview optimization. It must never block a
+    # valid disease record or replace the original, metadata-preserving evidence.
+    thumbnail_started = time.perf_counter()
+    try:
+        thumbnail_bytes = _detection_thumbnail(original_bytes)
+        preparation_timings["thumbnail_generation_ms"] = (
+            time.perf_counter() - thumbnail_started
+        ) * 1000
+        thumbnail_upload_started = time.perf_counter()
+        assets["thumbnail"] = upload_asset(
+            thumbnail_bytes, "image/jpeg", "detection-thumbnail",
+            operation_id=operation_id, source_bytes=len(thumbnail_bytes),
+        )
+        preparation_timings["thumbnail_cloudinary_upload_ms"] = (
+            time.perf_counter() - thumbnail_upload_started
+        ) * 1000
+    except Exception as error:  # Preview failures are non-fatal by design.
+        preparation_timings["thumbnail_generation_ms"] = (
+            time.perf_counter() - thumbnail_started
+        ) * 1000
+        logger.warning(
+            "Detection thumbnail preparation skipped operation_id=%s error_type=%s",
+            operation_id, type(error).__name__,
+        )
+
     logger.info(
         "Detection image prepared operation_id=%s source_bytes=%d stored_bytes=%d representation=%s compression_ms=%.0f metadata_verification_ms=%.0f",
         operation_id, len(original_bytes), len(storage_bytes), representation,
         preparation_timings.get("image_compression_ms", 0.0),
         preparation_timings.get("image_metadata_verification_ms", 0.0),
     )
-    return {"image_assets": {"original": original}}
+    return {"image_assets": assets}

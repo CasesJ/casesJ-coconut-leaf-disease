@@ -33,6 +33,16 @@ test('a new pin still autosaves exactly once', async () => {
   assert.equal(h.context.log.length, 1);
 });
 
+test('map pin colors match the detection color key', () => {
+  const h = harness(0);
+  for (const [label, color] of Object.entries({
+    Healthy: '#22c55e', Pestalotiopsis: '#06b6d4', 'Bud Rot': '#eab308', 'Stem Bleeding': '#dc2626',
+  })) {
+    h.context.addPin(7.301, 125.631, label, .9, 'Upload');
+    assert.equal(h.context.log[0].color, color);
+  }
+});
+
 test('metadata-backed detection records restore pins without writes or geocoding', async () => {
   const h = harness(0);
   await h.context.restoreMetadataRecordPins([{ id: 'metadata-record', detections: [{ class: 'Bud Rot', confidence: .9 }], image_metadata: { gps: { latitude: 7.301, longitude: 125.631 } } }]);

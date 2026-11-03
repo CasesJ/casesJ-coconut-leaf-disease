@@ -121,7 +121,7 @@ def test_upload_failure_logs_sanitized_category_and_sizes(
     assert "api_secret" not in caplog.text.lower()
 
 
-def test_detection_persists_only_one_authenticated_original_asset(monkeypatch):
+def test_detection_persists_original_and_display_thumbnail_assets(monkeypatch):
     uploads = []
 
     def upload(content, content_type, category, **kwargs):
@@ -134,9 +134,52 @@ def test_detection_persists_only_one_authenticated_original_asset(monkeypatch):
         "record-1", _jpeg(), np.zeros((8, 8, 3), dtype=np.uint8)
     )
 
-    assert len(uploads) == 1
+    assert len(uploads) == 2
     assert uploads[0][1:] == ("image/jpeg", "detection-original", fields["image_assets"]["original"])
+    assert uploads[1][1:] == ("image/jpeg", "detection-thumbnail", fields["image_assets"]["thumbnail"])
+    assert set(fields["image_assets"]) == {"original", "thumbnail"}
+    with Image.open(BytesIO(uploads[1][0])) as thumbnail:
+        assert thumbnail.format == "JPEG"
+        assert thumbnail.size == (8, 8)
+
+
+def test_detection_thumbnail_failure_keeps_original_asset(monkeypatch, caplog):
+    uploads = []
+
+    def upload(content, content_type, category, **kwargs):
+        if category == "detection-thumbnail":
+            raise image_utils.CloudinaryStorageError("thumbnail unavailable")
+        reference = {"provider": "cloudinary", "public_id": f"neuralcoco/{category}/{uuid4().hex}"}
+        uploads.append((content, content_type, category, reference))
+        return reference
+
+    monkeypatch.setattr(image_utils, "upload_asset", upload)
+
+    fields = image_utils.save_upload_image_assets("record-1", _jpeg())
+
     assert set(fields["image_assets"]) == {"original"}
+    assert len(uploads) == 1
+    assert "Detection thumbnail preparation skipped" in caplog.text
+
+
+def test_detection_thumbnail_generation_failure_keeps_original_asset(monkeypatch, caplog):
+    uploads = []
+    monkeypatch.setattr(
+        image_utils, "_detection_thumbnail",
+        lambda _content: (_ for _ in ()).throw(OSError("preview decode failed")),
+    )
+    monkeypatch.setattr(
+        image_utils, "upload_asset",
+        lambda content, content_type, category, **kwargs: uploads.append(category) or {
+            "provider": "cloudinary", "public_id": f"neuralcoco/{category}/{uuid4().hex}",
+        },
+    )
+
+    fields = image_utils.save_upload_image_assets("record-1", _jpeg())
+
+    assert fields["image_assets"].keys() == {"original"}
+    assert uploads == ["detection-original"]
+    assert "Detection thumbnail preparation skipped" in caplog.text
 
 
 def test_failed_cloudinary_upload_is_sanitized_and_compensated(

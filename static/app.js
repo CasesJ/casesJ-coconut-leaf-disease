@@ -1180,12 +1180,6 @@ function initializeMaps() {
       layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['get', 'prevalence'], '% diseased'], 'text-size': 12, 'text-allow-overlap': true },
       paint: { 'text-color': '#123b2b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
     });
-    mainMap.on('click', 'area-monitoring-fill', (event) => {
-      const feature = event.features && event.features[0];
-      if (!feature) return;
-      const p = feature.properties || {};
-      new maplibregl.Popup({ offset: 12 }).setLngLat(event.lngLat).setHTML(`<strong>${p.name}</strong><br>${p.prevalence}% disease prevalence<br>${p.diseased} diseased / ${p.samples} GPS samples`).addTo(mainMap);
-    });
     mainMap.on('mouseenter', 'area-monitoring-fill', () => { mainMap.getCanvas().style.cursor = 'pointer'; });
     mainMap.on('mouseleave', 'area-monitoring-fill', () => { mainMap.getCanvas().style.cursor = ''; });
     
@@ -1890,14 +1884,16 @@ function setMapCenter(lat, lng){
 
 let recordLocationMarker = null;
 
-function showRecordLocationOnMap(lat, lng) {
+function showRecordLocationOnMap(lat, lng, diseaseLabel = '') {
   if (!mapsReady || !mainMap) {
     showToast('Map is still loading. Please try again.');
     return;
   }
 
   if (recordLocationMarker) recordLocationMarker.remove();
-  const markerElement = createMarkerElement('#26865a');
+  let decodedDiseaseLabel = diseaseLabel;
+  try { decodedDiseaseLabel = decodeURIComponent(String(diseaseLabel)); } catch (_) { /* use the supplied label */ }
+  const markerElement = createMarkerElement(getDetectionClassColor(decodedDiseaseLabel));
   const popup = new maplibregl.Popup({ offset: 25 })
     .setHTML(`<b>Detection record location</b><br>Latitude: ${Number(lat).toFixed(6)}<br>Longitude: ${Number(lng).toFixed(6)}`);
   recordLocationMarker = new maplibregl.Marker({ element: markerElement })
@@ -3262,7 +3258,7 @@ function renderRecordCard(record, idx, options = {}) {
     && Number.isFinite(lat) && Number.isFinite(lng)
     && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
   const mapButtonHtml = hasEmbeddedGps
-    ? `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng})" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`
+    ? `<button class="btn btn-o" onclick="switchTab('map', document.querySelector('.nav-link[onclick*=\\'map\\']'));showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}')" style="padding:6px 12px;font-size:11px;margin-top:8px;background:#26865a;color:white;border:none;border-radius:4px;cursor:pointer;"><span>🗺️ Show on Map</span></button>`
     : '';
   const imageLabel = record.filename || record.image_path || 'Unknown image';
   const imagePreviewHtml = previewImage
@@ -3408,7 +3404,7 @@ function renderAuditEntry(entry) {
         <span class="record-det high">${detailLabel}</span>
       </div>
     </div>
-    <div class="record-actions"><button class="btn btn-o" onclick="closeDetectionModal();${coords ? `switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${coords.lat},${coords.lng})` : ''}">View on Map</button><button class="btn btn-o" onclick="showToast('Marked as inspected for this session.')">Mark as Inspected</button></div>
+    <div class="record-actions"><button class="btn btn-o" onclick="closeDetectionModal();${coords ? `switchTab('map',document.getElementById('nav-map-link'));showRecordLocationOnMap(${coords.lat},${coords.lng},'${encodeInlineValue(record.primaryDisease || '')}')` : ''}">View on Map</button><button class="btn btn-o" onclick="showToast('Marked as inspected for this session.')">Mark as Inspected</button></div>
   `;
 }
 
@@ -3590,7 +3586,7 @@ async function loadUserRecords({ force = false } = {}) {
         : `📍 Record ${idx}: No embedded GPS metadata`);
       
       const mapButtonHtml = hasEmbeddedGps
-        ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng});switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
+        ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
       const recommendationButtonHtml = status.cls === 'verified'
         ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)'>View recommendation</button>`
         : '<span class="record-awaiting">Recommendations available after expert review</span>';

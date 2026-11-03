@@ -96,7 +96,8 @@ test('detail view preserves real recommendations and role-specific controls with
   assert.match(html, /No follow-up image yet/);
   assert.match(html, /Not recorded/);
   assert.doesNotMatch(html, /<script>|Inspection 1|Treatment completed|Provided by expert/);
-  for (const id of ['monitor-treatment-schedule-form', 'monitor-treatment-application-form', 'monitor-upload-form']) assert.ok(html.includes(id));
+  assert.ok(html.includes('monitor-upload-form'));
+  assert.doesNotMatch(html, /monitor-treatment-schedule-form|monitor-treatment-application-form/);
   assert.doesNotMatch(html, /data-monitor-finish|monitor-review-form/);
   const expert = harness(true);
   overview.follow_ups = [{ id: 'follow-1', created_at: '2026-10-23', expert_note: 'Recorded note' }];

@@ -394,16 +394,7 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const treeLocation = `<section class="monitor-card"><h3 class="monitor-section-heading">Tree GPS location</h3>
     <p class="monitor-muted" style="margin-top:7px;">Tree ID: ${monitoringText(item.tree_id)}. Compare the recorded image locations alongside the whole-tree photos to check tree identity. GPS alone cannot confirm the exact tree.</p>
     <div class="monitor-compare-grid">${monitoringGpsCard('Baseline location', baselineGps)}${monitoringGpsCard(selected ? `Inspection location · ${monitoringDate(selected.created_at)}` : 'Inspection location', inspectionGps)}</div></section>`;
-  const plans = (overview.planned_treatments || []).filter(plan => plan.status === 'scheduled');
-  const treatmentForms = !currentUserIsExpert && item.monitoring_status !== 'finish' ? `<div class="monitor-detail-grid">
-    <details class="monitor-card"><summary>Schedule treatment</summary><form id="monitor-treatment-schedule-form" class="monitor-form">
-      <label>Planned treatment date<input id="monitor-planned-date" type="date" min="${monitoringTomorrow()}" required></label>
-      <label>Notes (optional)<textarea id="monitor-planned-notes" rows="2" maxlength="2000"></textarea></label><button type="submit" class="btn btn-p">Save planned date</button></form></details>
-    <details class="monitor-card"><summary>Record treatment application</summary><form id="monitor-treatment-application-form" class="monitor-form">
-      ${plans.length ? `<label>Scheduled treatment (optional)<select id="monitor-application-plan"><option value="">No linked plan</option>${plans.map(plan => `<option value="${monitoringText(plan.id)}">${monitoringDate(plan.planned_date)}</option>`).join('')}</select></label>` : ''}
-      <label>Treatment performed<textarea id="monitor-treatment-performed" rows="2" maxlength="1000" required></textarea></label>
-      <label>Application date<input id="monitor-application-date" type="date" max="${monitoringToday()}" required></label>
-      <label>Notes (optional)<textarea id="monitor-application-notes" rows="2" maxlength="2000"></textarea></label><button type="submit" class="btn btn-p">Record application</button></form></details></div>` : '';
+  const treatmentForms = '';
   document.getElementById('monitor-detail').innerHTML = `<section class="monitor-card"><h3 class="monitor-section-heading">Case summary</h3>
     <dl class="monitor-info-grid">${field('Tree ID', item.tree_id)}${field('Detected disease', item.disease)}${field('Detection date', monitoringDate(overview.baseline?.timestamp))}
     ${field('Current status', item.monitoring_status === 'finish' ? 'Completed · Healthy' : item.monitoring_status === 'waiting' ? 'Active monitoring' : null)}
