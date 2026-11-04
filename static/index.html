@@ -1502,6 +1502,56 @@
     @media(max-width:1120px) { .monitor-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .monitor-detail-grid { grid-template-columns:1fr; } }
     @media(max-width:820px) { .monitoring-hero { min-height:0; padding:26px 24px; } .monitor-grid { grid-template-columns:1fr; } .monitor-queue { position:static; } .monitor-case-list { max-height:none; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); } .monitor-create-panel .monitor-form { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media(max-width:560px) { .monitoring-hero { display:block; padding:23px 20px; } .monitoring-hero-actions { margin-top:18px; } .monitor-kpi-grid,.monitor-comparison,.monitor-create-panel .monitor-form { grid-template-columns:1fr; } .monitor-kpi { min-height:88px; } .monitor-comparison img,.monitor-image-fallback { height:205px; } .monitor-comparison .monitor-detection-preview { height:205px; }.monitor-comparison .monitor-detection-preview > img { height:205px; } .monitor-head h2 { font-size:20px; } .monitor-next-check { width:100%; text-align:left; } .monitor-empty-state { min-height:330px; } .monitor-history-head,.monitor-application-top { display:grid; gap:6px; } .monitor-application-top time { white-space:normal; } }
+
+    /* Mobile-only fixes: keep notification text above the app chrome and let
+       farmer record images retain their natural aspect ratio. */
+    @media (max-width:600px) {
+      .notification-menu {
+        position:fixed;
+        top:calc(env(safe-area-inset-top, 0px) + 64px);
+        right:8px;
+        left:8px;
+        width:auto;
+        max-height:calc(100dvh - env(safe-area-inset-top, 0px) - 80px);
+        padding:12px;
+        overflow-y:auto;
+        box-sizing:border-box;
+        z-index:1000;
+      }
+      .notification-head { gap:12px; }
+      .notification-head span { flex:0 0 auto; }
+      .notice-item { align-items:flex-start; gap:10px; padding:12px 6px; }
+      .notice-icon { flex:0 0 27px; }
+      .notice-item > div:last-child { min-width:0; }
+      .notice-item strong { font-size:13px; line-height:1.35; overflow-wrap:anywhere; }
+      .notice-item p { font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+
+      #records-list .farmer-record { padding:14px; gap:14px; }
+      #records-list .record-image-preview {
+        display:block;
+        width:100%;
+        height:auto;
+        min-height:0;
+      }
+      #records-list .record-image-preview .detection-overlay-frame {
+        display:block;
+        width:100%;
+        min-height:0;
+      }
+      #records-list .record-image-preview img {
+        display:block;
+        width:100%;
+        height:auto;
+        min-height:0;
+        max-height:none;
+        object-fit:contain;
+      }
+      #records-list .record-image-preview .detection-overlay-frame:has(img:not([src])) {
+        min-height:180px;
+      }
+      #records-list .record-status { margin-left:8px; }
+      #records-list .record-location { margin-top:14px; }
+    }
   </style>
   <script>
     // ── GLOBAL SCOPE SETUP - All variables and stubs defined FIRST ──
