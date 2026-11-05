@@ -11,6 +11,8 @@ services:
       - key: OPENVINO_MODEL_DIR
         value: models/yolo26s_openvino_model
       - key: MAX_IMAGE_UPLOAD_BYTES
-        value: "25000000"
+        value: "50000000"
       - key: MAX_IMAGE_UPLOAD_PIXELS
         value: "50000000"
+      - key: INFERENCE_DECODE_MAX_PIXELS
+        value: "12000000"

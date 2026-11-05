@@ -177,21 +177,24 @@ window.switchAuthMode = function switchAuthMode() {
 window.renderAuthMode = function renderAuthMode() {
   const title = document.getElementById('form-title');
   const btnText = document.getElementById('btn-text');
-  const toggleText = document.getElementById('toggle-text');
-  const forgotPassword = document.getElementById('forgot-password-wrap');
+  const footerAction = document.getElementById('auth-footer-action');
   
   if (authMode === 'login') {
     title.textContent = 'Login';
     btnText.textContent = 'Login';
-    toggleText.innerHTML = 'Don\'t have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Sign Up</button>';
+    if (footerAction) {
+      footerAction.innerHTML = '<button class="auth-mode-link" type="button" onclick="setAuthMode(\'recovery\')">Forgot Password?</button>';
+    }
   } else if (authMode === 'signup') {
     title.textContent = 'Sign Up';
     btnText.textContent = 'Sign Up';
-    toggleText.innerHTML = 'Already have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Login</button>';
+    if (footerAction) footerAction.textContent = '';
   } else {
     title.textContent = 'Recover Password';
     btnText.textContent = 'Reset Password';
-    toggleText.innerHTML = '<button class="auth-mode-link" type="button" onclick="setAuthMode(\'login\')">Back to Login</button>';
+    if (footerAction) {
+      footerAction.innerHTML = '<button class="auth-mode-link" type="button" onclick="setAuthMode(\'login\')">Back to Login</button>';
+    }
   }
 
   const loginTab = document.getElementById('login-tab');
@@ -206,7 +209,6 @@ window.renderAuthMode = function renderAuthMode() {
     authScreen.classList.toggle('signup-mode', authMode === 'signup');
     authScreen.classList.toggle('recovery-mode', authMode === 'recovery');
   }
-  if (forgotPassword) forgotPassword.hidden = authMode !== 'login';
   const loginEmail = document.getElementById('email');
   const loginPassword = document.getElementById('password');
   if (loginEmail) loginEmail.required = authMode !== 'recovery';
@@ -293,7 +295,7 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
     showError('❌ Please enter an email');
     return;
   }
-  if (!password) {
+  if (authMode !== 'recovery' && !password) {
     showError('❌ Please enter a password');
     return;
   }

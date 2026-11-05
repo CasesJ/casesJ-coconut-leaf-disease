@@ -66,8 +66,13 @@ WS_MAX_FRAME_BYTES = _positive_int_env("WS_MAX_FRAME_BYTES", 3_000_000)
 # storage buffers are considered, which is not viable on a small web instance.
 # DJI still images up to 50 MP remain supported; deployments with more RAM may
 # explicitly raise either value.
-MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 25_000_000)
+MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 50_000_000)
 MAX_IMAGE_UPLOAD_PIXELS = _positive_int_env("MAX_IMAGE_UPLOAD_PIXELS", 50_000_000)
+# JPEG cameras commonly produce much larger source rasters than the detector's
+# compact model input. OpenCV can decode JPEG DCT layers at a lower resolution
+# before allocating the BGR array. Coordinates are mapped back to the original
+# raster after inference; the source bytes and EXIF remain untouched.
+INFERENCE_DECODE_MAX_PIXELS = _positive_int_env("INFERENCE_DECODE_MAX_PIXELS", 12_000_000)
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()

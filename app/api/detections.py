@@ -24,7 +24,7 @@ from PIL import Image, UnidentifiedImageError
 from app.core.config import (
     IMAGE_INFERENCE_DAILY_LIMIT,
     IMAGE_INFERENCE_PER_MINUTE,
-    MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS,
+    INFERENCE_DECODE_MAX_PIXELS, MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS,
     PENDING_VERIFICATION_STATUS,
     UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
     UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
@@ -58,6 +58,8 @@ def _prepare_upload(contents: bytes, filename: str | None):
     from drone_gps import get_drone_gps, init_drone_gps
     performance_ms = {}
     inference_contents = contents
+    source_width = source_height = 0
+    image_format = None
     validation_started = time.perf_counter()
     try:
         with Image.open(BytesIO(contents)) as source_image:
@@ -67,6 +69,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
             if image_format != "MPO" and getattr(source_image, "n_frames", 1) != 1:
                 raise ValueError("Upload a single-frame photograph, not an animation or multi-page image")
             pixels = source_image.width * source_image.height
+            source_width, source_height = source_image.size
             if pixels > MAX_IMAGE_UPLOAD_PIXELS:
                 raise ValueError(
                     f"Image resolution is {source_image.width} x {source_image.height} "
@@ -134,11 +137,47 @@ def _prepare_upload(contents: bytes, filename: str | None):
     decode_started = time.perf_counter()
     # --- Inference ---
     np_arr = np.frombuffer(inference_contents, np.uint8)
-    image = imdecode(np_arr, IMREAD_COLOR)
+    # Decode DJI JPEGs at a DCT reduction level when their full BGR raster
+    # would be wasteful. This avoids allocating a 144 MB array for a 48 MP
+    # image just before the detector scales it down for its model input.
+    decode_flag = IMREAD_COLOR
+    if image_format == "JPEG":
+        source_pixels = source_width * source_height
+        if source_pixels > INFERENCE_DECODE_MAX_PIXELS * 16:
+            decode_flag = cv2.IMREAD_REDUCED_COLOR_8
+        elif source_pixels > INFERENCE_DECODE_MAX_PIXELS * 4:
+            decode_flag = cv2.IMREAD_REDUCED_COLOR_4
+        elif source_pixels > INFERENCE_DECODE_MAX_PIXELS:
+            decode_flag = cv2.IMREAD_REDUCED_COLOR_2
+    image = imdecode(np_arr, decode_flag)
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
     performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
-    return inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy, image, performance_ms
+    scale_x = source_width / image.shape[1]
+    scale_y = source_height / image.shape[0]
+    performance_ms["inference_decode_scale"] = max(scale_x, scale_y)
+    return (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
+            image, {"width": source_width, "height": source_height}, scale_x, scale_y,
+            performance_ms)
+
+
+def _map_detections_to_source(detections: list[dict], scale_x: float, scale_y: float) -> list[dict]:
+    """Map model boxes from the reduced JPEG raster to original image pixels."""
+    if scale_x == 1.0 and scale_y == 1.0:
+        return detections
+    mapped: list[dict] = []
+    for detection in detections:
+        value = dict(detection)
+        try:
+            x1, y1, x2, y2 = (float(coordinate) for coordinate in value["bbox"])
+            value["bbox"] = [
+                int(round(x1 * scale_x)), int(round(y1 * scale_y)),
+                int(round(x2 * scale_x)), int(round(y2 * scale_y)),
+            ]
+        except (KeyError, TypeError, ValueError):
+            pass
+        mapped.append(value)
+    return mapped
 
 
 def _encode_upload_preview(source_image: np.ndarray, detections: list[dict]) -> str:
@@ -224,11 +263,13 @@ async def detect_image(
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image upload is too large")
     (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
-     image, preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
+     image, source_dimensions, scale_x, scale_y,
+     preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
     performance_ms.update(preparation_ms)
     logger.info(
         "Upload accepted operation_id=%s bytes=%d dimensions=%dx%d pixels=%d",
-        operation_id, len(contents), image.shape[1], image.shape[0], image.shape[0] * image.shape[1],
+        operation_id, len(contents), source_dimensions["width"], source_dimensions["height"],
+        source_dimensions["width"] * source_dimensions["height"],
     )
     # The first valid image with embedded coordinates establishes the farm,
     # even if it contains no disease detection.
@@ -276,8 +317,9 @@ async def detect_image(
         performance_ms["farm_center_lookup_ms"] = 0.0
         if farm_center_task is not None:
             logger.info("Farm centre operation pending operation_id=%s", operation_id)
-    all_detections = result["detections"]
-    image_dimensions = {"width": int(image.shape[1]), "height": int(image.shape[0])}
+    inference_detections = result["detections"]
+    all_detections = _map_detections_to_source(inference_detections, scale_x, scale_y)
+    image_dimensions = source_dimensions
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
 
@@ -285,7 +327,7 @@ async def detect_image(
     # The full-resolution image is still analyzed and stored as evidence. Sending
     # that entire image back as base64 made the result wait on a large response.
     preview_started = time.perf_counter()
-    encoded = await asyncio.to_thread(_encode_upload_preview, image, all_detections)
+    encoded = await asyncio.to_thread(_encode_upload_preview, image, inference_detections)
     performance_ms["preview_encode_ms"] = (time.perf_counter() - preview_started) * 1000
     # Inference and the response preview are complete.  Release the decoded
     # source before Pillow performs any evidence compression for Cloudinary.

@@ -210,6 +210,27 @@ def test_preview_is_bounded_and_uses_original_coordinate_space():
     assert not image.any()
 
 
+def test_large_jpeg_uses_reduced_decode_and_maps_boxes_to_source(monkeypatch):
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new("RGB", (800, 600), "green").save(output, format="JPEG")
+    monkeypatch.setattr(detections, "INFERENCE_DECODE_MAX_PIXELS", 100_000)
+    monkeypatch.setattr("drone_gps.get_drone_gps", lambda: _Gps())
+    monkeypatch.setattr("drone_gps.init_drone_gps", lambda: _Gps())
+
+    (*_metadata, image, dimensions, scale_x, scale_y, _timings) = detections._prepare_upload(
+        output.getvalue(), "DJI_0104.JPG",
+    )
+    assert dimensions == {"width": 800, "height": 600}
+    assert image.shape[:2] == (150, 200)
+    assert (scale_x, scale_y) == (4.0, 4.0)
+    assert detections._map_detections_to_source(
+        [{"class": "Bud Rot", "confidence": 0.9, "bbox": [10, 20, 50, 100]}],
+        scale_x, scale_y,
+    )[0]["bbox"] == [40, 80, 200, 400]
+
+
 def test_non_image_is_rejected_even_with_jpeg_mime(monkeypatch):
     _configure_upload(monkeypatch, SimpleNamespace())
     with pytest.raises(HTTPException) as error:
