@@ -546,7 +546,6 @@
       .map-actions { width:100%; gap:0.25rem; }
     }
     #disease-map { height:clamp(400px, 65vh, 650px); position: relative; }
-    #mini-map { height:clamp(300px, 45vh, 450px); position: relative; }
     .maplibregl-popup-content { font-family:'DM Sans',sans-serif !important; font-size:var(--text-sm) !important; }
     .map-legend { padding:clamp(0.6rem, 1.5vw, 0.9rem); border-top:1px solid rgba(11,42,31,0.06); display:flex; gap:clamp(0.9rem, 2.5vw, 1.1rem); flex-wrap:wrap; }
     .leg-item { display:flex; align-items:center; gap:0.3rem; font-size:var(--text-sm); color:var(--text2); font-weight:500; }
@@ -593,6 +592,12 @@
     .map-toolbar { padding:.75rem var(--spacing-sm); background:#f8fbf8; border-bottom:1px solid rgba(11,42,31,.08); display:grid; grid-template-columns:repeat(3,minmax(110px,1fr)); gap:.55rem; }
     .map-filter { display:flex; flex-direction:column; gap:.22rem; font-size:.68rem; font-weight:700; color:var(--text3); letter-spacing:.04em; text-transform:uppercase; }
     .map-filter select,.map-filter input { width:100%; min-height:36px; border:1px solid rgba(11,42,31,.14); border-radius:7px; background:#fff; color:var(--text); padding:0 .6rem; font:inherit; font-size:var(--text-sm); text-transform:none; letter-spacing:normal; outline:none; }.map-filter select:focus,.map-filter input:focus { border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,.12); }
+    .farm-boundary-controls { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.65rem; padding:var(--spacing-md); }
+    .farm-boundary-controls label { display:flex; flex-direction:column; gap:.25rem; font-size:.72rem; font-weight:700; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; }
+    .farm-boundary-controls input,.farm-boundary-controls select { min-height:38px; border:1px solid rgba(11,42,31,.14); border-radius:7px; padding:0 .6rem; font:inherit; color:var(--text); background:#fff; }
+    .farm-boundary-actions { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:.45rem; }
+    .farm-location-column .farm-boundary-controls { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    @media(max-width:720px) { .farm-boundary-controls { grid-template-columns:repeat(2,minmax(0,1fr)); } .farm-boundary-actions .btn { flex:1 1 42%; } }
     .legend-group { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; }.legend-title { color:var(--deep); font-weight:700; font-size:var(--text-sm); }.severity-pill { display:inline-flex; align-items:center; gap:.3rem; font-weight:600; font-size:var(--text-xs); }.severity-dot { width:.52rem; height:.52rem; border-radius:50%; display:inline-block; }
     .area-details { display:grid; grid-template-columns:1fr 1fr; gap:.3rem .65rem; margin-top:.65rem; font-size:var(--text-xs); color:var(--text2); }.area-details strong { display:block; color:var(--deep); font-size:var(--text-sm); }
     .map-popup { min-width:240px; color:#1f342a; }.map-popup h3 { margin:0 0 .55rem; font-size:1rem; color:var(--deep); }.map-popup dl { display:grid; grid-template-columns:auto 1fr; gap:.3rem .65rem; margin:0; font-size:.77rem; }.map-popup dt { color:#64748b; }.map-popup dd { margin:0; font-weight:600; }.popup-actions { display:flex; gap:.45rem; margin-top:.8rem; }.popup-actions button { flex:1; border:0; border-radius:6px; padding:.45rem; font:600 .72rem 'DM Sans',sans-serif; cursor:pointer; background:#e7f4eb; color:#17633e; }.popup-actions button:last-child { background:#17633e; color:#fff; }
@@ -2044,17 +2049,15 @@
           </div>
         </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:var(--spacing-md);">
+      <div class="farm-location-column">
         <div class="map-card">
-          <div class="map-head">
-            <h4>Overview Map</h4>
-          </div>
-          <div id="mini-map"></div>
-        </div>
-        <div class="events-card">
-          <div class="events-head"><h4>Detection Log</h4></div>
-          <div class="events-list" id="events-list">
-            <div class="no-events">No detections logged yet.<br>Start the drone camera or upload an image with GPS enabled.</div>
+          <div class="map-head"><h4>Farm Location Management</h4><span id="farm-boundary-status" class="area-meta">Select an area to manage its private boundary.</span></div>
+          <div class="farm-boundary-controls">
+            <label>Area <select id="farm-area-select" onchange="selectFarmArea(this.value)"><option value="1">Area 1</option><option value="2">Area 2</option><option value="3">Area 3</option><option value="4">Area 4</option></select></label>
+            <label>Farm name <input id="farm-name-input" maxlength="100" placeholder="e.g. North coconut grove"></label>
+            <label>Latitude <input id="farm-lat-input" inputmode="decimal" type="number" min="-90" max="90" step="any" placeholder="7.30158"></label>
+            <label>Longitude <input id="farm-lng-input" inputmode="decimal" type="number" min="-180" max="180" step="any" placeholder="125.63099"></label>
+            <div class="farm-boundary-actions"><button class="btn btn-o" type="button" onclick="goToFarmLocation()">Go to location</button><button class="btn btn-p" type="button" onclick="startBoundaryDrawing()">Draw boundary</button><button class="btn btn-o" type="button" onclick="editFarmBoundary()">Edit boundary</button><button class="btn btn-d" type="button" onclick="deleteFarmBoundary()">Delete boundary</button><button class="btn btn-p" type="button" onclick="saveFarmBoundary()">Confirm &amp; save</button><button class="btn btn-o" type="button" onclick="cancelFarmBoundaryEdit()">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -2337,7 +2340,7 @@
   </div>
 </div>
 
-<footer>Powered by <strong>YOLO26 v6</strong> &nbsp;·&nbsp; <strong>FastAPI</strong> &nbsp;·&nbsp; <strong>MapLibre GL</strong> &nbsp;·&nbsp; CoconutAI Drone Mapping System</footer>
+<footer>Powered by <strong>YOLO26 v6</strong> &nbsp;·&nbsp; <strong>FastAPI</strong> &nbsp;·&nbsp; <strong>MapLibre GL</strong> &nbsp;·&nbsp; CoconutAI Drone Mapping System &nbsp;·&nbsp; Zion Blake</footer>
 <div class="toast" id="toast"></div>
 
 </div><!-- /main-wrapper -->

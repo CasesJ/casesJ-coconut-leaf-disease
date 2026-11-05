@@ -1233,6 +1233,17 @@ function initializeMaps() {
     mapsReady = true;
     applyUiSettings();
     attachPendingMapPins();
+    ensureBoundaryLayer();
+    mainMap.on('click', event => {
+      if (!boundaryDrawing) return;
+      const ring = boundaryDraft?.coordinates?.[0];
+      if (!ring) return;
+      const points = ring.length > 1 && String(ring[0]) === String(ring[ring.length - 1]) ? ring.slice(0, -1) : ring.slice();
+      points.push([event.lngLat.lng, event.lngLat.lat]);
+      boundaryDraft.coordinates[0] = points.length > 1 ? [...points, [...points[0]]] : points;
+      renderFarmBoundaries();
+      if (boundaryDraft.coordinates[0].length >= 4) renderVertexMarkers();
+    });
 
     mainMap.addSource('area-monitoring-src', {
       type: 'geojson',
@@ -1260,22 +1271,6 @@ function initializeMaps() {
     
     // Add fullscreen control
     mainMap.addControl(new maplibregl.FullscreenControl(), 'top-right');
-  });
-  
-  // Initialize mini map (2D only)
-  miniMap = new maplibregl.Map({
-    container: 'mini-map',
-    style: rasterStyle,
-    center: [baseLng, baseLat],
-    zoom: 13.5,
-    pitch: 0,
-    bearing: 0,
-    attributionControl: false
-  });
-  
-  miniMap.on('load', () => {
-    const nav = new maplibregl.NavigationControl();
-    miniMap.addControl(nav, 'top-right');
   });
   
   // ✅ Don't request geolocation on page load - only request when user uploads or uses drone
@@ -1318,14 +1313,13 @@ function switchTab(name, btn) {
   if(name==='records' && currentUserIsExpert && typeof loadExpertAuditLog === 'function') loadExpertAuditLog();
   if(name==='history' && typeof loadVerifiedDiseaseHistory === 'function') loadVerifiedDiseaseHistory();
   if(name==='monitoring' && typeof loadMonitoringDashboard === 'function') loadMonitoringDashboard();
-  if(name==='map' && typeof loadAreaMonitoring === 'function') loadAreaMonitoring();
+  if(name==='map' && typeof loadAreaMonitoring === 'function') { Promise.resolve(loadFarmBoundaries()).finally(() => loadAreaMonitoring()); }
   if(name==='dashboard') {
     const statusPill = document.getElementById('drone-status-text');
     if (statusPill) statusPill.textContent = 'Drone Ready';
   }
   setTimeout(()=>{
     if(name==='map' && mapsReady) mainMap.resize();
-    if(name==='drone' && mapsReady) miniMap.resize();
   },60);
 }
 
@@ -1875,8 +1869,10 @@ function attachPinMarkers(entry) {
   const popup = new maplibregl.Popup({ offset: 25 });
   entry.mainMarker = new maplibregl.Marker({ element: createMarkerElement(entry.color) })
     .setLngLat([entry.lng, entry.lat]).setPopup(popup).addTo(mainMap);
-  entry.miniMarker = new maplibregl.Marker({ element: createMarkerElement(entry.color) })
-    .setLngLat([entry.lng, entry.lat]).addTo(miniMap);
+  if (miniMap) {
+    entry.miniMarker = new maplibregl.Marker({ element: createMarkerElement(entry.color) })
+      .setLngLat([entry.lng, entry.lat]).addTo(miniMap);
+  }
   entry.popup = popup;
   popup.setHTML(popupHtml(entry, log.indexOf(entry)));
   mainMarkers.push({ marker: entry.mainMarker, popup });
@@ -1902,7 +1898,7 @@ function addPin(lat,lng,label,confidence,source,{ persist = true, deferRender = 
     mainMarker: null, miniMarker: null, popup: null};
   log.unshift(entry);
   attachPinMarkers(entry);
-  if (mapsReady && !deferRender) miniMap.flyTo({center: [lng, lat], zoom: 16});
+  if (mapsReady && miniMap && !deferRender) miniMap.flyTo({center: [lng, lat], zoom: 16});
   
   // ✅ Save pin to sessionStorage for farm location map
   if (!deferRender) syncSessionMapPins();
@@ -1976,6 +1972,107 @@ function showRecordLocationOnMap(lat, lng, diseaseLabel = '') {
 }
 
 // ── Area-based GIS monitoring ──
+let farmBoundaries = [];
+let selectedFarmArea = 1;
+let boundaryDraft = null;
+let boundaryDrawing = false;
+let boundaryVertexMarkers = [];
+const FARM_BOUNDARY_COLORS = ['#2563eb', '#16a34a', '#d97706', '#9333ea'];
+
+function boundaryFeatureCollection(includeDraft = true) {
+  const areas = farmBoundaries.filter(area => area.boundary_geojson).map(area => ({ type: 'Feature', properties: { area_id: area.area_id, color: FARM_BOUNDARY_COLORS[area.area_id - 1] }, geometry: area.boundary_geojson }));
+  if (includeDraft && boundaryDraft?.coordinates?.[0]?.length >= 3) areas.push({ type: 'Feature', properties: { area_id: selectedFarmArea, color: FARM_BOUNDARY_COLORS[selectedFarmArea - 1], draft: true }, geometry: boundaryDraft });
+  return { type: 'FeatureCollection', features: areas };
+}
+function ensureBoundaryLayer() {
+  if (!mapsReady || !mainMap || mainMap.getSource('farm-boundaries-src')) return;
+  mainMap.addSource('farm-boundaries-src', { type: 'geojson', data: boundaryFeatureCollection() });
+  mainMap.addLayer({ id: 'farm-boundaries-fill', type: 'fill', source: 'farm-boundaries-src', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': .14 } });
+  mainMap.addLayer({ id: 'farm-boundaries-line', type: 'line', source: 'farm-boundaries-src', paint: { 'line-color': ['get', 'color'], 'line-width': 3 } });
+}
+function renderFarmBoundaries() { ensureBoundaryLayer(); mainMap?.getSource?.('farm-boundaries-src')?.setData(boundaryFeatureCollection()); }
+function selectedBoundary() { return farmBoundaries.find(area => Number(area.area_id) === Number(selectedFarmArea)); }
+function updateBoundaryStatus(message) {
+  const area = selectedBoundary(); const status = document.getElementById('farm-boundary-status');
+  if (!status) return;
+  status.textContent = message || (area?.boundary_locked ? 'This farm area has reached its maximum of 2 confirmed changes. Its boundary is now locked.' : `Changes remaining: ${area?.changes_remaining ?? 2}`);
+}
+function clearVertexMarkers() { boundaryVertexMarkers.forEach(marker => marker.remove()); boundaryVertexMarkers = []; }
+function renderVertexMarkers() {
+  clearVertexMarkers(); const ring = boundaryDraft?.coordinates?.[0]; if (!ring || !mapsReady) return;
+  ring.slice(0, -1).forEach((coordinate, index) => {
+    const element = document.createElement('button'); element.type = 'button'; element.className = 'farm-boundary-vertex'; element.setAttribute('aria-label', `Boundary point ${index + 1}`); Object.assign(element.style, { width:'16px', height:'16px', borderRadius:'50%', border:'2px solid white', background:FARM_BOUNDARY_COLORS[selectedFarmArea - 1], padding:'0', cursor:'move' });
+    const marker = new maplibregl.Marker({ element, draggable: true }).setLngLat(coordinate).addTo(mainMap);
+    marker.on('dragend', () => { const p = marker.getLngLat(); boundaryDraft.coordinates[0][index] = [p.lng, p.lat]; boundaryDraft.coordinates[0][boundaryDraft.coordinates[0].length - 1] = [...boundaryDraft.coordinates[0][0]]; renderFarmBoundaries(); });
+    boundaryVertexMarkers.push(marker);
+  });
+}
+async function loadFarmBoundaries() {
+  if (!currentToken || currentUserIsExpert) return;
+  try { const response = await fetch('/farm/areas', { headers: { Authorization: `Bearer ${currentToken}` } }); if (!response.ok) throw new Error('Could not load farm boundaries'); farmBoundaries = (await response.json()).areas || []; renderFarmBoundaries(); selectFarmArea(selectedFarmArea); }
+  catch (error) { console.warn(error); updateBoundaryStatus('Farm boundaries are unavailable right now.'); }
+}
+window.selectFarmArea = function(areaId) {
+  selectedFarmArea = Number(areaId); const area = selectedBoundary();
+  // An unfinished drawing must never carry over to a different area slot.
+  boundaryDraft = null; boundaryDrawing = false; clearVertexMarkers(); renderFarmBoundaries();
+  const name = document.getElementById('farm-name-input'), lat = document.getElementById('farm-lat-input'), lng = document.getElementById('farm-lng-input');
+  if (name) name.value = area?.farm_name || `Area ${selectedFarmArea}`;
+  const fallbackLatitude = Number(farmLocation?.latitude ?? DEFAULT_FARM_LOCATION.latitude);
+  const fallbackLongitude = Number(farmLocation?.longitude ?? DEFAULT_FARM_LOCATION.longitude);
+  // Do not coerce null to zero: Number(null) is 0 and would send an
+  // unconfigured area to (0, 0) in the Atlantic Ocean.
+  const savedLatitude = area?.center_latitude;
+  const savedLongitude = area?.center_longitude;
+  const latitude = savedLatitude !== null && savedLatitude !== undefined
+    && Number.isFinite(Number(savedLatitude)) ? Number(savedLatitude) : fallbackLatitude;
+  const longitude = savedLongitude !== null && savedLongitude !== undefined
+    && Number.isFinite(Number(savedLongitude)) ? Number(savedLongitude) : fallbackLongitude;
+  if (lat) lat.value = latitude;
+  if (lng) lng.value = longitude;
+  updateBoundaryStatus();
+  if (!mapsReady || !mainMap) return;
+  mainMap.resize();
+  if (area?.boundary_geojson) { const ring = area.boundary_geojson.coordinates[0]; mainMap.fitBounds(ring.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(ring[0], ring[0])), { padding: 60, maxZoom: 18 }); }
+  else mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
+  // MapLibre occasionally retains an empty raster canvas after a side-panel
+  // selection/reflow.  A second resize forces tile requests for the new view.
+  requestAnimationFrame(() => { mainMap.resize(); mainMap.triggerRepaint(); });
+};
+// Used by the monitoring cards as well as the selector.  A configured area
+// always opens its exact saved polygon, rather than an approximate centre.
+window.focusFarmArea = function(areaId) {
+  const selector = document.getElementById('farm-area-select');
+  if (selector) selector.value = String(areaId);
+  window.selectFarmArea(areaId);
+};
+window.goToFarmLocation = function() {
+  const lat = Number(document.getElementById('farm-lat-input')?.value), lng = Number(document.getElementById('farm-lng-input')?.value);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return showToast('Enter a latitude from -90 to 90 and longitude from -180 to 180.');
+  mainMap?.flyTo({ center: [lng, lat], zoom: 18 }); updateBoundaryStatus('Location centered. Drawing does not use a change.');
+};
+window.startBoundaryDrawing = function() {
+  const area = selectedBoundary(); if (area?.boundary_locked) return updateBoundaryStatus();
+  if (!mapsReady) return showToast('Map is still loading.'); boundaryDraft = { type:'Polygon', coordinates:[[]] }; boundaryDrawing = true; clearVertexMarkers(); renderFarmBoundaries(); updateBoundaryStatus('Tap or click at least three points on the map, then confirm and save.');
+};
+window.editFarmBoundary = function() {
+  const area = selectedBoundary(); if (!area?.boundary_geojson) return showToast('Draw a boundary before editing it.'); if (area.boundary_locked) return updateBoundaryStatus();
+  boundaryDraft = JSON.parse(JSON.stringify(area.boundary_geojson)); boundaryDrawing = false; renderFarmBoundaries(); renderVertexMarkers(); updateBoundaryStatus(`Adjust vertices, then confirm and save. Changes remaining: ${area.changes_remaining}`);
+};
+window.cancelFarmBoundaryEdit = function() { boundaryDraft = null; boundaryDrawing = false; clearVertexMarkers(); renderFarmBoundaries(); updateBoundaryStatus('Boundary changes cancelled.'); };
+window.saveFarmBoundary = async function() {
+  const area = selectedBoundary(); const ring = boundaryDraft?.coordinates?.[0] || []; if (ring.length < 4) return showToast('Draw at least three boundary points first.');
+  const isInitial = !area?.initial_boundary_confirmed, remaining = area?.changes_remaining ?? 2;
+  const warning = isInitial ? 'Are you sure you want to save this farm location? You will only be allowed two confirmed changes after saving.' : (remaining === 1 ? 'Warning: This is your final allowed change. Once confirmed, this farm boundary will be permanently locked and can no longer be modified or deleted.' : `Are you sure you want to modify this farm location? You have ${remaining} allowed changes remaining.`);
+  if (!window.confirm(warning)) return;
+  const lat = Number(document.getElementById('farm-lat-input')?.value), lng = Number(document.getElementById('farm-lng-input')?.value); if (!Number.isFinite(lat) || !Number.isFinite(lng)) return showToast('Enter valid farm center coordinates.');
+  try { const response = await fetch(`/farm/areas/${selectedFarmArea}`, { method:'PUT', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${currentToken}` }, body:JSON.stringify({ farm_name:document.getElementById('farm-name-input')?.value, center_latitude:lat, center_longitude:lng, boundary_geojson:boundaryDraft }) }); const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || 'Boundary could not be saved'); farmBoundaries = farmBoundaries.filter(x => x.area_id !== selectedFarmArea).concat(payload); boundaryDraft = null; boundaryDrawing = false; clearVertexMarkers(); renderFarmBoundaries(); selectFarmArea(selectedFarmArea); loadAreaMonitoring(); showToast('Farm boundary saved.'); } catch (error) { showToast(error.message); }
+};
+window.deleteFarmBoundary = async function() {
+  const area = selectedBoundary(); if (!area?.boundary_geojson) return showToast('No saved boundary to delete.'); if (area.boundary_locked) return updateBoundaryStatus();
+  if (!window.confirm(`Delete this boundary? Deletion consumes one allowed change. You have ${area.changes_remaining} change${area.changes_remaining === 1 ? '' : 's'} remaining.`)) return;
+  try { const response = await fetch(`/farm/areas/${selectedFarmArea}`, { method:'DELETE', headers:{ Authorization:`Bearer ${currentToken}` } }); const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || 'Boundary could not be deleted'); farmBoundaries = farmBoundaries.filter(x => x.area_id !== selectedFarmArea).concat(payload); boundaryDraft = null; boundaryDrawing = false; clearVertexMarkers(); renderFarmBoundaries(); selectFarmArea(selectedFarmArea); loadAreaMonitoring(); showToast('Farm boundary deleted.'); } catch (error) { showToast(error.message); }
+};
 const DEFAULT_FARM_LOCATION = { latitude: 7.30158, longitude: 125.63099 };
 let farmLocation = { ...DEFAULT_FARM_LOCATION };
 let AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
@@ -2084,10 +2181,17 @@ function buildAreaFeatures(areas) {
   return areas.map(area => ({
     type: 'Feature',
     properties: { name: area.name, prevalence: area.prevalence, diseased: area.diseased, samples: area.samples, color: area.color },
-    geometry: { type: 'Polygon', coordinates: [[
+    geometry: area.boundary_geojson || { type: 'Polygon', coordinates: [[
       [area.minLng, area.minLat], [area.maxLng, area.minLat], [area.maxLng, area.maxLat], [area.minLng, area.maxLat], [area.minLng, area.minLat]
     ]] }
   }));
+}
+
+function pointInFarmBoundary(point, geometry) {
+  const ring = geometry?.coordinates?.[0]; if (!Array.isArray(ring) || ring.length < 4) return false;
+  let inside = false; const x = point.lng, y = point.lat;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const a = ring[i], b = ring[j]; if (((a[1] > y) !== (b[1] > y)) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside; }
+  return inside;
 }
 
 window.loadAreaMonitoring = async function loadAreaMonitoring() {
@@ -2107,15 +2211,17 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
     const lngStep = (AREA_MONITORING_BOUNDS.maxLng - AREA_MONITORING_BOUNDS.minLng) / 2;
     const areas = [];
     for (let row = 0; row < 2; row++) for (let col = 0; col < 2; col++) {
-      areas.push({ name: `Area ${row * 2 + col + 1}`, row, col, minLat: AREA_MONITORING_BOUNDS.minLat + row * latStep, maxLat: AREA_MONITORING_BOUNDS.minLat + (row + 1) * latStep, minLng: AREA_MONITORING_BOUNDS.minLng + col * lngStep, maxLng: AREA_MONITORING_BOUNDS.minLng + (col + 1) * lngStep, samples: 0, diseased: 0 });
+      const areaId = row * 2 + col + 1, configured = farmBoundaries.find(item => Number(item.area_id) === areaId && item.boundary_geojson);
+      areas.push({ name: `Area ${areaId}`, row, col, minLat: AREA_MONITORING_BOUNDS.minLat + row * latStep, maxLat: AREA_MONITORING_BOUNDS.minLat + (row + 1) * latStep, minLng: AREA_MONITORING_BOUNDS.minLng + col * lngStep, maxLng: AREA_MONITORING_BOUNDS.minLng + (col + 1) * lngStep, boundary_geojson: configured?.boundary_geojson || null, configured: Boolean(configured), samples: 0, diseased: 0 });
     }
     records.forEach(record => {
       if (record.type && record.type !== 'upload' && record.source !== 'upload') return;
       const point = getRecordCoordinates(record);
-      if (!point || point.lat < AREA_MONITORING_BOUNDS.minLat || point.lat > AREA_MONITORING_BOUNDS.maxLat || point.lng < AREA_MONITORING_BOUNDS.minLng || point.lng > AREA_MONITORING_BOUNDS.maxLng) return;
-      const col = Math.min(1, Math.floor((point.lng - AREA_MONITORING_BOUNDS.minLng) / lngStep));
-      const row = Math.min(1, Math.floor((point.lat - AREA_MONITORING_BOUNDS.minLat) / latStep));
-      const area = areas[row * 2 + col];
+      if (!point) return;
+      const configuredMatches = areas.filter(area => area.boundary_geojson && pointInFarmBoundary(point, area.boundary_geojson));
+      if (configuredMatches.length > 1) return; // overlapping farms are intentionally unassigned
+      let area = configuredMatches[0];
+      if (!area) { if (point.lat < AREA_MONITORING_BOUNDS.minLat || point.lat > AREA_MONITORING_BOUNDS.maxLat || point.lng < AREA_MONITORING_BOUNDS.minLng || point.lng > AREA_MONITORING_BOUNDS.maxLng) return; const col = Math.min(1, Math.floor((point.lng - AREA_MONITORING_BOUNDS.minLng) / lngStep)); const row = Math.min(1, Math.floor((point.lat - AREA_MONITORING_BOUNDS.minLat) / latStep)); area = areas[row * 2 + col]; if (area.configured) return; }
       area.samples += 1;
       if ((record.detections || []).some(det => !isHealthyClass(det.class))) area.diseased += 1;
     });
@@ -2124,7 +2230,7 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
     const diseasedSamples = areas.reduce((sum, area) => sum + area.diseased, 0);
     const highest = [...areas].sort((a, b) => b.prevalence - a.prevalence)[0];
     if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Disease Prevalence</h4><div class="stat-value">${gpsSamples ? Math.round(diseasedSamples / gpsSamples * 100) : 0}%</div><div class="stat-subtext">Across mapped areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${gpsSamples && highest.prevalence ? highest.name : '—'}</div><div class="stat-subtext">Highest disease prevalence</div></div>`;
-    gridEl.innerHTML = areas.map(area => `<button type="button" class="area-card" style="border-left-color:${area.color}" onclick="setMapCenter(${(area.minLat + area.maxLat) / 2}, ${(area.minLng + area.maxLng) / 2})" aria-label="Show ${area.name} on map, ${area.prevalence}% disease prevalence"><h5>${area.name}</h5><div class="area-prevalence">${area.prevalence}%</div><div class="area-meta">Disease prevalence</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : 'No samples'}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></button>`).join('');
+    gridEl.innerHTML = areas.map(area => `<button type="button" class="area-card" style="border-left-color:${area.color}" onclick="focusFarmArea(${Number(area.name.split(' ')[1])})" aria-label="Show ${area.name} on map, ${area.prevalence}% disease prevalence"><h5>${area.name}</h5><div class="area-prevalence">${area.samples ? area.prevalence + '%' : '—'}</div><div class="area-meta">${area.configured ? 'Boundary-aware monitoring' : 'Grid monitoring (not configured)'}</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : (area.configured ? 'No samples' : 'Unconfigured')}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></button>`).join('');
     if (mapsReady && mainMap.getSource('area-monitoring-src')) mainMap.getSource('area-monitoring-src').setData({ type: 'FeatureCollection', features: buildAreaFeatures(areas) });
     areaMonitoringLoaded = true;
   } catch (error) {
@@ -3092,7 +3198,7 @@ function captureLoop(v){
       dronePath.push([lng, lat]);
       
       // Update drone location on mini-map every 10 frames
-      if(frameCount % 10 === 0 && mapsReady){
+      if(frameCount % 10 === 0 && mapsReady && miniMap){
         // Update drone position marker on mini-map
         const droneMarkerEl = document.createElement('div');
         droneMarkerEl.style.width = '16px';

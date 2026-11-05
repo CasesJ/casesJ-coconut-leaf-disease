@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Farm boundaries are written exclusively by the authenticated backend
+    // (Firebase Admin SDK).  This protects owner_uid and change counters from
+    // direct browser writes; farmer reads use /farm/areas instead.
+    match /users/{userId}/farm_areas/{areaId} {
+      allow read, write: if false;
+    }
+  }
+}

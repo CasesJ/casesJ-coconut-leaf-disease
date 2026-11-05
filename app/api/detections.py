@@ -45,6 +45,7 @@ from app.services.detection_service import (
     update_record_everywhere,
 )
 from app.services.farm_service import get_farm_center, set_initial_farm_center
+from app.services.farm_boundary_service import list_boundaries, match_area
 from app.services.inference_service import InferenceUnavailable, run_image_inference
 from app.services.media_service import present_detection_record
 
@@ -375,6 +376,16 @@ async def detect_image(
     _log_memory(operation_id, "before_persistence")
     record_id = None
     if high_confidence_detections:
+        farm_area_id = None
+        farm_area_conflict = False
+        # Boundary matching is best-effort and never blocks or alters the
+        # existing inference path.  Only embedded image GPS is considered.
+        if lat is not None and lng is not None and gps_source in {"exif", "dji_exif"}:
+            try:
+                configured_boundaries = await asyncio.to_thread(list_boundaries, user_id)
+                farm_area_id, farm_area_conflict = match_area(configured_boundaries, lat, lng)
+            except Exception:
+                logger.warning("Farm boundary lookup failed for upload %s", operation_id)
         gps_data = {
             "latitude": lat, "longitude": lng,
             "accuracy": gps_accuracy, "source": gps_source,
@@ -399,6 +410,8 @@ async def detect_image(
                 timings=persistence_timings,
                 operation_id=operation_id,
                 idempotency_key=idempotency_key or None,
+                farm_area_id=farm_area_id,
+                farm_area_conflict=farm_area_conflict,
             )
         except DetectionPersistenceError as exc:
             logger.warning("New detection %s could not be durably saved: %s", record_id, exc)

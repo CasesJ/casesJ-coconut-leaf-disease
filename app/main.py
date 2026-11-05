@@ -22,7 +22,7 @@ from app.core.config import (
     IMAGE_PIPELINE_MAX_CONCURRENCY,
     IMAGE_PIPELINE_QUEUE_SECONDS,
 )
-from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports
+from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports, farm_boundaries
 from app.api import tree_identity
 from app.api import media
 
@@ -142,6 +142,7 @@ def create_app() -> FastAPI:
     application.include_router(auth.router)
     application.include_router(recommendations.router)
     application.include_router(detections.router)
+    application.include_router(farm_boundaries.router)
     application.include_router(expert.router)
     application.include_router(monitoring.router)
     application.include_router(tree_identity.router)

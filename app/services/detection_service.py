@@ -335,6 +335,8 @@ def save_detection_record(
     timings: dict[str, float] | None = None,
     operation_id: str = "unknown",
     idempotency_key: str | None = None,
+    farm_area_id: int | None = None,
+    farm_area_conflict: bool = False,
 ) -> bool:
     """Persist authenticated Cloudinary image references and a Firestore record.
 
@@ -378,6 +380,12 @@ def save_detection_record(
         source=source,
         image_metadata=image_metadata,
     )
+    # Additive metadata only: legacy consumers and historical documents retain
+    # their original GPS and detection fields unchanged.
+    if farm_area_id is not None:
+        detection_record["farm_area_id"] = int(farm_area_id)
+    if farm_area_conflict:
+        detection_record["farm_area_conflict"] = True
     if idempotency_key:
         detection_record["upload_idempotency_key"] = idempotency_key
     if dimensions:
