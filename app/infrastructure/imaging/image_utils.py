@@ -282,6 +282,12 @@ def _image_content_type(content: bytes) -> str:
 def _detection_thumbnail(original_bytes: bytes) -> bytes:
     """Create a display-only JPEG without changing the stored evidence image."""
     with Image.open(BytesIO(original_bytes)) as source:
+        # JPEG draft decoding lets Pillow read an 8x smaller DCT raster for a
+        # 480px thumbnail instead of materialising a 48 MP source image. It is
+        # intentionally used only for the disposable display thumbnail; the
+        # original Cloudinary evidence bytes and their EXIF/XMP stay untouched.
+        if source.format == "JPEG":
+            source.draft("RGB", _DETECTION_THUMBNAIL_SIZE)
         with ImageOps.exif_transpose(source).convert("RGB") as image:
             image.thumbnail(_DETECTION_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
             output = BytesIO()

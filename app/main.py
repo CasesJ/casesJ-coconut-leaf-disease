@@ -7,21 +7,28 @@ mounts static files, and includes all API routers.
 import logging
 import importlib
 import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import configure_logging
-from app.core.config import CORS_ALLOWED_ORIGINS
+from app.core.config import (
+    CORS_ALLOWED_ORIGINS,
+    IMAGE_PIPELINE_MAX_CONCURRENCY,
+    IMAGE_PIPELINE_QUEUE_SECONDS,
+)
 from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports
 from app.api import tree_identity
 from app.api import media
 
 configure_logging()
 logger = logging.getLogger(__name__)
+_image_pipeline_slots = asyncio.Semaphore(IMAGE_PIPELINE_MAX_CONCURRENCY)
 
 
 @asynccontextmanager
@@ -109,6 +116,27 @@ def create_app() -> FastAPI:
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
         return response
+
+    @application.middleware("http")
+    async def limit_memory_intensive_image_pipelines(request: Request, call_next):
+        """Bound complete image pipelines so concurrent DJI uploads cannot OOM Render."""
+        if request.url.path != "/detect/image" or request.method != "POST":
+            return await call_next(request)
+        try:
+            await asyncio.wait_for(
+                _image_pipeline_slots.acquire(), timeout=IMAGE_PIPELINE_QUEUE_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("Image pipeline busy; rejecting request before decoding")
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Image analysis is busy. Please retry shortly."},
+                headers={"Retry-After": "10"},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            _image_pipeline_slots.release()
 
     # Routers
     application.include_router(auth.router)

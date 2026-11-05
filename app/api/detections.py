@@ -53,6 +53,16 @@ _background_tasks: set[asyncio.Task] = set()
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
+def _process_rss_mib() -> float | None:
+    """Return the process RSS for diagnostics without exposing request data."""
+    try:
+        import psutil  # noqa: PLC0415
+
+        return round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        return None
+
+
 def _prepare_upload(contents: bytes, filename: str | None):
     """Validate, extract GPS and decode unchanged source pixels in a worker."""
     from drone_gps import get_drone_gps, init_drone_gps
@@ -93,6 +103,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
                         save_options["icc_profile"] = icc_profile
                     primary.save(output, **save_options)
                     inference_contents = output.getvalue()
+                    output.close()
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
     performance_ms["validation_ms"] = (time.perf_counter() - validation_started) * 1000
@@ -150,6 +161,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
         elif source_pixels > INFERENCE_DECODE_MAX_PIXELS:
             decode_flag = cv2.IMREAD_REDUCED_COLOR_2
     image = imdecode(np_arr, decode_flag)
+    del np_arr
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
     performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
@@ -230,6 +242,7 @@ async def detect_image(
         raise HTTPException(status_code=400, detail="Invalid Idempotency-Key header")
     operation_id = idempotency_key or uuid.uuid4().hex[:12]
     performance_ms: dict[str, float] = {}
+    rss_samples = [_process_rss_mib()]
     from model import detector  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
@@ -266,6 +279,7 @@ async def detect_image(
      image, source_dimensions, scale_x, scale_y,
      preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
     performance_ms.update(preparation_ms)
+    rss_samples.append(_process_rss_mib())
     logger.info(
         "Upload accepted operation_id=%s bytes=%d dimensions=%dx%d pixels=%d",
         operation_id, len(contents), source_dimensions["width"], source_dimensions["height"],
@@ -310,6 +324,7 @@ async def detect_image(
         ) from exc
     inference_ms = (time.perf_counter() - inference_started) * 1000
     performance_ms["inference_ms"] = inference_ms
+    rss_samples.append(_process_rss_mib())
     if farm_center_task is not None and farm_center_task.done():
         farm_center, farm_center_ms = farm_center_task.result()
         performance_ms["farm_center_lookup_ms"] = farm_center_ms
@@ -374,9 +389,21 @@ async def detect_image(
         performance_ms.update(persistence_timings)
     performance_ms["persistence_total_ms"] = (time.perf_counter() - persistence_started) * 1000
     performance_ms["request_total_ms"] = (time.perf_counter() - request_started) * 1000
+    rss_samples.append(_process_rss_mib())
+    peak_rss_mib = max(sample for sample in rss_samples if sample is not None) if any(
+        sample is not None for sample in rss_samples
+    ) else None
     logger.info("Upload stages operation_id=%s %s recorded=%s bytes=%d", operation_id, " ".join(
         f"{name}={duration:.0f}" for name, duration in performance_ms.items()),
         bool(record_id), len(contents))
+    logger.info(
+        "Upload resources operation_id=%s inference_strategy=%s decode_scale=%.1f source_pixels=%d peak_rss_mib=%s",
+        operation_id,
+        "jpeg_reduced" if scale_x > 1.0 else "full_resolution",
+        max(scale_x, scale_y),
+        source_dimensions["width"] * source_dimensions["height"],
+        peak_rss_mib if peak_rss_mib is not None else "unavailable",
+    )
     return {
         "detections": all_detections,
         "recorded_count": len(high_confidence_detections),

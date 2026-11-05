@@ -188,7 +188,9 @@ window.renderAuthMode = function renderAuthMode() {
   } else if (authMode === 'signup') {
     title.textContent = 'Sign Up';
     btnText.textContent = 'Sign Up';
-    if (footerAction) footerAction.textContent = '';
+    if (footerAction) {
+      footerAction.innerHTML = '<button class="auth-mode-link" type="button" onclick="setAuthMode(\'recovery\')">Forgot Password?</button>';
+    }
   } else {
     title.textContent = 'Recover Password';
     btnText.textContent = 'Reset Password';
@@ -2337,13 +2339,15 @@ async function detectImages(files) {
   const updateUploadStatus = (index, progress) => {
     if (progress?.preparing) {
       uploadStates[index] = 'Preparing';
+    } else if (progress?.retrying) {
+      uploadStates[index] = `Retrying (${progress.attempt}/2)`;
     } else if (progress?.complete) {
       uploadStates[index] = 'Analyzing';
     } else if (progress?.total > 0) {
       uploadStates[index] = `Uploading ${Math.min(100, Math.round(progress.loaded / progress.total * 100))}%`;
     }
     if (loadingText) {
-      const active = uploadStates.filter(state => state === 'Analyzing' || state === 'Preparing' || state.startsWith('Uploading')).length;
+      const active = uploadStates.filter(state => state === 'Analyzing' || state === 'Preparing' || state.startsWith('Uploading') || state.startsWith('Retrying')).length;
       loadingText.textContent = `${uploadStates[index]} image ${index + 1} of ${files.length} · ${completed} complete${active ? ` · ${active} in progress` : ''}`;
     }
   };
@@ -2459,32 +2463,56 @@ async function detectImage(file, onUploadProgress){
     uploadIdempotencyKeys.set(file, idempotencyKey);
   }
   
-  const data = await new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', '/detect/image');
-    request.timeout = 300_000;
-    if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
-    request.setRequestHeader('Idempotency-Key', idempotencyKey);
-    request.upload.addEventListener('progress', event => {
-      if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
+  const sendDetectionRequest = () => new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', '/detect/image');
+      request.timeout = 300_000;
+      if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
+      request.setRequestHeader('Idempotency-Key', idempotencyKey);
+      request.upload.addEventListener('progress', event => {
+        if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
+      });
+      request.upload.addEventListener('load', () => onUploadProgress?.({ complete: true }));
+      request.addEventListener('load', () => {
+        if (request.status < 200 || request.status >= 300) {
+          const detail = request.responseText || '';
+          const error = new Error(`Server error ${request.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
+          error.retryable = [502, 503, 504].includes(request.status);
+          reject(error);
+          return;
+        }
+        try {
+          resolve(JSON.parse(request.responseText));
+        } catch {
+          reject(new Error('The server returned an invalid response.'));
+        }
+      });
+      request.addEventListener('error', () => {
+        const error = new Error('Network error while uploading image.');
+        error.retryable = true;
+        reject(error);
+      });
+      request.addEventListener('timeout', () => {
+        const error = new Error('Image upload timed out. Check your records before retrying.');
+        error.retryable = true;
+        reject(error);
+      });
+      request.send(fd);
     });
-    request.upload.addEventListener('load', () => onUploadProgress?.({ complete: true }));
-    request.addEventListener('load', () => {
-      if (request.status < 200 || request.status >= 300) {
-        const detail = request.responseText || '';
-        reject(new Error(`Server error ${request.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(request.responseText));
-      } catch {
-        reject(new Error('The server returned an invalid response.'));
-      }
-    });
-    request.addEventListener('error', () => reject(new Error('Network error while uploading image.')));
-    request.addEventListener('timeout', () => reject(new Error('Image upload timed out. Check your records before retrying.')));
-    request.send(fd);
-  });
+
+  // Render can briefly return a 502 while its worker recovers. Reuse the same
+  // idempotency key so a retry cannot create a duplicate detection record.
+  let data;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      data = await sendDetectionRequest();
+      break;
+    } catch (error) {
+      if (!error.retryable || attempt === 2) throw error;
+      onUploadProgress?.({ retrying: true, attempt: attempt + 1 });
+      await new Promise(resolve => window.setTimeout(resolve, 1000));
+    }
+  }
   if (data.record_id) clearUserRecordsCache();
   // Reflect a newly established farm immediately; no sign-out/sign-in cycle
   // is needed before the disease map and its monitoring cells use it.

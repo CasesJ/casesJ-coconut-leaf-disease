@@ -61,6 +61,11 @@ PASSWORD_RECOVERY_ATTEMPTS_PER_HOUR = _positive_int_env("PASSWORD_RECOVERY_ATTEM
 WS_CONNECTIONS_PER_USER = _positive_int_env("WS_CONNECTIONS_PER_USER", 2)
 WS_FRAMES_PER_SECOND = _positive_int_env("WS_FRAMES_PER_SECOND", 10)
 WS_MAX_FRAME_BYTES = _positive_int_env("WS_MAX_FRAME_BYTES", 3_000_000)
+# A full DJI upload briefly holds its compressed source, a decoded BGR image,
+# OpenVINO input tensors, and (when necessary) a storage copy.  Keep only one
+# such pipeline active in a small Render worker; normal API reads remain free.
+IMAGE_PIPELINE_MAX_CONCURRENCY = _positive_int_env("IMAGE_PIPELINE_MAX_CONCURRENCY", 1)
+IMAGE_PIPELINE_QUEUE_SECONDS = _positive_int_env("IMAGE_PIPELINE_QUEUE_SECONDS", 10)
 # These limits bound the largest decoded BGR image held during inference.  A
 # 160 MP photograph alone needs roughly 480 MB before model, preview, and
 # storage buffers are considered, which is not viable on a small web instance.
