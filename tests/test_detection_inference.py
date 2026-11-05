@@ -1,6 +1,7 @@
 """Uploaded detection records must not be created after an inference failure."""
 
 import asyncio
+import base64
 import sys
 from io import BytesIO
 from types import SimpleNamespace
@@ -185,6 +186,8 @@ def test_120_megapixel_jpeg_header_passes_validation(monkeypatch):
     with Image.new("L", (12000, 10000)) as source:
         source.save(output, format="JPEG")
     _configure_upload(monkeypatch, SimpleNamespace())
+    # This verifies header parsing independently of the Render-safe default.
+    monkeypatch.setattr(detections, "MAX_IMAGE_UPLOAD_PIXELS", 160_000_000)
     # Stop after header validation, before allocating the full RGB inference image.
     class Validated(Exception):
         pass
@@ -194,6 +197,17 @@ def test_120_megapixel_jpeg_header_passes_validation(monkeypatch):
     with pytest.warns(Image.DecompressionBombWarning):
         with pytest.raises(Validated):
             _call_detect(output.getvalue())
+
+
+def test_preview_is_bounded_and_uses_original_coordinate_space():
+    image = np.zeros((3000, 6000, 3), dtype=np.uint8)
+    preview = detections._encode_upload_preview(image, [{
+        "class": "Bud Rot", "confidence": 0.9, "bbox": [3000, 1500, 4500, 2500],
+    }])
+    decoded = cv2.imdecode(np.frombuffer(base64.b64decode(preview), np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape[:2] == (640, 1280)
+    # The source is untouched; preview annotation is a separate compact buffer.
+    assert not image.any()
 
 
 def test_non_image_is_rejected_even_with_jpeg_mime(monkeypatch):

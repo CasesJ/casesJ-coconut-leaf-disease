@@ -322,6 +322,7 @@ def save_detection_record(
     image_dimensions: dict | None = None,
     timings: dict[str, float] | None = None,
     operation_id: str = "unknown",
+    idempotency_key: str | None = None,
 ) -> bool:
     """Persist authenticated Cloudinary image references and a Firestore record.
 
@@ -337,6 +338,22 @@ def save_detection_record(
     if document is None:
         raise DetectionPersistenceError("Detection identity is invalid")
 
+    # A browser can lose the response after Firestore has committed it.  For a
+    # retry bearing the same client-generated key, reuse that exact record and
+    # skip image uploads instead of creating a duplicate record or asset.
+    if idempotency_key:
+        try:
+            existing = document.get()
+            existing_record = existing.to_dict() if existing.exists else None
+        except Exception as error:
+            logger.warning("Firestore idempotency lookup failed (%s)", type(error).__name__)
+            raise DetectionPersistenceError("Firestore is unavailable for new image records") from None
+        if isinstance(existing_record, dict):
+            if existing_record.get("upload_idempotency_key") == idempotency_key:
+                logger.info("Reusing completed detection record %s for idempotent retry", record_id)
+                return True
+            raise DetectionPersistenceError("Detection record identity conflict")
+
     dimensions = _image_size(original_bytes, image_dimensions)
     stored_detections = _annotated_detections(detections, dimensions)
     detection_record = _serialize_detection_payload(
@@ -349,6 +366,8 @@ def save_detection_record(
         source=source,
         image_metadata=image_metadata,
     )
+    if idempotency_key:
+        detection_record["upload_idempotency_key"] = idempotency_key
     if dimensions:
         detection_record["image_dimensions"] = {"width": dimensions[0], "height": dimensions[1]}
         detection_record["annotation_format"] = "xyxy-normalized-v1"

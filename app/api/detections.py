@@ -3,8 +3,10 @@ app/api/detections.py — Image upload detection and WebSocket stream endpoints.
 """
 import asyncio
 import base64
+import hashlib
 import logging
 import math
+import re
 import time
 import uuid
 from collections import deque
@@ -48,6 +50,7 @@ from app.services.media_service import present_detection_record
 router = APIRouter(tags=["detections"])
 logger = logging.getLogger(__name__)
 _background_tasks: set[asyncio.Task] = set()
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 def _prepare_upload(contents: bytes, filename: str | None):
@@ -138,16 +141,36 @@ def _prepare_upload(contents: bytes, filename: str | None):
     return inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy, image, performance_ms
 
 
-def _encode_upload_preview(preview_image: np.ndarray) -> str:
-    """Keep the existing preview dimensions and JPEG quality off the event loop."""
-    preview_scale = min(1.0, 1280 / max(preview_image.shape[:2]))
+def _encode_upload_preview(source_image: np.ndarray, detections: list[dict]) -> str:
+    """Create the compact annotated response preview without a full-size copy."""
+    source_height, source_width = source_image.shape[:2]
+    preview_scale = min(1.0, 1280 / max(source_height, source_width))
     if preview_scale < 1.0:
         preview_image = cv2.resize(
-            preview_image,
-            (max(1, round(preview_image.shape[1] * preview_scale)),
-             max(1, round(preview_image.shape[0] * preview_scale))),
+            source_image,
+            (max(1, round(source_width * preview_scale)),
+             max(1, round(source_height * preview_scale))),
             interpolation=cv2.INTER_AREA,
         )
+    else:
+        preview_image = source_image.copy()
+    for detection in detections:
+        try:
+            x1, y1, x2, y2 = (int(round(float(value) * preview_scale))
+                              for value in detection["bbox"])
+            class_name = str(detection["class"])
+            confidence = float(detection["confidence"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        color = (0, 200, 100) if class_name.lower() == "healthy" else (0, 60, 220)
+        cv2.rectangle(preview_image, (x1, y1), (x2, y2), color, 2)
+        text = f"{class_name} {confidence:.2%}"
+        size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)[0]
+        text_y = max(size[1] + 5, y1 - 5)
+        cv2.rectangle(preview_image, (x1 - 4, text_y - size[1] - 4),
+                      (x1 + size[0] + 4, text_y + 4), color, -1)
+        cv2.putText(preview_image, text, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55, (255, 255, 255), 1)
     _, buffer = imencode(".jpg", preview_image, [cv2.IMWRITE_JPEG_QUALITY, 84])
     encoded = base64.b64encode(buffer).decode("utf-8")
     return encoded
@@ -163,7 +186,10 @@ async def detect_image(
 ):
     """Detect disease in an uploaded image (POST-FLIGHT approach with EXIF GPS extraction)."""
     request_started = time.perf_counter()
-    operation_id = uuid.uuid4().hex[:12]
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+    if idempotency_key and not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+        raise HTTPException(status_code=400, detail="Invalid Idempotency-Key header")
+    operation_id = idempotency_key or uuid.uuid4().hex[:12]
     performance_ms: dict[str, float] = {}
     from model import detector  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
@@ -200,6 +226,10 @@ async def detect_image(
     (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
      image, preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
     performance_ms.update(preparation_ms)
+    logger.info(
+        "Upload accepted operation_id=%s bytes=%d dimensions=%dx%d pixels=%d",
+        operation_id, len(contents), image.shape[1], image.shape[0], image.shape[0] * image.shape[1],
+    )
     # The first valid image with embedded coordinates establishes the farm,
     # even if it contains no disease detection.
     farm_center = None
@@ -227,7 +257,10 @@ async def detect_image(
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     inference_started = time.perf_counter()
     try:
-        result = await asyncio.to_thread(run_image_inference, detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+        result = await asyncio.to_thread(
+            run_image_inference, detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
+            annotate=False,
+        )
     except InferenceUnavailable as exc:
         logger.error("Image inference failed for upload by %s: %s", user_id, exc)
         raise HTTPException(
@@ -244,6 +277,7 @@ async def detect_image(
         if farm_center_task is not None:
             logger.info("Farm centre operation pending operation_id=%s", operation_id)
     all_detections = result["detections"]
+    image_dimensions = {"width": int(image.shape[1]), "height": int(image.shape[0])}
 
     high_confidence_detections = [d for d in all_detections if d["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
 
@@ -251,8 +285,13 @@ async def detect_image(
     # The full-resolution image is still analyzed and stored as evidence. Sending
     # that entire image back as base64 made the result wait on a large response.
     preview_started = time.perf_counter()
-    encoded = await asyncio.to_thread(_encode_upload_preview, result["image"])
+    encoded = await asyncio.to_thread(_encode_upload_preview, image, all_detections)
     performance_ms["preview_encode_ms"] = (time.perf_counter() - preview_started) * 1000
+    # Inference and the response preview are complete.  Release the decoded
+    # source before Pillow performs any evidence compression for Cloudinary.
+    # This is the largest request buffer for high-resolution drone photos.
+    del result
+    del image
 
     # --- Persist ---
     persistence_started = time.perf_counter()
@@ -263,7 +302,11 @@ async def detect_image(
             "accuracy": gps_accuracy, "source": gps_source,
             "timestamp": datetime.now().isoformat(),
         }
-        record_id = f"upload_{user_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
+        if idempotency_key:
+            stable_id = hashlib.sha256(f"{user_id}:{idempotency_key}".encode()).hexdigest()[:24]
+            record_id = f"upload_{user_id}_{stable_id}"
+        else:
+            record_id = f"upload_{user_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
         persistence_timings: dict[str, float] = {}
         try:
             await asyncio.to_thread(
@@ -272,11 +315,12 @@ async def detect_image(
                 detections=high_confidence_detections, gps_data=gps_data,
                 filename=file.filename, source="upload",
                 image_metadata=image_metadata,
-                original_bytes=inference_contents, annotated_image=result["image"],
+                original_bytes=inference_contents, annotated_image=None,
                 is_offline=is_offline,
-                image_dimensions={"width": int(image.shape[1]), "height": int(image.shape[0])},
+                image_dimensions=image_dimensions,
                 timings=persistence_timings,
                 operation_id=operation_id,
+                idempotency_key=idempotency_key or None,
             )
         except DetectionPersistenceError as exc:
             logger.warning("New detection %s could not be durably saved: %s", record_id, exc)
@@ -310,7 +354,7 @@ async def detect_image(
         "gps_lat": lat, "gps_lng": lng, "gps_accuracy": gps_accuracy,
         "gps_source": gps_source, "gps_metadata_found": lat is not None and lng is not None,
         "image_metadata": image_metadata,
-        "image_dimensions": {"width": int(image.shape[1]), "height": int(image.shape[0])},
+        "image_dimensions": image_dimensions,
         "performance_ms": {name: round(duration, 1) for name, duration in performance_ms.items()},
         "operation_id": operation_id,
         "farm_center": farm_center,

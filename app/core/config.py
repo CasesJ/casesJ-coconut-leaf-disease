@@ -56,12 +56,18 @@ IMAGE_INFERENCE_DAILY_LIMIT = _positive_int_env("IMAGE_INFERENCE_DAILY_LIMIT", 1
 IMAGE_INFERENCE_PER_MINUTE = _positive_int_env("IMAGE_INFERENCE_PER_MINUTE", 10)
 EXPORTS_PER_MINUTE = _positive_int_env("EXPORTS_PER_MINUTE", 5)
 AUTH_TOKEN_CHECKS_PER_MINUTE = _positive_int_env("AUTH_TOKEN_CHECKS_PER_MINUTE", 10)
+PASSWORD_RECOVERY_ATTEMPTS_PER_MINUTE = _positive_int_env("PASSWORD_RECOVERY_ATTEMPTS_PER_MINUTE", 5)
+PASSWORD_RECOVERY_ATTEMPTS_PER_HOUR = _positive_int_env("PASSWORD_RECOVERY_ATTEMPTS_PER_HOUR", 10)
 WS_CONNECTIONS_PER_USER = _positive_int_env("WS_CONNECTIONS_PER_USER", 2)
 WS_FRAMES_PER_SECOND = _positive_int_env("WS_FRAMES_PER_SECOND", 10)
 WS_MAX_FRAME_BYTES = _positive_int_env("WS_MAX_FRAME_BYTES", 3_000_000)
-# Allow large camera images; deployments can override the per-image byte limit.
-MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 100_000_000)
-MAX_IMAGE_UPLOAD_PIXELS = _positive_int_env("MAX_IMAGE_UPLOAD_PIXELS", 160_000_000)
+# These limits bound the largest decoded BGR image held during inference.  A
+# 160 MP photograph alone needs roughly 480 MB before model, preview, and
+# storage buffers are considered, which is not viable on a small web instance.
+# DJI still images up to 50 MP remain supported; deployments with more RAM may
+# explicitly raise either value.
+MAX_IMAGE_UPLOAD_BYTES = _positive_int_env("MAX_IMAGE_UPLOAD_BYTES", 25_000_000)
+MAX_IMAGE_UPLOAD_PIXELS = _positive_int_env("MAX_IMAGE_UPLOAD_PIXELS", 50_000_000)
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()

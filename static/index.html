@@ -131,7 +131,8 @@
       pointer-events:none;
     }
     .auth-screen.hidden { display:none; }
-    .auth-container { width:min(100%, 1600px); min-height:min(88vh, 900px); position:relative; z-index:2; display:grid; grid-template-columns:minmax(0,1fr) minmax(420px, 0.95fr); grid-template-rows:minmax(100%,1fr); align-items:stretch; overflow:hidden; border-radius:30px; box-shadow:0 28px 90px rgba(0,0,0,.3); }
+    /* Keep both account modes in the same card-sized desktop layout. */
+    .auth-container { width:min(100%, 1180px); height:clamp(600px, 76vh, 720px); max-height:calc(100dvh - 2rem); position:relative; z-index:2; display:grid; grid-template-columns:minmax(0,1fr) minmax(420px, 0.95fr); grid-template-rows:minmax(100%,1fr); align-items:stretch; overflow:hidden; border-radius:30px; box-shadow:0 28px 90px rgba(0,0,0,.3); }
     .auth-header { min-height:100%; text-align:center; margin:0; padding:clamp(2rem, 5vw, 5rem); display:flex; flex-direction:column; justify-content:center; align-items:center; background:linear-gradient(135deg, rgba(9,43,44,.42), rgba(9,43,44,.24)); color:white; }
     .auth-header .logo-icon { width:clamp(2.75rem, 8vw, 3.5rem); height:clamp(2.75rem, 8vw, 3.5rem); background: linear-gradient(135deg, var(--accent) 0%, var(--bright) 100%); border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 0 1.25rem; box-shadow: 0 8px 32px rgba(62, 201, 122, 0.3); }
     .auth-header .logo-icon svg { width:clamp(1.2rem, 4vw, 1.5rem); height:clamp(1.2rem, 4vw, 1.5rem); stroke:#ffffff; fill:none; stroke-width:1.8; stroke-linecap:round; }
@@ -157,6 +158,12 @@
     .form-group { margin-bottom:clamp(1.1rem, 2.5vw, 1.25rem); }
     .signup-only { display:none; }
     .auth-form.signup-mode .signup-only { display:block; }
+    .recovery-only { display:none; }
+    .auth-form.recovery-mode .recovery-only { display:block; }
+    .auth-form.recovery-mode .auth-access-only,
+    .auth-form.recovery-mode .password-meter { display:none !important; }
+    .auth-screen.recovery-mode { align-items:flex-start; }
+    .auth-screen.recovery-mode .auth-container { height:auto; min-height:600px; }
     .form-group label { display:block; font-size:.95rem; font-weight:500; margin-bottom:0.55rem; color:#17212c; letter-spacing:0; text-transform:none; }
     .form-group input { width:100%; padding:clamp(0.8rem, 1.5vw, 1rem) clamp(0.9rem, 2vw, 1.1rem); border:1px solid #cbd3de; border-radius:18px; font-size:var(--text-base); font-family:'DM Sans',sans-serif; transition:all .2s; }
     .form-group input:focus { outline:none; border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,0.1); }
@@ -195,8 +202,9 @@
       .auth-screen.signup-mode { align-items:flex-start; }
       .auth-screen.signup-mode .auth-container { height:auto; }
     }
-    @media (max-height:760px) {
-      .auth-container { min-height:0; }
+    @media (max-height:640px) {
+      .auth-screen { align-items:flex-start; }
+      .auth-container { height:auto; max-height:none; min-height:0; }
     }
     @media(min-width:821px) {
       .auth-form { padding-inline:clamp(3rem, 5vw, 6rem); }
@@ -1742,17 +1750,33 @@
           <label for="contact-number">Contact Number</label>
           <input type="tel" id="contact-number" autocomplete="tel" inputmode="tel" placeholder="e.g. +63 912 345 6789" />
         </div>
-        <div class="form-group">
+        <div class="form-group auth-access-only">
           <label for="email">Email</label>
           <input type="email" id="email" required placeholder="Enter Your Email" />
         </div>
-        <div class="form-group" id="password-group">
+        <div class="form-group auth-access-only" id="password-group">
           <label for="password">Password</label>
           <input type="password" id="password" required placeholder="••••••••" />
         </div>
         <div class="password-meter" id="password-meter" aria-live="polite" aria-label="Password strength">
           <div class="password-meter-track" aria-hidden="true"><span class="password-meter-bar"></span><span class="password-meter-bar"></span><span class="password-meter-bar"></span><span class="password-meter-bar"></span></div>
           <span class="password-meter-label" id="password-meter-label">Use 8+ characters with a mix of letters, numbers, and symbols.</span>
+        </div>
+        <div class="form-group recovery-only">
+          <label for="recovery-email">Email Address</label>
+          <input type="email" id="recovery-email" autocomplete="email" placeholder="Enter your registered email" />
+        </div>
+        <div class="form-group recovery-only">
+          <label for="recovery-mobile">Mobile Number</label>
+          <input type="tel" id="recovery-mobile" autocomplete="tel" inputmode="tel" placeholder="e.g. 0912 345 6789" />
+        </div>
+        <div class="form-group recovery-only">
+          <label for="recovery-new-password">New Password</label>
+          <input type="password" id="recovery-new-password" autocomplete="new-password" placeholder="At least 6 characters" />
+        </div>
+        <div class="form-group recovery-only">
+          <label for="recovery-confirm-password">Confirm New Password</label>
+          <input type="password" id="recovery-confirm-password" autocomplete="new-password" placeholder="Re-enter your new password" />
         </div>
         <button type="submit" class="btn-submit" id="submit-btn">
           <span class="loading-spinner" id="spinner"></span>
@@ -1762,6 +1786,7 @@
       
       <div class="form-footer">
         <span id="toggle-text">Don't have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Sign Up</button></span>
+        <span id="forgot-password-wrap"> · <button class="auth-mode-link" type="button" onclick="setAuthMode('recovery')">Forgot Password?</button></span>
       </div>
     </div>
   </div>
@@ -1995,7 +2020,7 @@
           </div>
           <div id="disease-map"></div>
           <div class="map-legend">
-            <div class="legend-group"><span class="legend-title">Disease</span><div class="leg-item"><i class="leg-dot" style="background:#22c55e"></i>Healthy</div><div class="leg-item"><i class="leg-dot" style="background:#dc2626"></i>Stem Bleeding</div><div class="leg-item"><i class="leg-dot" style="background:#06b6d4"></i>Pestalotiopsis</div><div class="leg-item"><i class="leg-dot" style="background:#eab308"></i>Bud Rot</div></div>
+            <div class="legend-group"><span class="legend-title">Disease</span><div class="leg-item"><i class="leg-dot" style="background:#22c55e"></i>Healthy</div><div class="leg-item"><i class="leg-dot" style="background:#dc2626"></i>Stem Bleeding</div><div class="leg-item"><i class="leg-dot" style="background:#06b6d4"></i>Grey Leaf Spot</div><div class="leg-item"><i class="leg-dot" style="background:#eab308"></i>Bud Rot</div></div>
             <div class="legend-group"><span class="legend-title">Severity</span><span class="severity-pill"><i class="severity-dot" style="background:#22c55e"></i>Low</span><span class="severity-pill"><i class="severity-dot" style="background:#f97316"></i>Moderate</span><span class="severity-pill"><i class="severity-dot" style="background:#ef4444"></i>High</span></div>
             <div class="leg-item"><span style="font-size:11px">🔴🟠🟡 Heatmap shows disease concentration</span></div>
           </div>
@@ -2203,7 +2228,7 @@
         </div>
         <div class="records-toolbar" aria-label="Detection history filters" style="display:none;">
           <input id="records-search" type="search" placeholder="Search disease, location, coordinates…" oninput="loadUserRecords()" aria-label="Search records">
-          <select id="records-disease-filter" onchange="loadUserRecords()"><option value="">All diseases</option><option value="healthy">Healthy</option><option value="stem bleeding">Stem Bleeding</option><option value="pestalotiopsis">Pestaltiopsis</option><option value="bud rot">Bud Rot</option></select>
+          <select id="records-disease-filter" onchange="loadUserRecords()"><option value="">All diseases</option><option value="healthy">Healthy</option><option value="stem bleeding">Stem Bleeding</option><option value="pestalotiopsis">Grey Leaf Spot</option><option value="bud rot">Bud Rot</option></select>
           <input id="records-date-filter" type="date" onchange="loadUserRecords()" aria-label="Filter by date">
           <select id="records-area-filter" onchange="loadUserRecords()"><option value="">All areas</option><option value="area 1">Area 1</option><option value="area 2">Area 2</option><option value="area 3">Area 3</option><option value="area 4">Area 4</option></select>
           <select id="records-confidence-filter" onchange="loadUserRecords()"><option value="">Any confidence</option><option value="high">High (75%+)</option><option value="medium">Medium (50–74%)</option><option value="low">Low (&lt;50%)</option></select>

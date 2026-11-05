@@ -169,3 +169,58 @@ def test_auth_verification_rejects_unsigned_fallback_identity(client, monkeypatc
 def test_auth_verification_rejects_missing_token(client):
     response = client.post("/auth/verify-token", json={})
     assert response.status_code == 422
+
+
+def test_password_recovery_requires_matching_account_details(client, monkeypatch):
+    monkeypatch.setattr(auth_api, "_recovery_details_match", lambda email, mobile: False)
+
+    response = client.post("/auth/recovery/verify", json={
+        "email": "unknown@example.test",
+        "mobile_number": "09123456789",
+        "new_password": "secure1",
+        "confirm_new_password": "secure1",
+    })
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "verified": False,
+        "message": "We couldn't verify those recovery details. Please check them and try again.",
+    }
+
+
+def test_password_recovery_accepts_verified_match_and_normalizes_phone(client, monkeypatch):
+    received = []
+    monkeypatch.setattr(
+        auth_api,
+        "_recovery_details_match",
+        lambda email, mobile: received.append((email, mobile)) or True,
+    )
+
+    response = client.post("/auth/recovery/verify", json={
+        "email": "FARMER@EXAMPLE.TEST",
+        "mobile_number": "+63 912 345 6789",
+        "new_password": "secure1",
+        "confirm_new_password": "secure1",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["verified"] is True
+    assert received == [("farmer@example.test", "+63 912 345 6789")]
+    assert auth_api._normalize_mobile_number("09 123 456 789") == "09123456789"
+    assert auth_api._normalize_mobile_number("+63 912 345 6789") == "09123456789"
+
+
+def test_password_recovery_rejects_mismatched_new_passwords_without_lookup(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(auth_api, "_recovery_details_match", lambda email, mobile: called.append(True))
+
+    response = client.post("/auth/recovery/verify", json={
+        "email": "farmer@example.test",
+        "mobile_number": "09123456789",
+        "new_password": "secure1",
+        "confirm_new_password": "different1",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["verified"] is False
+    assert called == []

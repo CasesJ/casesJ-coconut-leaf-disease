@@ -125,6 +125,26 @@ def test_cloudinary_failure_is_not_a_local_only_detection(monkeypatch):
     assert db.create_calls == 0
 
 
+def test_idempotent_retry_reuses_the_existing_firestore_record(monkeypatch):
+    db, deleted = MemoryFirestore(), []
+    reference = _asset("original")
+    db.record = {"id": "record-1", "upload_idempotency_key": "a" * 16,
+                 "image_assets": {"original": reference}}
+    uploads = []
+    monkeypatch.setattr(service, "_get_firestore", lambda: (db, True))
+    monkeypatch.setattr(service, "save_upload_image_assets", lambda *args:
+                        uploads.append(args) or pytest.fail("Retry must not upload a second asset"))
+
+    assert service.save_detection_record(
+        user_id="farmer-a", email="farmer@example.test", record_id="record-1",
+        detections=[], gps_data={}, filename="leaf.jpg", source="upload",
+        image_metadata={}, original_bytes=b"source", annotated_image=None,
+        is_offline=False, idempotency_key="a" * 16,
+    ) is True
+    assert db.create_calls == 0
+    assert uploads == []
+
+
 def test_deduplicating_a_newer_sqlite_cache_keeps_firestore_asset_references():
     reference = _asset("original")
     local = {"id": "record-1", "user_id": "farmer-a", "timestamp": "2026-10-23T10:00:01Z",

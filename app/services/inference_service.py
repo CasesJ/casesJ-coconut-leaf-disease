@@ -31,8 +31,15 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
     try:
         # The shared detector can be called by concurrent upload worker threads.
         with _INFERENCE_LOCK:
-            result = (detector.predict(image, conf=confidence) if annotate else
-                      detector.predict(image, conf=confidence, annotate=False))
+            if annotate:
+                result = detector.predict(image, conf=confidence)
+            else:
+                try:
+                    result = detector.predict(image, conf=confidence, annotate=False)
+                except TypeError:
+                    # Compatibility for older test/custom adapters. Production
+                    # CoconutDiseaseDetector supports annotate=False.
+                    result = detector.predict(image, conf=confidence)
     except Exception as exc:
         raise InferenceUnavailable("Detector execution failed") from exc
 
@@ -43,5 +50,5 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
     if not isinstance(result.get("detections"), list):
         raise InferenceUnavailable("Detector returned invalid detections")
     if not isinstance(result.get("image"), np.ndarray):
-        raise InferenceUnavailable("Detector did not return an annotated image")
+        raise InferenceUnavailable("Detector did not return an image result")
     return result

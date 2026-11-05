@@ -163,33 +163,57 @@ window.showSuccess = function showSuccess(message) {
 };
 
 window.setAuthMode = function setAuthMode(mode) {
-  if (mode !== 'login' && mode !== 'signup') return;
-  if (authMode !== mode) window.switchAuthMode();
+  if (!['login', 'signup', 'recovery'].includes(mode)) return;
+  if (authMode === mode) return;
+  authMode = mode;
+  window.renderAuthMode();
 };
 
 window.switchAuthMode = function switchAuthMode() {
+  authMode = authMode === 'login' ? 'signup' : 'login';
+  window.renderAuthMode();
+};
+
+window.renderAuthMode = function renderAuthMode() {
   const title = document.getElementById('form-title');
   const btnText = document.getElementById('btn-text');
   const toggleText = document.getElementById('toggle-text');
-  
-  authMode = authMode === 'login' ? 'signup' : 'login';
+  const forgotPassword = document.getElementById('forgot-password-wrap');
   
   if (authMode === 'login') {
     title.textContent = 'Login';
     btnText.textContent = 'Login';
     toggleText.innerHTML = 'Don\'t have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Sign Up</button>';
-  } else {
+  } else if (authMode === 'signup') {
     title.textContent = 'Sign Up';
     btnText.textContent = 'Sign Up';
     toggleText.innerHTML = 'Already have an account? <button class="auth-mode-link" type="button" onclick="switchAuthMode()">Login</button>';
+  } else {
+    title.textContent = 'Recover Password';
+    btnText.textContent = 'Reset Password';
+    toggleText.innerHTML = '<button class="auth-mode-link" type="button" onclick="setAuthMode(\'login\')">Back to Login</button>';
   }
 
   const loginTab = document.getElementById('login-tab');
   const signupTab = document.getElementById('signup-tab');
   const authFormPanel = document.querySelector('.auth-form');
-  if (authFormPanel) authFormPanel.classList.toggle('signup-mode', authMode === 'signup');
+  if (authFormPanel) {
+    authFormPanel.classList.toggle('signup-mode', authMode === 'signup');
+    authFormPanel.classList.toggle('recovery-mode', authMode === 'recovery');
+  }
   const authScreen = document.getElementById('auth-screen');
-  if (authScreen) authScreen.classList.toggle('signup-mode', authMode === 'signup');
+  if (authScreen) {
+    authScreen.classList.toggle('signup-mode', authMode === 'signup');
+    authScreen.classList.toggle('recovery-mode', authMode === 'recovery');
+  }
+  if (forgotPassword) forgotPassword.hidden = authMode !== 'login';
+  const loginEmail = document.getElementById('email');
+  const loginPassword = document.getElementById('password');
+  if (loginEmail) loginEmail.required = authMode !== 'recovery';
+  if (loginPassword) loginPassword.required = authMode !== 'recovery';
+  document.querySelectorAll('.recovery-only input').forEach(input => {
+    input.required = authMode === 'recovery';
+  });
   document.querySelectorAll('.signup-only input').forEach(input => {
     input.required = authMode === 'signup';
     if (authMode === 'login') input.value = '';
@@ -246,9 +270,26 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   const btn = document.getElementById('submit-btn');
   const spinner = document.getElementById('spinner');
   const btnText = document.getElementById('btn-text');
+  const recoveryEmail = document.getElementById('recovery-email')?.value.trim() || '';
+  const recoveryMobile = document.getElementById('recovery-mobile')?.value.trim() || '';
+  const recoveryPassword = document.getElementById('recovery-new-password')?.value || '';
+  const recoveryConfirmPassword = document.getElementById('recovery-confirm-password')?.value || '';
   
   // Validation
-  if (!email) {
+  if (authMode === 'recovery') {
+    if (!recoveryEmail || !recoveryMobile || !recoveryPassword || !recoveryConfirmPassword) {
+      showError('Please complete all recovery fields.');
+      return;
+    }
+    if (recoveryPassword !== recoveryConfirmPassword) {
+      showError('New password and confirmation must match.');
+      return;
+    }
+    if (recoveryPassword.length < 6) {
+      showError('Password must be at least 6 characters.');
+      return;
+    }
+  } else if (!email) {
     showError('❌ Please enter an email');
     return;
   }
@@ -276,7 +317,30 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
     
     let userCred;
     
-    if (authMode === 'login') {
+    if (authMode === 'recovery') {
+      const verificationResponse = await fetch('/auth/recovery/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: recoveryEmail,
+          mobile_number: recoveryMobile,
+          new_password: recoveryPassword,
+          confirm_new_password: recoveryConfirmPassword
+        })
+      });
+      const verification = await verificationResponse.json().catch(() => ({}));
+      if (!verificationResponse.ok) {
+        throw new Error(verification.detail || 'Password recovery is temporarily unavailable. Please try again.');
+      }
+      if (!verification.verified) {
+        showError(verification.message || "We couldn't verify those recovery details. Please check them and try again.");
+        return;
+      }
+      await auth.sendPasswordResetEmail(recoveryEmail);
+      form.reset();
+      showSuccess('Verification successful. Check your email for the secure password-reset link. The link is single-use and expires automatically.');
+      setAuthMode('login');
+    } else if (authMode === 'login') {
       console.log('Attempting login...');
       userCred = await auth.signInWithEmailAndPassword(email, password);
       console.log('Login successful:', userCred.user.email);
@@ -363,6 +427,8 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       errorMsg = '❌ Network error. Check your connection.';
     } else if (error.code === 'auth/operation-not-allowed') {
       errorMsg = '❌ Email/Password not enabled in Firebase. Check Firebase console.';
+    } else if (error.code === 'auth/expired-action-code' || error.code === 'auth/invalid-action-code') {
+      errorMsg = '❌ This password-reset link is invalid or has expired. Request a new one.';
     }
     
     showError(errorMsg);
@@ -434,7 +500,7 @@ function setExpertRecommendationDisease(diseaseName) {
 
   const normalized = String(diseaseName || '').trim();
   if (!normalized) return;
-  input.value = normalized;
+  input.value = formatDiseaseClass(normalized);
 }
 
 function openExpertRecommendationEditor() {
@@ -690,6 +756,7 @@ function normalizeDiseaseClass(label) {
 
 function formatDiseaseClass(label) {
   const normalized = normalizeDiseaseClass(label);
+  if (normalized === 'pestalotiopsis') return 'Grey Leaf Spot';
   return normalized.replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -2139,6 +2206,7 @@ function toggle3DView() {
 let stagedUploadFiles = [];
 let batchUploadResults = [];
 let activeBatchResultIndex = 0;
+const uploadIdempotencyKeys = new WeakMap();
 
 function stageUploadImage(files) {
   const selectedFiles = Array.from(files || []);
@@ -2383,12 +2451,18 @@ async function detectImage(file, onUploadProgress){
   }
   const fd=new FormData();
   fd.append('file',file);
+  let idempotencyKey = uploadIdempotencyKeys.get(file);
+  if (!idempotencyKey) {
+    idempotencyKey = crypto.randomUUID().replaceAll('-', '');
+    uploadIdempotencyKeys.set(file, idempotencyKey);
+  }
   
   const data = await new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', '/detect/image');
     request.timeout = 300_000;
     if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
+    request.setRequestHeader('Idempotency-Key', idempotencyKey);
     request.upload.addEventListener('progress', event => {
       if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
     });
@@ -2627,7 +2701,7 @@ async function showLowConfidenceRecommendationEditor(recordId, disease, confiden
     const canSave = Boolean(recordId && currentToken);
     recArea.innerHTML = `
       <div class="rec-card" style="margin-top:10px;">
-        <div class="rec-title">Low-confidence recommendation — ${escapeHtml(disease)} (${(confidence * 100).toFixed(2)}%)</div>
+        <div class="rec-title">Low-confidence recommendation — ${escapeHtml(formatDiseaseClass(disease))} (${(confidence * 100).toFixed(2)}%)</div>
         <p style="margin-top:6px;font-size:12px;color:var(--text3);line-height:1.45;">This is below 50%. You can edit and confirm this guidance for an expert to review. Expert verification is still required.</p>
         <div class="rec-label">Fertilizer</div><textarea id="farmer-rec-fertilizer" rows="3" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;">${escapeHtml(advice.fertilizer || '')}</textarea>
         <div class="rec-label">Treatment</div><textarea id="farmer-rec-treatment" rows="4" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;font:inherit;">${escapeHtml(advice.treatment || '')}</textarea>
@@ -2731,7 +2805,7 @@ function renderRecommendationCardHtml(rec) {
 
   return `
     <div class="rec-card" style="margin-top:10px;">
-      <div class="rec-title">Recommendation - ${escapeHtml(rec?.disease || 'Unknown')} (${escapeHtml(rec?.confidence_percent ?? '0')}%)</div>
+      <div class="rec-title">Recommendation - ${escapeHtml(formatDiseaseClass(rec?.disease || 'Unknown'))} (${escapeHtml(rec?.confidence_percent ?? '0')}%)</div>
       <div style="margin-top:4px;font-size:11px;color:var(--text3);">${escapeHtml(sourceLabel)}</div>
       <div class="rec-item">
         <div class="rec-label">Fertilizer</div>
