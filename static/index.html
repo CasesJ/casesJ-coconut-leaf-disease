@@ -162,8 +162,20 @@
     .auth-form.recovery-mode .recovery-only { display:block; }
     .auth-form.recovery-mode .auth-access-only,
     .auth-form.recovery-mode .password-meter { display:none !important; }
-    .auth-screen.recovery-mode { align-items:flex-start; }
-    .auth-screen.recovery-mode .auth-container { height:auto; min-height:600px; }
+    /* Keep recovery in the same fixed card as sign-in and registration.
+       The recovery form has more fields, so compact its internal spacing
+       rather than allowing the card to grow below the viewport. */
+    .auth-screen.recovery-mode { align-items:center; }
+    .auth-screen.recovery-mode .auth-container {
+      height:clamp(600px, 76vh, 720px);
+      min-height:0;
+    }
+    .auth-screen.recovery-mode .auth-form { padding-block:clamp(1.25rem, 3vh, 2.25rem); }
+    .auth-screen.recovery-mode .auth-brand { margin-bottom:1.25rem; }
+    .auth-screen.recovery-mode .auth-tabs { margin-bottom:1.25rem; }
+    .auth-screen.recovery-mode .form-group { margin-bottom:.55rem; }
+    .auth-screen.recovery-mode .form-group input { padding-block:.7rem; }
+    .auth-screen.recovery-mode .btn-submit { margin-top:.65rem; padding-block:.85rem; }
     .form-group label { display:block; font-size:.95rem; font-weight:500; margin-bottom:0.55rem; color:#17212c; letter-spacing:0; text-transform:none; }
     .form-group input { width:100%; padding:clamp(0.8rem, 1.5vw, 1rem) clamp(0.9rem, 2vw, 1.1rem); border:1px solid #cbd3de; border-radius:18px; font-size:var(--text-base); font-family:'DM Sans',sans-serif; transition:all .2s; }
     .form-group input:focus { outline:none; border-color:var(--bright); box-shadow:0 0 0 3px rgba(38,134,90,0.1); }
@@ -201,6 +213,8 @@
       .auth-brand { margin-bottom:1.5rem; }
       .auth-screen.signup-mode { align-items:flex-start; }
       .auth-screen.signup-mode .auth-container { height:auto; }
+      .auth-screen.recovery-mode { align-items:flex-start; }
+      .auth-screen.recovery-mode .auth-container { height:auto; }
     }
     @media (max-height:640px) {
       .auth-screen { align-items:flex-start; }
@@ -246,7 +260,12 @@
       .auth-screen.signup-mode .auth-tabs { margin-bottom:.85rem; }
       .auth-screen.signup-mode .form-group { margin-bottom:.75rem; }
       .auth-screen.signup-mode .form-group input { padding-block:.65rem; }
-      .btn-submit, .auth-screen.signup-mode .btn-submit { margin-top:.8rem; padding-block:.8rem; border-radius:16px; }
+      .auth-screen.recovery-mode .auth-form { padding-block:1rem; }
+      .auth-screen.recovery-mode .auth-brand,
+      .auth-screen.recovery-mode .auth-tabs { margin-bottom:.85rem; }
+      .auth-screen.recovery-mode .form-group { margin-bottom:.75rem; }
+      .auth-screen.recovery-mode .form-group input { padding-block:.65rem; }
+      .btn-submit, .auth-screen.signup-mode .btn-submit, .auth-screen.recovery-mode .btn-submit { margin-top:.8rem; padding-block:.8rem; border-radius:16px; }
       .form-footer { margin-top:.8rem; }
     }
 
