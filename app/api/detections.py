@@ -33,6 +33,7 @@ from app.core.config import (
     WS_MAX_FRAME_BYTES,
 )
 from app.core.rate_limit import limiter
+from app.core.resource_metrics import process_memory_metrics
 from app.core.security import verify_verified_firebase_token
 from app.domain.detection import _extract_primary_disease, apply_record_defaults
 from app.domain.recommendation import build_recommendation_response
@@ -61,6 +62,18 @@ def _process_rss_mib() -> float | None:
         return round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
     except Exception:
         return None
+
+
+def _log_memory(operation_id: str, stage: str) -> None:
+    metrics = process_memory_metrics()
+    logger.info(
+        "Upload memory operation_id=%s stage=%s rss_mib=%s cgroup_mib=%s cgroup_limit_mib=%s oom_kill=%s",
+        operation_id, stage,
+        round(metrics["rss_bytes"] / (1024 * 1024), 1) if metrics["rss_bytes"] else "unavailable",
+        round(metrics["cgroup_current_bytes"] / (1024 * 1024), 1) if metrics["cgroup_current_bytes"] else "unavailable",
+        round(metrics["cgroup_limit_bytes"] / (1024 * 1024), 1) if metrics["cgroup_limit_bytes"] else "unavailable",
+        metrics["cgroup_oom_kill"] if metrics["cgroup_oom_kill"] is not None else "unavailable",
+    )
 
 
 def _prepare_upload(contents: bytes, filename: str | None):
@@ -271,13 +284,16 @@ async def detect_image(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid Content-Length header")
     read_started = time.perf_counter()
+    _log_memory(operation_id, "before_upload_read")
     contents = await file.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    _log_memory(operation_id, "after_upload_read")
     performance_ms["upload_read_ms"] = (time.perf_counter() - read_started) * 1000
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Image upload is too large")
     (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
      image, source_dimensions, scale_x, scale_y,
      preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
+    _log_memory(operation_id, "after_prepare_upload")
     performance_ms.update(preparation_ms)
     rss_samples.append(_process_rss_mib())
     logger.info(
@@ -311,6 +327,7 @@ async def detect_image(
     await limiter.rolling(f"image-minute:{user_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{user_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     inference_started = time.perf_counter()
+    _log_memory(operation_id, "before_inference")
     try:
         result = await asyncio.to_thread(
             run_image_inference, detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
@@ -323,6 +340,7 @@ async def detect_image(
             detail="Disease analysis is temporarily unavailable. Your image was not saved.",
         ) from exc
     inference_ms = (time.perf_counter() - inference_started) * 1000
+    _log_memory(operation_id, "after_inference")
     performance_ms["inference_ms"] = inference_ms
     rss_samples.append(_process_rss_mib())
     if farm_center_task is not None and farm_center_task.done():
@@ -342,7 +360,9 @@ async def detect_image(
     # The full-resolution image is still analyzed and stored as evidence. Sending
     # that entire image back as base64 made the result wait on a large response.
     preview_started = time.perf_counter()
+    _log_memory(operation_id, "before_preview_encode")
     encoded = await asyncio.to_thread(_encode_upload_preview, image, inference_detections)
+    _log_memory(operation_id, "after_preview_encode")
     performance_ms["preview_encode_ms"] = (time.perf_counter() - preview_started) * 1000
     # Inference and the response preview are complete.  Release the decoded
     # source before Pillow performs any evidence compression for Cloudinary.
@@ -352,6 +372,7 @@ async def detect_image(
 
     # --- Persist ---
     persistence_started = time.perf_counter()
+    _log_memory(operation_id, "before_persistence")
     record_id = None
     if high_confidence_detections:
         gps_data = {
@@ -387,6 +408,7 @@ async def detect_image(
             ) from exc
 
         performance_ms.update(persistence_timings)
+    _log_memory(operation_id, "after_persistence")
     performance_ms["persistence_total_ms"] = (time.perf_counter() - persistence_started) * 1000
     performance_ms["request_total_ms"] = (time.perf_counter() - request_started) * 1000
     rss_samples.append(_process_rss_mib())

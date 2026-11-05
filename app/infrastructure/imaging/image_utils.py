@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core import config
+from app.core.resource_metrics import process_memory_metrics
 from app.infrastructure.cloudinary_storage import (
     CloudinaryStorageError,
     upload_asset,
@@ -214,15 +215,45 @@ def _metadata_matches(original: dict, candidate: dict) -> bool:
     return True
 
 
+def _metadata_matches_resized(original: dict, candidate: dict) -> bool:
+    """Verify all protected evidence metadata while allowing a storage derivative."""
+    return (original["orientation"] == candidate["orientation"]
+            and original["protected_segments"] == candidate["protected_segments"])
+
+
+def _log_memory(stage: str, operation_id: str) -> None:
+    metrics = process_memory_metrics()
+    logger.info(
+        "Image storage memory operation_id=%s stage=%s rss_mib=%s cgroup_mib=%s cgroup_limit_mib=%s oom_kill=%s",
+        operation_id, stage,
+        round(metrics["rss_bytes"] / (1024 * 1024), 1) if metrics["rss_bytes"] else "unavailable",
+        round(metrics["cgroup_current_bytes"] / (1024 * 1024), 1) if metrics["cgroup_current_bytes"] else "unavailable",
+        round(metrics["cgroup_limit_bytes"] / (1024 * 1024), 1) if metrics["cgroup_limit_bytes"] else "unavailable",
+        metrics["cgroup_oom_kill"] if metrics["cgroup_oom_kill"] is not None else "unavailable",
+    )
+
+
+def _storage_draft_size(width: int, height: int, max_pixels: int) -> tuple[int, int] | None:
+    """Choose a libjpeg power-of-two DCT reduction that is at or below the cap."""
+    pixels = width * height
+    if pixels <= max_pixels:
+        return None
+    factor = 2
+    while (width * height) / (factor * factor) > max_pixels:
+        factor *= 2
+    return max(1, (width + factor - 1) // factor), max(1, (height + factor - 1) // factor)
+
+
 def _prepare_cloudinary_copy(
     content: bytes,
     content_type: str,
     timings: dict[str, float] | None = None,
+    operation_id: str = "unknown",
 ) -> tuple[bytes, str]:
-    """Return a verified storage copy; never resize or alter the original input."""
-    if len(content) <= config.DETECTION_STORAGE_MAX_BYTES:
-        return content, "source_original"
+    """Return a verified, bounded storage copy without changing inference evidence."""
     if content_type != "image/jpeg":
+        if len(content) <= config.DETECTION_STORAGE_MAX_BYTES:
+            return content, "source_original"
         raise DetectionImageProcessingError(
             "Only oversized JPEG detection images can be compressed for storage"
         )
@@ -231,38 +262,59 @@ def _prepare_cloudinary_copy(
     protected_segments = _jpeg_protected_segments(content)
     original_metadata = _metadata_snapshot(content, protected_segments)
     metadata_ms = (time.perf_counter() - metadata_started) * 1000
+    source_width, source_height = original_metadata["dimensions"]
+    storage_pixel_limit = min(config.CLOUDINARY_MAX_IMAGE_PIXELS,
+                              config.DETECTION_STORAGE_MAX_PIXELS)
+    draft_size = _storage_draft_size(source_width, source_height, storage_pixel_limit)
+    if len(content) <= config.DETECTION_STORAGE_MAX_BYTES and draft_size is None:
+        return content, "source_original"
     compression_ms = 0.0
     try:
         with Image.open(BytesIO(content)) as source:
+            if draft_size is not None:
+                # Must precede load(): libjpeg can then decode only the selected
+                # DCT raster instead of allocating the full DJI image.
+                source.draft("RGB", draft_size)
+            _log_memory("before_pillow_load", operation_id)
             source.load()
+            _log_memory("after_pillow_load", operation_id)
+            stored_dimensions = source.size
+            if stored_dimensions[0] * stored_dimensions[1] > storage_pixel_limit:
+                raise DetectionImageProcessingError(
+                    "JPEG decoder could not reduce image within storage pixel limit"
+                )
             for quality in _JPEG_QUALITIES:
                 compression_started = time.perf_counter()
                 output = BytesIO()
                 options = {"format": "JPEG", "quality": quality, "optimize": True}
                 source.save(output, **options)
                 candidate = _inject_protected_segments(output.getvalue(), protected_segments)
+                output.close()
                 compression_ms += (time.perf_counter() - compression_started) * 1000
                 if len(candidate) > config.DETECTION_STORAGE_MAX_BYTES:
+                    del candidate
                     continue
                 metadata_started = time.perf_counter()
                 candidate_metadata = _metadata_snapshot(candidate)
                 metadata_ms += (time.perf_counter() - metadata_started) * 1000
-                if not _metadata_matches(original_metadata, candidate_metadata):
+                matches = (_metadata_matches_resized(original_metadata, candidate_metadata)
+                           if draft_size is not None else _metadata_matches(original_metadata, candidate_metadata))
+                if not matches:
                     # A lower quality changes only pixels, but encoder behavior
                     # can affect container metadata. Keep searching; never upload
                     # a candidate that failed verification.
+                    del candidate
                     continue
                 if timings is not None:
                     timings["image_compression_ms"] = compression_ms
                     timings["image_metadata_verification_ms"] = metadata_ms
-                return candidate, "compressed_jpeg_storage_copy"
+                return candidate, ("reduced_jpeg_storage_copy" if draft_size is not None
+                                   else "compressed_jpeg_storage_copy")
     except DetectionImageProcessingError:
         raise
     except Exception as exc:
         raise DetectionImageProcessingError("Detection image compression failed") from exc
-    raise DetectionImageProcessingError(
-        "JPEG cannot fit the 8 MB storage limit while preserving required metadata"
-    )
+    raise DetectionImageProcessingError("JPEG cannot fit the configured storage limit while preserving required metadata")
 
 
 def _image_content_type(content: bytes) -> str:
@@ -326,7 +378,7 @@ def save_upload_image_assets(
     source_sha256 = hashlib.sha256(original_bytes).hexdigest()
     try:
         storage_bytes, representation = _prepare_cloudinary_copy(
-            original_bytes, content_type, timings=preparation_timings,
+            original_bytes, content_type, timings=preparation_timings, operation_id=operation_id,
         )
     except DetectionImageProcessingError as exc:
         logger.warning(
@@ -338,6 +390,7 @@ def save_upload_image_assets(
         time.perf_counter() - validation_started
     ) * 1000
     upload_started = time.perf_counter()
+    _log_memory("before_cloudinary_upload", operation_id)
     category = ("detection-original" if representation == "source_original"
                 else "detection-storage-copy")
     original = upload_asset(
@@ -345,6 +398,7 @@ def save_upload_image_assets(
         source_bytes=len(original_bytes),
     )
     upload_ms = (time.perf_counter() - upload_started) * 1000
+    _log_memory("after_cloudinary_upload", operation_id)
     if timings is not None:
         timings["cloudinary_upload_ms"] = upload_ms
     stored_sha256 = (source_sha256 if storage_bytes is original_bytes
@@ -356,6 +410,13 @@ def save_upload_image_assets(
         "stored_byte_size": len(storage_bytes),
         "stored_sha256": stored_sha256,
     })
+    try:
+        with Image.open(BytesIO(storage_bytes)) as stored_image:
+            original["storage_dimensions"] = {
+                "width": int(stored_image.width), "height": int(stored_image.height),
+            }
+    except (UnidentifiedImageError, OSError):
+        pass
     assets = {"original": original}
 
     # The thumbnail is only a list-preview optimization. It must never block a

@@ -85,6 +85,12 @@ CLOUDINARY_READ_TIMEOUT_SECONDS = _positive_int_env("CLOUDINARY_READ_TIMEOUT_SEC
 CLOUDINARY_UPLOAD_TIMEOUT_SECONDS = _positive_int_env("CLOUDINARY_UPLOAD_TIMEOUT_SECONDS", 90)
 CLOUDINARY_POOL_MAXSIZE = _positive_int_env("CLOUDINARY_POOL_MAXSIZE", 8)
 DETECTION_STORAGE_MAX_BYTES = _positive_int_env("DETECTION_STORAGE_MAX_BYTES", 8_000_000)
+# Storage derivatives are deliberately smaller than the original DJI evidence
+# used for GPS extraction and inference. JPEG DCT reduction keeps this raster
+# bounded before Pillow allocates it on small Render instances. Set the first
+# value to the exact account limit shown in Cloudinary Console if it differs.
+CLOUDINARY_MAX_IMAGE_PIXELS = _positive_int_env("CLOUDINARY_MAX_IMAGE_PIXELS", 25_000_000)
+DETECTION_STORAGE_MAX_PIXELS = _positive_int_env("DETECTION_STORAGE_MAX_PIXELS", 12_000_000)
 FARM_CENTER_TIMEOUT_SECONDS = _positive_int_env("FARM_CENTER_TIMEOUT_SECONDS", 3)
 FARM_CENTER_CACHE_TTL_SECONDS = _positive_int_env("FARM_CENTER_CACHE_TTL_SECONDS", 300)
 TREE_IDENTITY_GPS_TOLERANCE_METERS = _positive_int_env("TREE_IDENTITY_GPS_TOLERANCE_METERS", 25)

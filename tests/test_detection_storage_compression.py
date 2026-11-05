@@ -106,6 +106,59 @@ def test_oversized_jpeg_is_compressed_without_resizing_or_metadata_loss(monkeypa
         assert after_metadata[field] == before_metadata[field]
 
 
+def test_large_dji_jpeg_uses_draft_reduction_and_preserves_gps(monkeypatch):
+    """Storage is bounded without changing source coordinates or protected DJI metadata."""
+    source = photo((1600, 1200), noisy=True)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
+    monkeypatch.setattr(images.config, "CLOUDINARY_MAX_IMAGE_PIXELS", 1_000_000)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 1_000_000)
+
+    stored, representation = images._prepare_cloudinary_copy(source, "image/jpeg", operation_id="large-dji")
+
+    assert representation == "reduced_jpeg_storage_copy"
+    assert len(stored) <= 500_000
+    with Image.open(BytesIO(stored)) as derivative:
+        assert derivative.size == (800, 600)
+        assert derivative.width * derivative.height <= 1_000_000
+    assert DroneGPS.extract_image_metadata(stored)["gps"] == {"latitude": 7.3, "longitude": 125.6}
+
+
+def test_storage_asset_records_resized_dimensions(monkeypatch):
+    source = photo((1600, 1200), noisy=True)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
+    monkeypatch.setattr(images.config, "CLOUDINARY_MAX_IMAGE_PIXELS", 1_000_000)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 1_000_000)
+    monkeypatch.setattr(images, "upload_asset", lambda *_args, **_kwargs: {"provider": "cloudinary"})
+
+    asset = images.save_upload_image_assets("record-large", source)["image_assets"]["original"]
+
+    assert asset["storage_representation"] == "reduced_jpeg_storage_copy"
+    assert asset["storage_dimensions"] == {"width": 800, "height": 600}
+
+
+def test_48mp_dji_dimensions_are_bounded_before_pillow_load(monkeypatch):
+    """A 48 MP JPEG selects a 12 MP DCT raster, not a 48 MP Pillow raster."""
+    output = BytesIO()
+    exif = piexif.dump({"0th": {piexif.ImageIFD.Make: b"DJI"}, "GPS": {
+        piexif.GPSIFD.GPSLatitudeRef: b"N", piexif.GPSIFD.GPSLatitude: ((7, 1), (18, 1), (0, 1)),
+        piexif.GPSIFD.GPSLongitudeRef: b"E", piexif.GPSIFD.GPSLongitude: ((125, 1), (36, 1), (0, 1)),
+    }})
+    with Image.new("RGB", (8000, 6000), (20, 120, 30)) as image:
+        image.save(output, "JPEG", quality=90, exif=exif)
+    source = output.getvalue()
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
+    monkeypatch.setattr(images.config, "CLOUDINARY_MAX_IMAGE_PIXELS", 25_000_000)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 12_000_000)
+
+    stored, representation = images._prepare_cloudinary_copy(source, "image/jpeg", operation_id="48mp-dji")
+
+    assert representation == "reduced_jpeg_storage_copy"
+    with Image.open(BytesIO(stored)) as derivative:
+        assert derivative.size == (4000, 3000)
+        assert derivative.width * derivative.height == 12_000_000
+    assert DroneGPS.extract_image_metadata(stored)["gps"] == {"latitude": 7.3, "longitude": 125.6}
+
+
 def test_missing_metadata_is_not_invented_during_compression(monkeypatch):
     source = photo((1000, 1000), noisy=True, metadata=False)
     monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)

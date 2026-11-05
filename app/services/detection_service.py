@@ -17,9 +17,21 @@ from app.infrastructure.imaging.image_utils import (
     DetectionImageProcessingError,
     save_upload_image_assets,
 )
+from app.core.resource_metrics import process_memory_metrics
 from app.infrastructure.cloudinary_storage import CloudinaryStorageError, delete_asset
 
 logger = logging.getLogger(__name__)
+
+
+def _log_memory(operation_id: str, stage: str) -> None:
+    metrics = process_memory_metrics()
+    logger.info(
+        "Detection persistence memory operation_id=%s stage=%s rss_mib=%s cgroup_mib=%s cgroup_limit_mib=%s",
+        operation_id, stage,
+        round(metrics["rss_bytes"] / (1024 * 1024), 1) if metrics["rss_bytes"] else "unavailable",
+        round(metrics["cgroup_current_bytes"] / (1024 * 1024), 1) if metrics["cgroup_current_bytes"] else "unavailable",
+        round(metrics["cgroup_limit_bytes"] / (1024 * 1024), 1) if metrics["cgroup_limit_bytes"] else "unavailable",
+    )
 
 
 class DetectionStoreUnavailableError(RuntimeError):
@@ -393,6 +405,7 @@ def save_detection_record(
     detection_record.update(image_fields)
 
     firestore_started = monotonic()
+    _log_memory(operation_id, "before_firestore_write")
     try:
         document.create(detection_record)
     except Exception as write_error:
@@ -415,6 +428,7 @@ def save_detection_record(
             logger.warning("Firestore did not commit detection %s (%s)", record_id, type(write_error).__name__)
             raise DetectionPersistenceError("Detection record could not be saved to Firestore") from None
     finally:
+        _log_memory(operation_id, "after_firestore_write")
         if timings is not None:
             timings["firestore_write_ms"] = (monotonic() - firestore_started) * 1000
 

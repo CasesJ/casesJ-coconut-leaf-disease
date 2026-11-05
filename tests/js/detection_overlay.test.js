@@ -34,6 +34,20 @@ test('metadata overlay uses image coordinates and confidence labels', () => {
   assert.ok(svg.children.some(node => node.textContent === 'Bud Rot 82%'));
 });
 
+test('raw original coordinates scale over a reduced storage derivative', () => {
+  const document = { createElementNS: () => fakeNode() };
+  const svg = { ...fakeNode(), ownerDocument: document };
+
+  overlay.draw(svg, [{ class: 'Bud Rot', confidence: 0.8, bbox: [500, 250, 2500, 1250] }],
+    800, 600, { width: 4000, height: 3000 });
+
+  const rectangle = svg.children.find(node => node.attributes.stroke === '#e2433a');
+  assert.equal(rectangle.attributes.x, '100');
+  assert.equal(rectangle.attributes.y, '50');
+  assert.equal(rectangle.attributes.width, '400');
+  assert.equal(rectangle.attributes.height, '200');
+});
+
 test('overlay markup retains normalized detections and protected image paths', () => {
   const html = overlay.frameHtml('/media/detections/record-1/original', {
     filename: 'leaf.jpg',

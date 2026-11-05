@@ -16,3 +16,7 @@ services:
         value: "50000000"
       - key: INFERENCE_DECODE_MAX_PIXELS
         value: "12000000"
+      - key: CLOUDINARY_MAX_IMAGE_PIXELS
+        value: "25000000"
+      - key: DETECTION_STORAGE_MAX_PIXELS
+        value: "12000000"
