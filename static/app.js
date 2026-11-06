@@ -260,6 +260,14 @@ window.updatePasswordStrength = function updatePasswordStrength(password) {
 document.addEventListener('DOMContentLoaded', () => {
   const passwordInput = document.getElementById('password');
   if (passwordInput) passwordInput.addEventListener('input', () => updatePasswordStrength(passwordInput.value));
+
+  // Keep mobile fields to the Philippine 11-digit format while typing or
+  // pasting. The backend validates the same rule for requests outside the UI.
+  document.querySelectorAll('.mobile-number-input').forEach(input => {
+    input.addEventListener('input', () => {
+      input.value = input.value.replace(/\D/g, '').slice(0, 11);
+    });
+  });
 });
 
 window.handleAuthSubmit = async function handleAuthSubmit(event) {
@@ -276,21 +284,15 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   const btnText = document.getElementById('btn-text');
   const recoveryEmail = document.getElementById('recovery-email')?.value.trim() || '';
   const recoveryMobile = document.getElementById('recovery-mobile')?.value.trim() || '';
-  const recoveryPassword = document.getElementById('recovery-new-password')?.value || '';
-  const recoveryConfirmPassword = document.getElementById('recovery-confirm-password')?.value || '';
   
   // Validation
   if (authMode === 'recovery') {
-    if (!recoveryEmail || !recoveryMobile || !recoveryPassword || !recoveryConfirmPassword) {
+    if (!recoveryEmail || !recoveryMobile) {
       showError('Please complete all recovery fields.');
       return;
     }
-    if (recoveryPassword !== recoveryConfirmPassword) {
-      showError('New password and confirmation must match.');
-      return;
-    }
-    if (recoveryPassword.length < 6) {
-      showError('Password must be at least 6 characters.');
+    if (!/^\d{11}$/.test(recoveryMobile)) {
+      showError('Mobile number must contain exactly 11 digits.');
       return;
     }
   } else if (!email) {
@@ -303,6 +305,10 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
   }
   if (authMode === 'signup' && (!firstName || !lastName || !contactNumber)) {
     showError('Please enter your name, last name, and contact number.');
+    return;
+  }
+  if (authMode === 'signup' && !/^\d{11}$/.test(contactNumber)) {
+    showError('Mobile number must contain exactly 11 digits.');
     return;
   }
   
@@ -327,9 +333,7 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: recoveryEmail,
-          mobile_number: recoveryMobile,
-          new_password: recoveryPassword,
-          confirm_new_password: recoveryConfirmPassword
+          mobile_number: recoveryMobile
         })
       });
       const verification = await verificationResponse.json().catch(() => ({}));
@@ -342,7 +346,7 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       }
       await auth.sendPasswordResetEmail(recoveryEmail);
       form.reset();
-      showSuccess('Verification successful. Check your email for the secure password-reset link. The link is single-use and expires automatically.');
+      showSuccess('Verification successful. Open the password-reset link in your email to choose your new password. The link is single-use and expires automatically.');
       setAuthMode('login');
     } else if (authMode === 'login') {
       console.log('Attempting login...');
@@ -417,24 +421,25 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
     console.error('Auth error:', error);
     let errorMsg = error.message || 'Unknown error occurred';
     
-    if (error.code === 'auth/email-already-in-use') {
+    const errorCode = String(error?.code || '').toLowerCase();
+    const errorText = String(error?.message || '').toLowerCase();
+    if (errorCode === 'auth/email-already-in-use') {
       errorMsg = '❌ Email already in use. Try logging in.';
-    } else if (error.code === 'auth/weak-password') {
+    } else if (errorCode === 'auth/weak-password') {
       errorMsg = '❌ Password too weak (min 6 characters).';
-    } else if (error.code === 'auth/invalid-credential' ||
-               error.code === 'auth/user-not-found' ||
-               error.code === 'auth/wrong-password') {
-      // Firebase returns `auth/invalid-credential` for a failed email/password
-      // login in newer SDKs. Keep the response clear and avoid revealing
-      // whether the email address is registered.
+    } else if (['auth/invalid-credential', 'auth/invalid-login-credentials',
+                'auth/user-not-found', 'auth/wrong-password'].includes(errorCode) ||
+               errorText.includes('auth/invalid-credential')) {
+      // Firebase has used several codes for a failed email/password login.
+      // Keep the response clear and avoid disclosing which field was invalid.
       errorMsg = '❌ Incorrect email or password.';
-    } else if (error.code === 'auth/invalid-email') {
+    } else if (errorCode === 'auth/invalid-email') {
       errorMsg = '❌ Invalid email address.';
-    } else if (error.code === 'auth/network-request-failed') {
+    } else if (errorCode === 'auth/network-request-failed') {
       errorMsg = '❌ Network error. Check your connection.';
-    } else if (error.code === 'auth/operation-not-allowed') {
+    } else if (errorCode === 'auth/operation-not-allowed') {
       errorMsg = '❌ Email/Password not enabled in Firebase. Check Firebase console.';
-    } else if (error.code === 'auth/expired-action-code' || error.code === 'auth/invalid-action-code') {
+    } else if (errorCode === 'auth/expired-action-code' || errorCode === 'auth/invalid-action-code') {
       errorMsg = '❌ This password-reset link is invalid or has expired. Request a new one.';
     }
     

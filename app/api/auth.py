@@ -104,12 +104,6 @@ async def verify_password_recovery(
     await limiter.rolling(f"recovery:ip:{ip}", PASSWORD_RECOVERY_ATTEMPTS_PER_MINUTE, 60)
     await limiter.rolling(f"recovery:email:{email_key}", PASSWORD_RECOVERY_ATTEMPTS_PER_HOUR, 3600)
 
-    # Apply the same Firebase email/password minimum and never retain the
-    # proposed password. The link handler asks for it again after ownership of
-    # the mailbox is proven.
-    if recovery.new_password != recovery.confirm_new_password or len(recovery.new_password) < 6:
-        return {"verified": False, "message": _RECOVERY_FAILURE_MESSAGE}
-
     try:
         verified = await run_in_threadpool(_recovery_details_match, email, recovery.mobile_number)
     except Exception as exc:

@@ -1729,7 +1729,7 @@
   <!-- Load app functions - will override stubs -->
   <script src="/detection_overlay.js?v=overlay-scale-20261030-1"></script>
   <script src="/private_media.js?v=20261025-1"></script>
-  <script src="/app.js?v=auth-recovery-20261105-2"></script>
+  <script src="/app.js?v=mobile-validation-20261107-1"></script>
   <script src="/tree_identity.js?v=20261025-1"></script>
   <link rel="stylesheet" href="/static/monitoring.css?v=20261102-1">
   <script src="/monitoring.js?v=compact-monitoring-20261102-1"></script>
@@ -1771,8 +1771,8 @@
           <input type="text" id="last-name" autocomplete="family-name" placeholder="Enter your last name" />
         </div>
         <div class="form-group signup-only">
-          <label for="contact-number">Contact Number</label>
-          <input type="tel" id="contact-number" autocomplete="tel" inputmode="tel" placeholder="e.g. +63 912 345 6789" />
+          <label for="contact-number">Mobile Number</label>
+          <input type="tel" id="contact-number" class="mobile-number-input" autocomplete="tel" inputmode="numeric" pattern="[0-9]{11}" maxlength="11" placeholder="e.g. 09123456789" />
         </div>
         <div class="form-group auth-access-only">
           <label for="email">Email</label>
@@ -1792,15 +1792,7 @@
         </div>
         <div class="form-group recovery-only">
           <label for="recovery-mobile">Mobile Number</label>
-          <input type="tel" id="recovery-mobile" autocomplete="tel" inputmode="tel" placeholder="e.g. 0912 345 6789" />
-        </div>
-        <div class="form-group recovery-only">
-          <label for="recovery-new-password">New Password</label>
-          <input type="password" id="recovery-new-password" autocomplete="new-password" placeholder="At least 6 characters" />
-        </div>
-        <div class="form-group recovery-only">
-          <label for="recovery-confirm-password">Confirm New Password</label>
-          <input type="password" id="recovery-confirm-password" autocomplete="new-password" placeholder="Re-enter your new password" />
+          <input type="tel" id="recovery-mobile" class="mobile-number-input" autocomplete="tel" inputmode="numeric" pattern="[0-9]{11}" maxlength="11" placeholder="e.g. 09123456789" />
         </div>
         <button type="submit" class="btn-submit" id="submit-btn">
           <span class="loading-spinner" id="spinner"></span>

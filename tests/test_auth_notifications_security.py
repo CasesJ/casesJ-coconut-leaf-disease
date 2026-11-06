@@ -179,8 +179,6 @@ def test_password_recovery_requires_matching_account_details(client, monkeypatch
     response = client.post("/auth/recovery/verify", json={
         "email": "unknown@example.test",
         "mobile_number": "09123456789",
-        "new_password": "secure1",
-        "confirm_new_password": "secure1",
     })
 
     assert response.status_code == 200
@@ -200,32 +198,14 @@ def test_password_recovery_accepts_verified_match_and_normalizes_phone(client, m
 
     response = client.post("/auth/recovery/verify", json={
         "email": "FARMER@EXAMPLE.TEST",
-        "mobile_number": "+63 912 345 6789",
-        "new_password": "secure1",
-        "confirm_new_password": "secure1",
+        "mobile_number": "09123456789",
     })
 
     assert response.status_code == 200
     assert response.json()["verified"] is True
-    assert received == [("farmer@example.test", "+63 912 345 6789")]
+    assert received == [("farmer@example.test", "09123456789")]
     assert auth_api._normalize_mobile_number("09 123 456 789") == "09123456789"
     assert auth_api._normalize_mobile_number("+63 912 345 6789") == "09123456789"
-
-
-def test_password_recovery_rejects_mismatched_new_passwords_without_lookup(client, monkeypatch):
-    called = []
-    monkeypatch.setattr(auth_api, "_recovery_details_match", lambda email, mobile: called.append(True))
-
-    response = client.post("/auth/recovery/verify", json={
-        "email": "farmer@example.test",
-        "mobile_number": "09123456789",
-        "new_password": "secure1",
-        "confirm_new_password": "different1",
-    })
-
-    assert response.status_code == 200
-    assert response.json()["verified"] is False
-    assert called == []
 
 
 def test_password_recovery_allows_legacy_account_without_a_profile_phone(monkeypatch):
