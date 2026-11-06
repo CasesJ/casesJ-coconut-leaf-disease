@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
-import pickle
 from datetime import datetime
 import json
 import re
@@ -68,41 +67,20 @@ class CoconutDiseaseDetector:
         else:
             self._load_openvino_model()
         
-        # ──── Load ML Recommendation Models ────
-        print("[OK] Loading ML recommendation classifiers...")
+        # ──── Disabled ML recommendation models ────
+        # The active recommendation path below is deliberately hard-coded
+        # (its ML branch is guarded by ``if False``).  Do not deserialize the
+        # archived sklearn pickles at startup: doing so imports sklearn and
+        # retains a large unused model graph in every API worker.  Keep the
+        # attributes and artifact files for backwards-compatible future work,
+        # but leave them unloaded until that feature is explicitly enabled and
+        # validated.
         self.ml_models_loaded = False
-        try:
-            models_dir = current_dir / "models" / "ml_recommendations"
-            
-            # Load classifiers
-            with open(models_dir / "treatment_clf.pkl", "rb") as f:
-                self.treatment_clf = pickle.load(f)
-            with open(models_dir / "fertilizer_clf.pkl", "rb") as f:
-                self.fertilizer_clf = pickle.load(f)
-            with open(models_dir / "preventive_clf.pkl", "rb") as f:
-                self.preventive_clf = pickle.load(f)
-            
-            # Load encoders
-            with open(models_dir / "treatment_encoder.pkl", "rb") as f:
-                self.treatment_encoder = pickle.load(f)
-            
-            # Feature engineer is optional (has external dependency)
-            self.feature_engineer = None
-            try:
-                with open(models_dir / "feature_engineer.pkl", "rb") as f:
-                    self.feature_engineer = pickle.load(f)
-                print("[OK] Feature engineer loaded")
-            except Exception as e:
-                print(f"[INFO] Feature engineer not available ({type(e).__name__}), using built-in features")
-            
-            self.ml_models_loaded = True
-            print("[OK] ML recommendation models loaded successfully")
-        except Exception as e:
-            print(f"[WARNING] Could not load ML models - falling back to hardcoded recommendations: {e}")
-            self.treatment_clf = None
-            self.fertilizer_clf = None
-            self.preventive_clf = None
-            self.treatment_encoder = None
+        self.treatment_clf = None
+        self.fertilizer_clf = None
+        self.preventive_clf = None
+        self.treatment_encoder = None
+        self.feature_engineer = None
         
         # ──── Recommendation Mapping Tables ────
         # These map ML predictions (indices) to readable recommendations
