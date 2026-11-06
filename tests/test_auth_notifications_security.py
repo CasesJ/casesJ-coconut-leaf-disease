@@ -2,6 +2,8 @@
 
 from fastapi.testclient import TestClient
 import pytest
+from types import SimpleNamespace
+from firebase_admin import firestore
 
 import firebase_config
 from app.api import auth as auth_api
@@ -224,3 +226,37 @@ def test_password_recovery_rejects_mismatched_new_passwords_without_lookup(clien
     assert response.status_code == 200
     assert response.json()["verified"] is False
     assert called == []
+
+
+def test_password_recovery_allows_legacy_account_without_a_profile_phone(monkeypatch):
+    """The email reset link remains the ownership proof for legacy accounts."""
+    monkeypatch.setattr(auth_api, "get_user_by_email", lambda email: SimpleNamespace(uid="legacy-user"))
+
+    legacy_profile = SimpleNamespace(exists=False, to_dict=lambda: None)
+    firestore_client = SimpleNamespace(
+        client=lambda: SimpleNamespace(
+            collection=lambda name: SimpleNamespace(
+                document=lambda uid: SimpleNamespace(get=lambda: legacy_profile)
+            )
+        )
+    )
+    monkeypatch.setattr(firestore, "client", firestore_client.client)
+
+    assert auth_api._recovery_details_match("farmer@example.test", "09511857083") is True
+
+
+def test_password_recovery_still_checks_a_saved_profile_phone(monkeypatch):
+    monkeypatch.setattr(auth_api, "get_user_by_email", lambda email: SimpleNamespace(uid="profile-user"))
+
+    profile = SimpleNamespace(exists=True, to_dict=lambda: {"contact_number": "+63 951 185 7083"})
+    firestore_client = SimpleNamespace(
+        client=lambda: SimpleNamespace(
+            collection=lambda name: SimpleNamespace(
+                document=lambda uid: SimpleNamespace(get=lambda: profile)
+            )
+        )
+    )
+    monkeypatch.setattr(firestore, "client", firestore_client.client)
+
+    assert auth_api._recovery_details_match("farmer@example.test", "09511857083") is True
+    assert auth_api._recovery_details_match("farmer@example.test", "09123456789") is False

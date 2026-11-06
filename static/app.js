@@ -421,10 +421,13 @@ window.handleAuthSubmit = async function handleAuthSubmit(event) {
       errorMsg = '❌ Email already in use. Try logging in.';
     } else if (error.code === 'auth/weak-password') {
       errorMsg = '❌ Password too weak (min 6 characters).';
-    } else if (error.code === 'auth/user-not-found') {
-      errorMsg = '❌ Email not found. Sign up first.';
-    } else if (error.code === 'auth/wrong-password') {
-      errorMsg = '❌ Incorrect password.';
+    } else if (error.code === 'auth/invalid-credential' ||
+               error.code === 'auth/user-not-found' ||
+               error.code === 'auth/wrong-password') {
+      // Firebase returns `auth/invalid-credential` for a failed email/password
+      // login in newer SDKs. Keep the response clear and avoid revealing
+      // whether the email address is registered.
+      errorMsg = '❌ Incorrect email or password.';
     } else if (error.code === 'auth/invalid-email') {
       errorMsg = '❌ Invalid email address.';
     } else if (error.code === 'auth/network-request-failed') {

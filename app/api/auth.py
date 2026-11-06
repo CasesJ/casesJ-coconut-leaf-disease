@@ -36,7 +36,14 @@ def _normalize_mobile_number(value: str) -> str:
 
 
 def _recovery_details_match(email: str, mobile_number: str) -> bool:
-    """Match Firebase Auth's account UID to its Firestore profile phone number."""
+    """Check recovery data without locking out accounts created before profiles.
+
+    Firebase's reset email is the ownership proof for the password change.  A
+    contact number is therefore an additional check only when the account has
+    one saved in its Firestore profile.  Requiring a profile for every account
+    incorrectly rejects existing Firebase Auth users created before profile
+    saving was introduced.
+    """
     user = get_user_by_email(email)
     if not user:
         return False
@@ -46,9 +53,12 @@ def _recovery_details_match(email: str, mobile_number: str) -> bool:
     profile = firestore.client().collection("users").document(user.uid).get()
     profile_data = profile.to_dict() if profile.exists else None
     registered_number = (profile_data or {}).get("contact_number")
-    return bool(registered_number) and (
-        _normalize_mobile_number(registered_number) == _normalize_mobile_number(mobile_number)
-    )
+    if not registered_number:
+        # Legacy accounts have no profile phone number to compare.  Firebase
+        # still sends the reset link only to the account's registered mailbox.
+        return True
+
+    return _normalize_mobile_number(registered_number) == _normalize_mobile_number(mobile_number)
 
 
 @router.post("/verify-token", response_model=UserResponse)
