@@ -14,10 +14,6 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 numpy>=1.24.0
 pandas>=2.0.0
-# Serialized Random Forest and preprocessing artifacts embed sklearn 1.8.0.
-# Pinning avoids an unsafe 1.8.0 -> 1.9.1 pickle-version mismatch on Render.
-scikit-learn==1.8.0
-joblib>=1.3.0
 opencv-python-headless>=4.8.0
 pillow>=10.0.0
 piexif>=1.1.3

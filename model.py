@@ -2,8 +2,6 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
-from datetime import datetime
-import json
 import re
 
 from app.core.config import INFERENCE_BACKEND, OPENVINO_MODEL_DIR
@@ -67,56 +65,6 @@ class CoconutDiseaseDetector:
         else:
             self._load_openvino_model()
         
-        # ──── Disabled ML recommendation models ────
-        # The active recommendation path below is deliberately hard-coded
-        # (its ML branch is guarded by ``if False``).  Do not deserialize the
-        # archived sklearn pickles at startup: doing so imports sklearn and
-        # retains a large unused model graph in every API worker.  Keep the
-        # attributes and artifact files for backwards-compatible future work,
-        # but leave them unloaded until that feature is explicitly enabled and
-        # validated.
-        self.ml_models_loaded = False
-        self.treatment_clf = None
-        self.fertilizer_clf = None
-        self.preventive_clf = None
-        self.treatment_encoder = None
-        self.feature_engineer = None
-        
-        # ──── Recommendation Mapping Tables ────
-        # These map ML predictions (indices) to readable recommendations
-        self.treatment_options = {
-            0: "Bacillus thuringiensis (Bt) - Organic, safe for beneficial insects",
-            1: "Metalaxyl-based fungicide - Systemic control for fungal diseases",
-            2: "Copper-based fungicide (Bordeaux mixture) - Broad-spectrum fungal control",
-            3: "Spinosad - Organic insecticide for caterpillars",
-            4: "Chlorothalonil - Protective fungicide for leaf diseases",
-            5: "Carbendazim - Systemic fungicide for comprehensive coverage",
-            6: "Mechanical removal - Hand-pick affected parts and burn",
-            7: "Combination therapy - Rotate fungicides weekly"
-        }
-        
-        self.fertilizer_options = {
-            0: "NPK 12:12:12 (Balanced) - General maintenance",
-            1: "NPK 10:10:20 (High K) - Disease recovery and stress tolerance",
-            2: "NPK 8:8:16 + Potassium - Leaf disease resistance",
-            3: "NPK 10:10:10 + Micronutrients - Caterpillar damage recovery",
-            4: "Magnesium sulfate (Epsom salt) - Nutrient deficiency correction",
-            5: "NPK 12:8:20 with Zn, Fe, B - Comprehensive micronutrient support"
-        }
-        
-        self.preventive_options = {
-            0: "Remove fallen diseased leaves immediately and burn them",
-            1: "Maintain 8-9m tree spacing for air circulation",
-            2: "Monitor central bud and leaf undersides weekly",
-            3: "Ensure excellent soil drainage - avoid waterlogging",
-            4: "Sanitize pruning tools between cuts with bleach solution",
-            5: "Encourage natural predators (birds, wasps for pest control)",
-            6: "Water at soil level, avoid wetting foliage",
-            7: "Prune dead/weak branches to improve canopy health",
-            8: "Use drip irrigation for consistent moisture delivery",
-            9: "Apply mulch (10cm) around base to retain soil moisture"
-        }
-
     def _load_openvino_model(self) -> None:
         """Load only the reviewed dynamic IR exported from the current weights.pt."""
         xml_path = OPENVINO_MODEL_DIR / "weights.xml"
@@ -427,82 +375,7 @@ class CoconutDiseaseDetector:
         else:
             print(f"[GPS] No drone/browser GPS - using default Davao coordinates")
         
-        # ──── ML Model Predictions ────
-        # DISABLED: ML models are not well-tuned yet, using hardcoded recommendations instead
-        if False and self.ml_models_loaded and self.treatment_clf is not None:
-            try:
-                print(f"[ML] Using trained ML classifiers for recommendations")
-                
-                # Infer severity from confidence
-                if conf_percent >= 85:
-                    severity = "high"
-                elif conf_percent >= 70:
-                    severity = "medium"
-                else:
-                    severity = "low"
-                
-                # Create features for prediction
-                features = self._create_features(disease_name, conf_percent, severity)
-                features_2d = features.reshape(1, -1)
-                
-                # Make predictions with MultiOutputClassifier
-                treatment_pred = self.treatment_clf.predict(features_2d)[0]
-                fertilizer_pred = self.fertilizer_clf.predict(features_2d)[0]
-                preventive_pred = self.preventive_clf.predict(features_2d)[0]
-                
-                print(f"[ML] Predictions - Treatment idx: {treatment_pred}, Fertilizer idx: {fertilizer_pred}, Preventive idx: {preventive_pred}")
-                
-                # Decode predictions using mapping tables
-                treatment = self.treatment_options.get(
-                    int(treatment_pred[0]) if isinstance(treatment_pred, np.ndarray) else int(treatment_pred),
-                    "Consult agricultural expert for specialized treatment"
-                )
-                
-                fertilizer_idx = int(fertilizer_pred[0]) if isinstance(fertilizer_pred, np.ndarray) else int(fertilizer_pred)
-                fertilizer = self.fertilizer_options.get(fertilizer_idx, "Balanced NPK 12:12:12 fertilizer")
-                
-                # Collect preventive measures
-                preventive_list = []
-                if isinstance(preventive_pred, np.ndarray):
-                    for p_idx in preventive_pred:
-                        try:
-                            p_int = int(p_idx)
-                            if p_int in self.preventive_options:
-                                preventive_list.append(self.preventive_options[p_int])
-                        except:
-                            pass
-                
-                if not preventive_list:
-                    preventive_list = [self.preventive_options.get(0, "Regular monitoring recommended")]
-                
-                confidence_note = ""
-                if conf_percent >= 85:
-                    confidence_note = " (High confidence - ML model prediction)"
-                elif conf_percent >= 70:
-                    confidence_note = " (Good confidence - ML model prediction)"
-                else:
-                    confidence_note = " (Lower confidence - consult agricultural expert)"
-                
-                return {
-                    'disease': disease_name,
-                    'confidence': round(conf_percent, 2),
-                    'fertilizer': fertilizer,
-                    'treatment': treatment,
-                    'prevention': preventive_list,
-                    'model': 'ML-Trained',
-                    'location': location_info,
-                    'note': f"ML-predicted recommendations{confidence_note}. Location: {location_info['source'].replace('_', ' ')}"
-                }
-            
-            except Exception as e:
-                print(f"[WARNING] ML prediction failed: {e}, falling back to hardcoded recommendations")
-                import traceback
-                traceback.print_exc()
-            return {
-                "detections": [],
-                "image": image
-            }
-        # Fallback to hardcoded recommendations
+        # Hard-coded, reviewed recommendations are the only supported path.
         print(f"[FALLBACK] Using hardcoded recommendations")
         
         recommendations = {
@@ -567,57 +440,5 @@ class CoconutDiseaseDetector:
             'note': f"Davao region recommendations{confidence_note}. Location: {location_info['source'].replace('_', ' ')}"
         }
     
-    def _create_features(self, disease_name: str, confidence: float, severity: str) -> np.ndarray:
-        """
-        Create feature vector for ML model prediction.
-        Based on disease, confidence, and severity.
-        
-        Args:
-            disease_name: Name of detected disease
-            confidence: Confidence score (0-100)
-            severity: Severity level (low, medium, high)
-        
-        Returns:
-            Feature vector as numpy array
-        """
-        # Map disease to numeric code
-        disease_map = {
-            'caterpillars': 0,
-            'stem bleeding': 1,
-            'drying of leaflets': 2,
-            'healthy': 3,
-            'pestalotiopsis': 4,
-            'bud rot': 5
-        }
-        disease_code = disease_map.get(disease_name.lower().strip().replace('_', ' '), 3)
-        
-        # Map severity to numeric code
-        severity_map = {'low': 0, 'medium': 1, 'high': 2}
-        severity_code = severity_map.get(severity.lower(), 0)
-        
-        # Normalize confidence to 0-1
-        conf_normalized = min(max(confidence / 100.0, 0), 1)
-        
-        # Create 13 features (matching the training data structure)
-        # These are engineered features based on disease characteristics
-        features = [
-            disease_code,                    # 0: disease numeric code
-            conf_normalized,                 # 1: normalized confidence
-            severity_code,                   # 2: severity code
-            conf_normalized * severity_code, # 3: confidence * severity interaction
-            1.0 if severity_code == 2 else 0.0,  # 4: is_high_severity
-            1.0 if confidence < 0.7 else 0.0,    # 5: is_low_confidence
-            int(datetime.now().month),       # 6: current month (seasonal)
-            int(datetime.now().day) / 31.0,  # 7: day of month (normalized)
-            1.0 if disease_code in [0, 4] else 0.0,  # 8: is_pest_disease
-            1.0 if disease_code in [1, 2, 5] else 0.0,  # 9: is_fungal_disease
-            confidence / 100.0,              # 10: confidence (0-1)
-            severity_code / 2.0,             # 11: normalized severity
-            1.0 if disease_code == 3 else 0.0,  # 12: is_healthy
-        ]
-        
-        return np.array(features, dtype=np.float32)
-
-
 # Singleton — loaded once on startup
 detector = CoconutDiseaseDetector()

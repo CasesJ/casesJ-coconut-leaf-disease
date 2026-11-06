@@ -1,4 +1,4 @@
-"""Regression checks for the intentionally disabled ML recommendation path."""
+"""Regression checks for the supported hard-coded recommendation path."""
 
 import ast
 from pathlib import Path
@@ -7,13 +7,13 @@ from pathlib import Path
 MODEL_PATH = Path(__file__).resolve().parents[1] / "model.py"
 
 
-def test_startup_does_not_import_or_deserialize_disabled_recommendation_pickles():
-    """Keep disabled sklearn artifacts out of the runtime startup path."""
+def test_model_has_no_archived_ml_recommendation_implementation():
+    """Keep deleted pickle-backed recommendation code from returning."""
     source = MODEL_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    assert "import pickle" not in source
-    assert ".pkl" not in source
+    for forbidden in ("pickle", ".pkl", "sklearn", "ml_models_loaded", "treatment_clf", "_create_features"):
+        assert forbidden not in source
     assert not any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -22,7 +22,9 @@ def test_startup_does_not_import_or_deserialize_disabled_recommendation_pickles(
     )
 
 
-def test_hardcoded_recommendation_branch_remains_intentionally_disabled():
-    """Guard against accidentally activating archived ML recommendations."""
+def test_hardcoded_recommendation_output_contract_remains_present():
+    """Keep the current hard-coded disease lookup and response shape."""
     source = MODEL_PATH.read_text(encoding="utf-8")
-    assert "if False and self.ml_models_loaded and self.treatment_clf is not None:" in source
+    assert "'bud rot': {" in source
+    assert "'model': 'Hardcoded'" in source
+    assert "'treatment': rec['treatment']" in source

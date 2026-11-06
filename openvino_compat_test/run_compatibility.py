@@ -5,7 +5,6 @@ import argparse
 import gc
 import json
 import os
-import pickle
 import shutil
 import sys
 from pathlib import Path
@@ -24,19 +23,6 @@ RETIRED = {"cercospora", "leaf rot"}
 
 def rss_mib() -> float:
     return psutil.Process().memory_info().rss / 1024 / 1024
-
-
-def load_recommendation_models() -> None:
-    """Match production's eager pickle loading, including the optional feature engineer."""
-    base = ROOT / "models" / "ml_recommendations"
-    for name in ("treatment_clf.pkl", "fertilizer_clf.pkl", "preventive_clf.pkl", "treatment_encoder.pkl"):
-        with (base / name).open("rb") as stream:
-            pickle.load(stream)
-    try:
-        with (base / "feature_engineer.pkl").open("rb") as stream:
-            pickle.load(stream)
-    except Exception:
-        pass  # Production also falls back when this optional pickle cannot import.
 
 
 def normalize_names(names) -> dict[int, str]:
@@ -139,7 +125,7 @@ def compatibility(exported: Path) -> dict:
 
 
 def memory(backend: str, exported: Path | None) -> dict:
-    """Fresh process mode: package imports, model load, recommendation pickles, then native-size image inference."""
+    """Fresh process mode: package imports, model load, then native-size image inference."""
     os.environ.setdefault("YOLO_CONFIG_DIR", str(ROOT / ".ultralytics"))
     before = rss_mib()
     if backend == "pytorch":
@@ -159,9 +145,7 @@ def memory(backend: str, exported: Path | None) -> dict:
         request = compiled.create_infer_request()
         loaded = (compiled, request)
     after_model = rss_mib()
-    load_recommendation_models()
-    after_recommendations = rss_mib()
-    peak = after_recommendations
+    peak = after_model
     samples = []
     for image_path in IMAGES:
         image = cv2.imread(str(image_path))
@@ -174,7 +158,7 @@ def memory(backend: str, exported: Path | None) -> dict:
         current = rss_mib(); peak = max(peak, current)
         samples.append({"image": image_path.name, "rss_after_inference_mib": current})
     return {"backend": backend, "rss_before_mib": before, "rss_after_model_mib": after_model,
-            "rss_after_recommendations_mib": after_recommendations, "peak_rss_mib": peak, "samples": samples}
+            "peak_rss_mib": peak, "samples": samples}
 
 
 def main() -> None:
