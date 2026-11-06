@@ -16,6 +16,11 @@ services:
         value: "50000000"
       - key: INFERENCE_DECODE_MAX_PIXELS
         value: "12000000"
+      # Render Free has a 512 MiB limit; do not overlap decoded-image pipelines.
+      - key: IMAGE_PIPELINE_MAX_CONCURRENCY
+        value: "1"
+      - key: IMAGE_PIPELINE_QUEUE_SECONDS
+        value: "10"
       - key: CLOUDINARY_MAX_IMAGE_PIXELS
         value: "25000000"
       - key: DETECTION_STORAGE_MAX_PIXELS

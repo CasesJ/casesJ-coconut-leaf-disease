@@ -77,7 +77,7 @@ def _log_memory(operation_id: str, stage: str) -> None:
     )
 
 
-def _prepare_upload(contents: bytes, filename: str | None):
+def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "unknown"):
     """Validate, extract GPS and decode unchanged source pixels in a worker."""
     from drone_gps import get_drone_gps, init_drone_gps
     performance_ms = {}
@@ -86,6 +86,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
     image_format = None
     validation_started = time.perf_counter()
     try:
+        _log_memory(operation_id, "before_pillow_validation")
         with Image.open(BytesIO(contents)) as source_image:
             image_format = source_image.format
             if image_format not in {"JPEG", "MPO", "PNG", "WEBP", "BMP", "TIFF"}:
@@ -101,6 +102,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
                     f"the upload limit is {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels"
                 )
             source_image.verify()
+        _log_memory(operation_id, "after_pillow_validation")
         if image_format == "MPO":
             # Read metadata from the untouched MPO first; convert only its primary
             # JPEG frame so inference and durable evidence use the same pixels.
@@ -118,12 +120,14 @@ def _prepare_upload(contents: bytes, filename: str | None):
                     primary.save(output, **save_options)
                     inference_contents = output.getvalue()
                     output.close()
+            _log_memory(operation_id, "after_mpo_primary_conversion")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
     performance_ms["validation_ms"] = (time.perf_counter() - validation_started) * 1000
     # The decoded signature identifies the format; camera/browser MIME labels
     # can be empty, generic or incorrect, especially for uppercase extensions.
     metadata_started = time.perf_counter()
+    _log_memory(operation_id, "before_exif_gps_extraction")
     metadata_reader = get_drone_gps() or init_drone_gps()
     image_metadata = metadata_reader.extract_image_metadata(contents, filename)
 
@@ -158,6 +162,7 @@ def _prepare_upload(contents: bytes, filename: str | None):
     else:
         lat, lng = None, None
     performance_ms["metadata_gps_ms"] = (time.perf_counter() - metadata_started) * 1000
+    _log_memory(operation_id, "after_exif_gps_extraction")
 
     decode_started = time.perf_counter()
     # --- Inference ---
@@ -174,11 +179,17 @@ def _prepare_upload(contents: bytes, filename: str | None):
             decode_flag = cv2.IMREAD_REDUCED_COLOR_4
         elif source_pixels > INFERENCE_DECODE_MAX_PIXELS:
             decode_flag = cv2.IMREAD_REDUCED_COLOR_2
+    _log_memory(operation_id, "before_opencv_decode")
     image = imdecode(np_arr, decode_flag)
     del np_arr
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
     performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
+    _log_memory(operation_id, "after_opencv_decode")
+    logger.info(
+        "Upload decode operation_id=%s source_bytes=%d decoded_mib=%.1f decode_flag=%d",
+        operation_id, len(inference_contents), image.nbytes / (1024 * 1024), decode_flag,
+    )
     scale_x = source_width / image.shape[1]
     scale_y = source_height / image.shape[0]
     performance_ms["inference_decode_scale"] = max(scale_x, scale_y)
@@ -293,7 +304,9 @@ async def detect_image(
         raise HTTPException(status_code=413, detail="Image upload is too large")
     (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
      image, source_dimensions, scale_x, scale_y,
-     preparation_ms) = await asyncio.to_thread(_prepare_upload, contents, file.filename)
+     preparation_ms) = await asyncio.to_thread(
+        _prepare_upload, contents, file.filename, operation_id,
+    )
     _log_memory(operation_id, "after_prepare_upload")
     performance_ms.update(preparation_ms)
     rss_samples.append(_process_rss_mib())

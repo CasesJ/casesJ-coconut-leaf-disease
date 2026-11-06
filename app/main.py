@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 _image_pipeline_slots = asyncio.Semaphore(IMAGE_PIPELINE_MAX_CONCURRENCY)
 
 
+def _is_memory_intensive_image_pipeline(request: Request) -> bool:
+    """Identify routes that retain a source image while decoding/inferencing it."""
+    if request.method != "POST":
+        return False
+    return (request.url.path == "/detect/image"
+            or request.url.path.startswith("/monitoring/cases/")
+            and request.url.path.endswith("/follow-ups"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
@@ -120,7 +129,7 @@ def create_app() -> FastAPI:
     @application.middleware("http")
     async def limit_memory_intensive_image_pipelines(request: Request, call_next):
         """Bound complete image pipelines so concurrent DJI uploads cannot OOM Render."""
-        if request.url.path != "/detect/image" or request.method != "POST":
+        if not _is_memory_intensive_image_pipeline(request):
             return await call_next(request)
         try:
             await asyncio.wait_for(

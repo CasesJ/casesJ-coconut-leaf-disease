@@ -285,18 +285,22 @@ def _prepare_cloudinary_copy(
                 )
             for quality in _JPEG_QUALITIES:
                 compression_started = time.perf_counter()
+                _log_memory(f"before_jpeg_encode_q{quality}", operation_id)
                 output = BytesIO()
                 options = {"format": "JPEG", "quality": quality, "optimize": True}
                 source.save(output, **options)
                 candidate = _inject_protected_segments(output.getvalue(), protected_segments)
                 output.close()
                 compression_ms += (time.perf_counter() - compression_started) * 1000
+                _log_memory(f"after_jpeg_encode_q{quality}", operation_id)
                 if len(candidate) > config.DETECTION_STORAGE_MAX_BYTES:
                     del candidate
                     continue
                 metadata_started = time.perf_counter()
+                _log_memory("before_storage_metadata_verification", operation_id)
                 candidate_metadata = _metadata_snapshot(candidate)
                 metadata_ms += (time.perf_counter() - metadata_started) * 1000
+                _log_memory("after_storage_metadata_verification", operation_id)
                 matches = (_metadata_matches_resized(original_metadata, candidate_metadata)
                            if draft_size is not None else _metadata_matches(original_metadata, candidate_metadata))
                 if not matches:
