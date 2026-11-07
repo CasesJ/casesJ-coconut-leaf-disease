@@ -409,6 +409,7 @@ def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
     try:
         _configure()
         from cloudinary import api, uploader  # noqa: PLC0415
+        from cloudinary.exceptions import NotFound  # noqa: PLC0415
     except Exception as error:
         _log_cloudinary_failure("hybrid thumbnail setup", error)
         raise CloudinaryStorageError("Hybrid thumbnail storage is unavailable") from None
@@ -437,8 +438,9 @@ def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
         try:
             return api.resource(public_id, resource_type="image", type="authenticated", context=True)
         except Exception as error:
-            # Only a provider-confirmed 404 means there is no asset to adopt.
-            if _http_status(error) == 404:
+            # The SDK's NotFound has no numeric HTTP status attribute. Treat
+            # that specific provider error and an explicit 404 as absent only.
+            if isinstance(error, NotFound) or _http_status(error) == 404:
                 return None
             raise CloudinaryStorageError("Hybrid thumbnail inspection is unavailable") from None
 

@@ -3,6 +3,7 @@ import hashlib
 from datetime import datetime, timezone
 
 import pytest
+from cloudinary.exceptions import AuthorizationRequired, NotAllowed, RateLimited
 
 from app.infrastructure import cloudinary_storage
 from app.services import hybrid_uploads
@@ -208,6 +209,109 @@ def test_hybrid_thumbnail_retry_adopts_exact_existing_asset(monkeypatch):
     first=cloudinary_storage.upload_hybrid_thumbnail(content,job_id)
     second=cloudinary_storage.upload_hybrid_thumbnail(content,job_id)
     assert first == second and first["asset_id"] == "same-asset"
+
+
+def test_hybrid_thumbnail_sdk_not_found_uploads_once_and_verifies(monkeypatch):
+    from cloudinary import api, uploader
+    from cloudinary.exceptions import NotFound
+
+    job_id = "b" * 32
+    content = b"\xff\xd8synthetic-thumbnail\xff\xd9"
+    digest = hashlib.sha256(content).hexdigest()
+    public_id = f"neuralcoco/detection-thumbnail/{job_id}"
+    stored = []
+    inspections = []
+
+    def inspect(*args, **kwargs):
+        inspections.append((args, kwargs))
+        if not stored:
+            raise NotFound("thumbnail not found")
+        return stored[0]
+
+    def upload(source, **kwargs):
+        assert source.read() == content
+        assert kwargs["public_id"] == public_id
+        assert kwargs["resource_type"] == "image"
+        assert kwargs["type"] == "authenticated"
+        assert kwargs["overwrite"] is False
+        stored.append({
+            "public_id": public_id, "asset_id": "new-asset", "resource_type": "image",
+            "type": "authenticated", "format": "jpg", "version": 2,
+            "bytes": len(content),
+            "context": {"custom": {"hybrid_job_id": job_id, "thumbnail_sha256": digest}},
+        })
+
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr(api, "resource", inspect)
+    monkeypatch.setattr(uploader, "upload", upload)
+    reference = cloudinary_storage.upload_hybrid_thumbnail(content, job_id)
+    assert len(stored) == 1 and len(inspections) == 2
+    assert reference["asset_id"] == "new-asset"
+    assert reference["sha256"] == digest
+    assert reference["delivery_type"] == "authenticated"
+
+
+def test_hybrid_thumbnail_sdk_not_found_rejects_wrong_uploaded_identity(monkeypatch):
+    from cloudinary import api, uploader
+    from cloudinary.exceptions import NotFound
+
+    job_id = "b" * 32
+    content = b"\xff\xd8synthetic-thumbnail\xff\xd9"
+    public_id = f"neuralcoco/detection-thumbnail/{job_id}"
+    uploaded = []
+
+    def inspect(*_args, **_kwargs):
+        if not uploaded:
+            raise NotFound("thumbnail not found")
+        return {
+            "public_id": public_id, "asset_id": "wrong-asset", "resource_type": "image",
+            "type": "authenticated", "format": "jpg", "version": 2,
+            "bytes": len(content),
+            "context": {"custom": {"hybrid_job_id": job_id, "thumbnail_sha256": "0" * 64}},
+        }
+
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr(api, "resource", inspect)
+    monkeypatch.setattr(uploader, "upload", lambda *_args, **_kwargs: uploaded.append(True))
+    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="identity conflict"):
+        cloudinary_storage.upload_hybrid_thumbnail(content, job_id)
+    assert len(uploaded) == 1
+
+
+def test_hybrid_thumbnail_still_missing_after_upload_fails_safely(monkeypatch):
+    from cloudinary import api, uploader
+    from cloudinary.exceptions import NotFound
+
+    uploaded = []
+    def inspect(*_args, **_kwargs):
+        raise NotFound("thumbnail not found")
+
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr(api, "resource", inspect)
+    monkeypatch.setattr(uploader, "upload", lambda *_args, **_kwargs: uploaded.append(True))
+    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="could not be verified"):
+        cloudinary_storage.upload_hybrid_thumbnail(b"\xff\xd8thumbnail\xff\xd9", "b" * 32)
+    assert len(uploaded) == 1
+
+
+@pytest.mark.parametrize("error_type", [
+    AuthorizationRequired,
+    NotAllowed,
+    RateLimited,
+    TimeoutError,
+    ConnectionError,
+])
+def test_hybrid_thumbnail_unexpected_inspection_error_never_uploads(monkeypatch, error_type):
+    from cloudinary import api, uploader
+
+    def inspect(*_args, **_kwargs):
+        raise error_type("inspection failed")
+
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr(api, "resource", inspect)
+    monkeypatch.setattr(uploader, "upload", lambda *_args, **_kwargs: pytest.fail("unexpected error must not upload"))
+    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="inspection is unavailable"):
+        cloudinary_storage.upload_hybrid_thumbnail(b"\xff\xd8thumbnail\xff\xd9", "b" * 32)
 
 
 def test_hybrid_thumbnail_conflict_never_overwrites(monkeypatch):
