@@ -287,6 +287,50 @@ def test_cloudinary_download_error_is_not_replaced_with_local_fallback(monkeypat
         media_service.read_detection_image(record, "original")
 
 
+def _hybrid_raw_record():
+    return {
+        "id": "hybrid-rec", "user_id": "farmer-a",
+        "image_assets": {"original": {
+            "provider": "cloudinary", "asset_id": "asset",
+            "public_id": "neuralcoco/hybrid-original/" + "a" * 32 + ".jpg",
+            "resource_type": "raw", "delivery_type": "authenticated",
+            "format": "jpg", "content_type": "image/jpeg",
+            "storage_representation": "authenticated_raw_source",
+        }},
+    }
+
+
+def test_hybrid_raw_original_streams_without_render_buffering(monkeypatch):
+    record = _hybrid_raw_record()
+    monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
+    streamed = media_service.stream_detection_original(record)
+    assert streamed is not None
+    chunks, content_type = streamed
+    assert b"".join(chunks) == b"firstsecond" and content_type == "image/jpeg"
+
+
+def test_hybrid_raw_http_route_streams_only_to_owner(client, monkeypatch):
+    http, actor = client
+    record = _hybrid_raw_record()
+    monkeypatch.setattr(detection_service, "find_canonical_record_for_user",
+                        lambda uid, rid: record if uid == "farmer-a" and rid == "hybrid-rec" else None)
+    monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
+    assert http.get("/media/detections/hybrid-rec/original").content == b"firstsecond"
+    actor["uid"] = "farmer-b"
+    assert http.get("/media/detections/hybrid-rec/original").status_code == 404
+
+
+def test_hybrid_raw_media_never_decodes_render_thumbnail_or_annotation(monkeypatch):
+    record = _hybrid_raw_record()
+    monkeypatch.setattr(media_service, "_generate_detection_thumbnail", lambda *_: pytest.fail("must not decode raw source"))
+    monkeypatch.setattr(media_service, "_render_annotated_preview", lambda *_: pytest.fail("must not decode raw source"))
+    with pytest.raises(media_service.MediaUnavailable):
+        media_service.read_detection_image(record, "thumbnail")
+    with pytest.raises(media_service.MediaUnavailable):
+        media_service.read_detection_image(record, "annotated")
+    assert not media_service.has_record_image(record, "annotated")
+
+
 def test_monitoring_media_enforces_farmer_owner_and_expert_role(client, monkeypatch):
     http, actor = client
     case = {"id": "case-1", "farmer_id": "farmer-a"}

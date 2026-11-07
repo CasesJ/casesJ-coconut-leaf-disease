@@ -55,3 +55,16 @@ def test_missing_model_stops_startup_before_account_mutation(monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         asyncio.run(exercise())
+
+
+def test_separate_global_hybrid_deployment_skips_render_model_startup(monkeypatch):
+    setup_startup(monkeypatch, lambda *_: pytest.fail("Render must not load local model in global hybrid mode"))
+    monkeypatch.setattr(main, "INFERENCE_DEPLOYMENT_MODE", "hybrid")
+    monkeypatch.setattr("app.infrastructure.firebase.auth.ensure_user_account",
+                        lambda *_args: (SimpleNamespace(email="expert@example.test"), False))
+
+    async def exercise():
+        async with main.lifespan(main.app):
+            pass
+
+    asyncio.run(exercise())

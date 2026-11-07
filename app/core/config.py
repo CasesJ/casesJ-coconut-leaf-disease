@@ -5,14 +5,16 @@ This module is the single source of truth for every configuration value.
 No other module should call os.getenv() or declare path constants directly.
 """
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 
-# Load local development settings before reading configuration.  Hosted
-# environments provide the same values through their secret manager.
-load_dotenv()
+# Load local web-development settings before reading configuration.  The
+# standalone inference worker must receive only its own process environment.
+if os.getenv("COCONUTAI_WORKER_PROCESS") != "1":
+    load_dotenv()
 
 
 def _required_env(name: str) -> str:
@@ -102,6 +104,45 @@ INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "ultralytics").strip().lower(
 if INFERENCE_BACKEND not in {"ultralytics", "openvino"}:
     raise RuntimeError("INFERENCE_BACKEND must be 'ultralytics' or 'openvino'")
 
+# Deployment placement is deliberately separate from the model backend.  The
+# default keeps the existing Render-local path intact.  ``hybrid`` is reserved
+# for a future authenticated local-worker client; startup must fail closed until
+# that client is configured so Render can never silently fall back to decoding a
+# large image itself.
+INFERENCE_DEPLOYMENT_MODE = os.getenv("INFERENCE_DEPLOYMENT_MODE", "render_local").strip().lower()
+if INFERENCE_DEPLOYMENT_MODE not in {"render_local", "hybrid"}:
+    raise RuntimeError("INFERENCE_DEPLOYMENT_MODE must be 'render_local' or 'hybrid'")
+HYBRID_WORKER_SHARED_SECRET = os.getenv("HYBRID_WORKER_SHARED_SECRET", "").strip()
+HYBRID_WORKER_JOB_TTL_SECONDS = _positive_int_env("HYBRID_WORKER_JOB_TTL_SECONDS", 300)
+HYBRID_WORKER_LEASE_SECONDS = _positive_int_env("HYBRID_WORKER_LEASE_SECONDS", 180)
+HYBRID_WORKER_ROUTES_ENABLED = _bool_env("HYBRID_WORKER_ROUTES_ENABLED", False)
+HYBRID_WORKER_AUTH_SKEW_SECONDS = _positive_int_env("HYBRID_WORKER_AUTH_SKEW_SECONDS", 60)
+HYBRID_WORKER_NONCE_TTL_SECONDS = _positive_int_env("HYBRID_WORKER_NONCE_TTL_SECONDS", 600)
+# Stage 2B remains opt-in even when a future deployment selects ``hybrid``.
+# Routes stay absent from the application until the browser and reconciliation
+# workflow have both been reviewed and explicitly enabled.
+HYBRID_UPLOAD_ROUTES_ENABLED = _bool_env("HYBRID_UPLOAD_ROUTES_ENABLED", False)
+HYBRID_UPLOAD_TTL_SECONDS = _positive_int_env("HYBRID_UPLOAD_TTL_SECONDS", 300)
+HYBRID_UPLOAD_DAILY_LIMIT = _positive_int_env(
+    "HYBRID_UPLOAD_DAILY_LIMIT", IMAGE_INFERENCE_DAILY_LIMIT,
+)
+HYBRID_CLEANUP_ENABLED = _bool_env("HYBRID_CLEANUP_ENABLED", False)
+# Canary eligibility is a Firebase UID allowlist, never an email or a browser
+# supplied value.  Keeping it separate from deployment placement lets one
+# approved farmer use hybrid uploads while every other farmer stays on the
+# established render_local route.
+HYBRID_CANARY_ENABLED = _bool_env("HYBRID_CANARY_ENABLED", False)
+HYBRID_CANARY_USER_UIDS = frozenset(
+    uid.strip() for uid in os.getenv("HYBRID_CANARY_USER_UIDS", "").split(",") if uid.strip()
+)
+if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", uid)
+       for uid in HYBRID_CANARY_USER_UIDS):
+    raise RuntimeError("HYBRID_CANARY_USER_UIDS contains an invalid Firebase UID")
+if HYBRID_CANARY_ENABLED and len(HYBRID_CANARY_USER_UIDS) != 1:
+    raise RuntimeError("A hybrid canary must allow exactly one Firebase UID")
+if (INFERENCE_DEPLOYMENT_MODE == "hybrid" or HYBRID_CANARY_ENABLED) and not HYBRID_WORKER_SHARED_SECRET:
+    raise RuntimeError("HYBRID_WORKER_SHARED_SECRET is required when hybrid routes are enabled")
+
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.
 UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD: float = 0.05
@@ -121,8 +162,15 @@ PENDING_VERIFICATION_STATUS = "pending_verification"
 VERIFIED_STATUS = "verified"
 
 # ── Expert account credentials (from environment / .env) ──────────────────────
-EXPERT_ACCOUNT_EMAIL: str = _required_env("EXPERT_ACCOUNT_EMAIL").lower()
-EXPERT_ACCOUNT_PASSWORD: str = _required_env("EXPERT_ACCOUNT_PASSWORD")
+# Keep these lazy: the outbound hybrid worker imports shared image code but
+# never creates or administers an expert Firebase account.  The web lifespan
+# still validates them immediately before the existing account-setup action.
+EXPERT_ACCOUNT_EMAIL: str = os.getenv("EXPERT_ACCOUNT_EMAIL", "").strip().lower()
+EXPERT_ACCOUNT_PASSWORD: str = os.getenv("EXPERT_ACCOUNT_PASSWORD", "").strip()
+
+
+def required_expert_account_credentials() -> tuple[str, str]:
+    return _required_env("EXPERT_ACCOUNT_EMAIL").lower(), _required_env("EXPERT_ACCOUNT_PASSWORD")
 EXPERT_ACCOUNT_UID: str = os.getenv("EXPERT_ACCOUNT_UID", "").strip()
 
 EXPERT_ACCOUNT_EMAILS: set[str] = {
@@ -130,7 +178,8 @@ EXPERT_ACCOUNT_EMAILS: set[str] = {
     for email in os.getenv("EXPERT_ACCOUNT_EMAILS", "").split(",")
     if email.strip()
 }
-EXPERT_ACCOUNT_EMAILS.add(EXPERT_ACCOUNT_EMAIL)
+if EXPERT_ACCOUNT_EMAIL:
+    EXPERT_ACCOUNT_EMAILS.add(EXPERT_ACCOUNT_EMAIL)
 
 EXPERT_ACCOUNT_UIDS: set[str] = {
     uid.strip()

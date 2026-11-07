@@ -1,6 +1,8 @@
 """
 app/schemas/auth.py — Authentication request and response shapes.
 """
+from typing import Dict
+
 from pydantic import BaseModel, Field
 
 
@@ -42,4 +44,5 @@ class UserResponse(BaseModel):
     email: str
     role: str = "farmer"
     is_expert: bool = False
+    features: Dict[str, bool] = Field(default_factory=dict)
     message: str

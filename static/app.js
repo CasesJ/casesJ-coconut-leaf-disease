@@ -622,6 +622,8 @@ function hideExpertRecommendationEditor() {
 }
 
 window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
+  setHybridUploadFeature(accountInfo);
+  if (!accountInfo?.features && currentToken) void refreshHybridUploadFeature(user, currentToken);
   clearUserRecordsCache();
   clearExpertRecordsCache();
   const loginBtn = document.getElementById('login-btn');
@@ -675,6 +677,7 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
 };
 
 window.updateUIOnLogout = function updateUIOnLogout() {
+  hybridUploadFeatureEnabled = false;
   clearUserRecordsCache();
   clearExpertRecordsCache();
   metadataPinOwnerId = '';
@@ -2325,6 +2328,191 @@ let stagedUploadFiles = [];
 let batchUploadResults = [];
 let activeBatchResultIndex = 0;
 const uploadIdempotencyKeys = new WeakMap();
+const hybridUploadTransfers = new WeakMap();
+// The deployment default is a deny-all safeguard.  The server adds the
+// per-user capability after Firebase token verification; the browser flag can
+// never grant hybrid access by itself.
+let hybridUploadFeatureEnabled = false;
+function setHybridUploadFeature(accountInfo = {}) {
+  hybridUploadFeatureEnabled = window.COCONUTAI_FEATURES?.hybridUploads === true
+    && accountInfo?.features?.hybrid_uploads === true;
+}
+async function refreshHybridUploadFeature(user, token) {
+  if (window.COCONUTAI_FEATURES?.hybridUploads !== true || !user?.uid || !token) return;
+  try {
+    const response = await fetch('/auth/user', { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Hybrid capability unavailable');
+    const accountInfo = await response.json();
+    if (currentUser?.uid === user.uid && currentToken === token && accountInfo.uid === user.uid) {
+      setHybridUploadFeature(accountInfo);
+    }
+  } catch (_) {
+    if (currentUser?.uid === user.uid && currentToken === token) hybridUploadFeatureEnabled = false;
+  }
+}
+const HYBRID_POLL_INTERVAL_MS = 5_000;
+const HYBRID_POLL_TIMEOUT_MS = 15 * 60_000;
+
+function hybridError(message, retryable = true) {
+  const error = new Error(message);
+  error.retryable = retryable;
+  return error;
+}
+
+async function hybridSha256(file) {
+  if (!window.crypto?.subtle) throw hybridError('Your browser cannot securely prepare this upload. Use the standard uploader.', false);
+  const bytes = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function hybridJson(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: `Bearer ${currentToken}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = hybridError(payload.detail || `Hybrid service error (${response.status}).`, [408, 429, 502, 503, 504].includes(response.status));
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+function hybridCloudinaryUpload(url, parameters, file, onUploadProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', url);
+    request.timeout = 300_000;
+    request.upload.addEventListener('progress', event => {
+      if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
+    });
+    request.addEventListener('load', () => {
+      let payload = {};
+      try { payload = JSON.parse(request.responseText); } catch (_) { /* handled below */ }
+      if (request.status < 200 || request.status >= 300 || !payload.asset_id) {
+        const error = hybridError(payload?.error?.message || 'Cloudinary could not store this image.', request.status >= 500);
+        error.status = request.status;
+        error.knownUploadOutcome = true;
+        reject(error);
+        return;
+      }
+      resolve(payload);
+    });
+    request.addEventListener('error', () => {
+      const error = hybridError('Network error while uploading the original image.');
+      error.uploadOutcomeUnknown = true;
+      reject(error);
+    });
+    request.addEventListener('timeout', () => {
+      const error = hybridError('Original image upload timed out.');
+      error.uploadOutcomeUnknown = true;
+      reject(error);
+    });
+    const form = new FormData();
+    Object.entries(parameters || {}).forEach(([key, value]) => {
+      if (!['cloud_name'].includes(key) && value !== undefined && value !== null) form.append(key, String(value));
+    });
+    form.append('file', file, file.name);
+    request.send(form);
+  });
+}
+
+async function pollHybridResult(jobId, onUploadProgress) {
+  const started = Date.now();
+  while (Date.now() - started < HYBRID_POLL_TIMEOUT_MS) {
+    if (navigator.onLine === false) throw hybridError('You are offline. The upload may still be processing; reconnect and check your records.', true);
+    const status = await hybridJson(`/hybrid/uploads/intents/${encodeURIComponent(jobId)}`);
+    if (status.status === 'completed' && ['committed', 'no_record'].includes(status.record_commit_status)) {
+      return status;
+    }
+    if (['failed', 'cleanup_pending', 'cleaned'].includes(status.status)) {
+      throw hybridError('Analysis could not be completed. Please retry with the same image.', status.status === 'failed');
+    }
+    const state = status.status === 'leased' ? 'Analyzing on your local worker' : 'Waiting for local analysis worker';
+    onUploadProgress?.({ processing: true, state });
+    await new Promise(resolve => window.setTimeout(resolve, HYBRID_POLL_INTERVAL_MS));
+  }
+  throw hybridError('Analysis is still queued. Keep this page open or check your records later; do not re-upload the image.', true);
+}
+
+async function detectImageHybrid(file, onUploadProgress) {
+  let idempotencyKey = uploadIdempotencyKeys.get(file);
+  if (!idempotencyKey) {
+    idempotencyKey = crypto.randomUUID().replaceAll('-', '');
+    uploadIdempotencyKeys.set(file, idempotencyKey);
+  }
+  let transfer = hybridUploadTransfers.get(file);
+  if (!transfer) {
+    onUploadProgress?.({ preparing: true });
+    transfer = { idempotencyKey, sha256: await hybridSha256(file) };
+    hybridUploadTransfers.set(file, transfer);
+  }
+  if (!transfer.authorization) {
+    const authorizationStarted = performance.now();
+    transfer.authorization = await hybridJson('/hybrid/uploads/intents', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idempotency_key: idempotencyKey, source_sha256: transfer.sha256, source_bytes: file.size, route_type: 'detection' }),
+    });
+    transfer.authorizationMs = performance.now() - authorizationStarted;
+  }
+  if (transfer.uploadOutcomeUnknown) {
+    throw hybridError('The original upload outcome is unknown. Do not upload this file again; check your records after reconnecting.', false);
+  }
+  if (!transfer.assetId) {
+    try {
+      const uploadStarted = performance.now();
+      const cloudAsset = await hybridCloudinaryUpload(
+        transfer.authorization.upload_url, transfer.authorization.upload_parameters, file, onUploadProgress,
+      );
+      transfer.assetId = cloudAsset.asset_id;
+      transfer.uploadMs = performance.now() - uploadStarted;
+    } catch (error) {
+      // A network timeout can occur after Cloudinary accepted bytes. Without a
+      // returned asset ID the browser cannot safely confirm or overwrite it.
+      if (error?.uploadOutcomeUnknown) {
+        transfer.uploadOutcomeUnknown = true;
+        throw hybridError('The original upload may have finished but confirmation was lost. Do not upload it again; check your records after reconnecting.', false);
+      }
+      throw error;
+    }
+  }
+  onUploadProgress?.({ complete: true });
+  if (!transfer.confirmed) {
+    await hybridJson(`/hybrid/uploads/intents/${encodeURIComponent(transfer.authorization.job_id)}/confirm`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: transfer.assetId }),
+    });
+    transfer.confirmed = true;
+  }
+  const status = await pollHybridResult(transfer.authorization.job_id, onUploadProgress);
+  const result = status.result || { detections: [], image_dimensions: {}, recorded_count: 0 };
+  if (status.record_id) clearUserRecordsCache();
+  return {
+    detections: result.detections || [], total_detected: (result.detections || []).length,
+    recorded_count: result.recorded_count || 0, record_id: status.record_id || null,
+    image_dimensions: result.image_dimensions || {}, annotated_image_base64: '',
+    message: status.record_id ? 'Image analyzed and saved.' : 'Image analyzed. No disease record was needed.',
+    model: { name: 'YOLO26 v6', backend: 'hybrid local worker' },
+    hybrid_timing: {
+      ...(status.timing || {}), browser_authorization_ms: Math.round(transfer.authorizationMs || 0),
+      browser_upload_ms: Math.round(transfer.uploadMs || 0),
+      queue_wait_ms: Math.max(0, Date.parse(status.timing?.claimed_at || '') - Date.parse(status.timing?.upload_verified_at || '')) || null,
+      record_commit_ms: Math.max(0, Date.parse(status.timing?.record_committed_at || '') - Date.parse(status.timing?.completed_at || '')) || null,
+    },
+  };
+}
+
+function formatHybridTiming(timing) {
+  if (!timing || typeof timing !== 'object') return '';
+  const entries = [
+    ['upload', timing.browser_upload_ms], ['queue', timing.queue_wait_ms],
+    ['download', timing.worker_download_ms], ['inference', timing.worker_inference_total_ms],
+    ['record', timing.record_commit_ms],
+  ].filter(([, value]) => Number.isFinite(Number(value)) && Number(value) >= 0)
+    .map(([label, value]) => `${label} ${Math.round(Number(value))} ms`);
+  return entries.join(' · ');
+}
 
 function stageUploadImage(files) {
   const selectedFiles = Array.from(files || []);
@@ -2455,13 +2643,15 @@ async function detectImages(files) {
       uploadStates[index] = 'Preparing';
     } else if (progress?.retrying) {
       uploadStates[index] = `Retrying (${progress.attempt}/2)`;
+    } else if (progress?.processing) {
+      uploadStates[index] = progress.state || 'Waiting for analysis';
     } else if (progress?.complete) {
       uploadStates[index] = 'Analyzing';
     } else if (progress?.total > 0) {
       uploadStates[index] = `Uploading ${Math.min(100, Math.round(progress.loaded / progress.total * 100))}%`;
     }
     if (loadingText) {
-      const active = uploadStates.filter(state => state === 'Analyzing' || state === 'Preparing' || state.startsWith('Uploading') || state.startsWith('Retrying')).length;
+      const active = uploadStates.filter(state => state === 'Analyzing' || state === 'Preparing' || state.startsWith('Uploading') || state.startsWith('Retrying') || state.startsWith('Waiting') || state.startsWith('Analyzing on')).length;
       loadingText.textContent = `${uploadStates[index]} image ${index + 1} of ${files.length} · ${completed} complete${active ? ` · ${active} in progress` : ''}`;
     }
   };
@@ -2471,7 +2661,9 @@ async function detectImages(files) {
       uploadStates[index] = 'Uploading';
       updateUploadStatus(index);
       try {
-        const result = await detectImage(files[index], progress => updateUploadStatus(index, progress));
+        const result = await (hybridUploadFeatureEnabled
+          ? detectImageHybrid(files[index], progress => updateUploadStatus(index, progress))
+          : detectImage(files[index], progress => updateUploadStatus(index, progress)));
         completedResults[index] = { file: files[index], result };
         uploadStates[index] = 'Complete';
         completed += 1;
@@ -2528,7 +2720,8 @@ function renderBatchUpload(items) {
     const model = result.model?.name && result.model?.weights
       ? `${result.model.name} · ${result.model.weights}`
       : 'Model information unavailable';
-    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid rgba(11,42,31,0.1);border-radius:8px;margin-top:8px;">${annotatedImage}<div><strong>${escapeHtml(file.name)}</strong><div style="font-size:12px;color:var(--text2);margin-top:4px;">${diseases.length ? escapeHtml(diseases.join(', ')) : 'No disease detected above 15% confidence'}</div><div style="font-size:11px;color:var(--text3);margin-top:3px;">${escapeHtml(model)}</div></div></div>`;
+    const timing = formatHybridTiming(result.hybrid_timing);
+    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid rgba(11,42,31,0.1);border-radius:8px;margin-top:8px;">${annotatedImage}<div><strong>${escapeHtml(file.name)}</strong><div style="font-size:12px;color:var(--text2);margin-top:4px;">${diseases.length ? escapeHtml(diseases.join(', ')) : 'No disease detected above 15% confidence'}</div><div style="font-size:11px;color:var(--text3);margin-top:3px;">${escapeHtml(model)}${timing ? ` · ${escapeHtml(timing)}` : ''}</div></div></div>`;
   }).join('');
   batchResults.innerHTML = `<div style="font-weight:600;color:var(--deep);">Completed results for ${items.length} uploaded image${items.length === 1 ? '' : 's'}</div>${cards}`;
   batchResults.style.display = 'block';

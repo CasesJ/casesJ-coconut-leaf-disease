@@ -21,7 +21,11 @@ from app.core.config import (
     CORS_ALLOWED_ORIGINS,
     IMAGE_PIPELINE_MAX_CONCURRENCY,
     IMAGE_PIPELINE_QUEUE_SECONDS,
+    HYBRID_UPLOAD_ROUTES_ENABLED,
+    HYBRID_WORKER_ROUTES_ENABLED,
+    INFERENCE_DEPLOYMENT_MODE, HYBRID_CANARY_ENABLED,
 )
+from app.core.hybrid_canary import is_hybrid_upload_user
 from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports, farm_boundaries
 from app.api import tree_identity
 from app.api import media
@@ -40,6 +44,32 @@ def _is_memory_intensive_image_pipeline(request: Request) -> bool:
             and request.url.path.endswith("/follow-ups"))
 
 
+async def _canary_legacy_upload_response(request: Request) -> JSONResponse | None:
+    """Authorize a legacy-upload rejection from headers without reading body."""
+    if not ((HYBRID_CANARY_ENABLED or INFERENCE_DEPLOYMENT_MODE == "hybrid")
+            and request.method == "POST" and request.url.path == "/detect/image"):
+        return None
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return None
+    try:
+        from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
+        decoded = await run_in_threadpool(verify_token, authorization.split(" ", 1)[1])
+        from app.domain.expert import is_expert_identity  # noqa: PLC0415
+        if (not decoded.get("token_verified_offline")
+                and not is_expert_identity(decoded)
+                and is_hybrid_upload_user(decoded.get("uid"))):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "This account uses the secure hybrid uploader. Refresh the page and retry."},
+            )
+    except Exception:
+        # Preserve the existing endpoint's authenticated error semantics for
+        # invalid/expired tokens without reading their upload body.
+        pass
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
@@ -50,9 +80,15 @@ async def lifespan(app: FastAPI):
     # Initialise Firebase Admin SDK (side-effect import).
     import app.infrastructure.firebase.admin  # noqa: F401
 
-    # Import once during startup so the first upload does not initialize YOLO
-    # on the event loop. Every inference path reuses model.detector.
-    await run_in_threadpool(importlib.import_module, "model")
+    # A fully hybrid deployment has no Render-local inference route, so avoid
+    # retaining the model's native allocations on its 512 MiB web process.
+    # A UID canary deliberately remains render_local for every other farmer;
+    # it must keep this established model warm until a separate all-hybrid
+    # deployment is approved.
+    if INFERENCE_DEPLOYMENT_MODE == "render_local":
+        await run_in_threadpool(importlib.import_module, "model")
+    else:
+        logger.info("Hybrid deployment: skipping Render-local model startup")
 
     # Initialise Drone GPS.
     try:
@@ -66,12 +102,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("⚠️  Drone GPS init error: %s", exc)
 
+    # Keep the hosted app's historical fail-closed credential requirement.
+    # The outbound worker has no Firebase account-management role and does
+    # not enter this web lifespan.
+    from app.core.config import required_expert_account_credentials  # noqa: PLC0415
+    expert_email, expert_password = required_expert_account_credentials()
+
     # Ensure the expert account exists in Firebase Auth.
     try:
-        from app.core.config import EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD  # noqa: PLC0415
         from app.infrastructure.firebase.auth import ensure_user_account  # noqa: PLC0415
         expert_user, created = await run_in_threadpool(
-            ensure_user_account, EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD, {"role": "expert"}
+            ensure_user_account, expert_email, expert_password, {"role": "expert"}
         )
         logger.info("✅ Expert account ready: %s (%s)", expert_user.email, "created" if created else "updated")
     except Exception as exc:
@@ -147,6 +188,20 @@ def create_app() -> FastAPI:
         finally:
             _image_pipeline_slots.release()
 
+    @application.middleware("http")
+    async def reject_canary_legacy_upload_before_body(request: Request, call_next):
+        """Reject a canary's legacy multipart upload before Starlette reads it.
+
+        FastAPI's ``UploadFile`` dependency parses multipart bodies before the
+        endpoint function runs.  This middleware intentionally authenticates
+        from headers only, so an approved hybrid farmer cannot accidentally
+        send a full DJI body to Render's local decoder.
+        """
+        rejection = await _canary_legacy_upload_response(request)
+        if rejection is not None:
+            return rejection
+        return await call_next(request)
+
     # Routers
     application.include_router(auth.router)
     application.include_router(recommendations.router)
@@ -161,6 +216,14 @@ def create_app() -> FastAPI:
     application.include_router(reports.router)
     application.include_router(drone.router)
     application.include_router(health.router)
+    # Routes are only useful to an explicit UID canary (or to a later global
+    # hybrid deployment).  Their own handlers repeat the UID check.
+    if (HYBRID_CANARY_ENABLED or INFERENCE_DEPLOYMENT_MODE == "hybrid") and HYBRID_UPLOAD_ROUTES_ENABLED:
+        from app.api import hybrid_uploads  # noqa: PLC0415
+        application.include_router(hybrid_uploads.router)
+    if (HYBRID_CANARY_ENABLED or INFERENCE_DEPLOYMENT_MODE == "hybrid") and HYBRID_WORKER_ROUTES_ENABLED:
+        from app.api import hybrid_worker  # noqa: PLC0415
+        application.include_router(hybrid_worker.router)
 
     # API media guards must precede this mount. In particular, historic
     # /static/uploads URLs now require Firebase ownership or expert access.

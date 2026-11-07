@@ -266,7 +266,7 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     from drone_gps import DroneGPS
     gps = DroneGPS()
     monkeypatch.setattr("drone_gps.get_drone_gps", lambda: gps)
-    monkeypatch.setattr(detections, "set_initial_farm_center", lambda *_args: None)
+    monkeypatch.setattr(detections, "set_initial_farm_center", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(detections, "save_detection_record",
                         lambda **kwargs: saved.append(kwargs))
     result = _call_detect(mpo_bytes)
@@ -274,7 +274,9 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     assert len(seen) == 1
     # OpenCV applies EXIF orientation while retaining the same pixel count.
     assert seen[0].shape[:2] == (32, 24)
-    assert result["image_dimensions"] == {"width": 24, "height": 32}
+    # The source identity retains its encoded 32x24 dimensions; OpenCV may
+    # orient the decoded inference raster separately.
+    assert result["image_dimensions"] == {"width": 32, "height": 24}
     assert result["gps_lat"] == pytest.approx(7.3)
     assert result["gps_lng"] == pytest.approx(125.6)
     assert result["gps_source"] == "dji_exif"
@@ -286,3 +288,37 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     normalized_gps = gps.extract_gps_from_image(saved[0]["original_bytes"], "DJI_0119.JPG")
     assert normalized_gps.latitude == pytest.approx(7.3)
     assert normalized_gps.longitude == pytest.approx(125.6)
+
+
+def test_large_rgb_mpo_avoids_duplicate_rgb_conversion(monkeypatch):
+    """A DJI-sized RGB MPO must not create a second Pillow raster before encoding."""
+    from PIL import Image
+
+    # 12 MP is large enough to exercise the full-raster branch while keeping the
+    # regression test practical on constrained CI runners. The production DJI
+    # reproduction is 48.77 MP and is measured separately, outside the suite.
+    primary = Image.new("RGB", (4000, 3000), "#347a45")
+    secondary = Image.new("RGB", primary.size, "#123456")
+    output = BytesIO()
+    primary.save(output, format="MPO", save_all=True, append_images=[secondary])
+    primary.close()
+    secondary.close()
+    mpo_bytes = output.getvalue()
+
+    original_convert = Image.Image.convert
+
+    def forbid_mpo_rgb_copy(image, *args, **kwargs):
+        if image.format == "MPO" and image.mode == "RGB":
+            raise AssertionError("RGB MPO primary frame was unnecessarily copied")
+        return original_convert(image, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "convert", forbid_mpo_rgb_copy)
+    monkeypatch.setattr("drone_gps.get_drone_gps", lambda: _Gps())
+    monkeypatch.setattr("drone_gps.init_drone_gps", lambda: _Gps())
+
+    normalized, _metadata, *_rest = detections._prepare_upload(
+        mpo_bytes, "large-dji.mpo", "large-mpo",
+    )
+    with Image.open(BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (4000, 3000)

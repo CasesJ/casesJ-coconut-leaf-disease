@@ -30,6 +30,9 @@ _DOWNLOAD_RETRY_BACKOFF_SECONDS = (0.2, 0.5)
 _RETRYABLE_DOWNLOAD_STATUSES = {408, 500, 502, 503, 504}
 _DOWNLOAD_URL_EXPIRY_MARGIN_SECONDS = 30
 _PUBLIC_ID_PATTERN = re.compile(r"^neuralcoco/[a-z0-9_-]+/[a-f0-9]{32}$")
+_HYBRID_SOURCE_PUBLIC_ID_PATTERN = re.compile(
+    r"^neuralcoco/hybrid-original/(?:[a-f0-9]{32}|[a-f0-9]{64})\.jpg$"
+)
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
 _URL_PATTERN = re.compile(r"(?i)\b(?:https?://|cloudinary://)\S+")
 _SENSITIVE_PARAMETER_PATTERN = re.compile(
@@ -41,6 +44,100 @@ _SENSITIVE_PARAMETER_PATTERN = re.compile(
 
 class CloudinaryStorageError(RuntimeError):
     """A safe-to-report error without provider URLs or credentials."""
+
+
+def create_hybrid_upload_signature(*, public_id: str, job_id: str, user_id: str,
+                                   timestamp: int) -> dict:
+    """Create a narrow signed direct-upload capability for one hybrid intent.
+
+    The API secret stays here.  The browser receives only an API key and a
+    signature covering the exact authenticated public ID and ownership context.
+    """
+    if (not _HYBRID_SOURCE_PUBLIC_ID_PATTERN.fullmatch(public_id)
+            or not re.fullmatch(r"[a-f0-9]{32}", job_id)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", user_id)
+            or not isinstance(timestamp, int)):
+        raise CloudinaryStorageError("Invalid hybrid upload authorization")
+    cloud_name, api_key, api_secret = _configure()
+    context = f"hybrid_job_id={job_id}|hybrid_user_id={user_id}"
+    params = {
+        "public_id": public_id,
+        "timestamp": timestamp,
+        "type": "authenticated",
+        # Raw delivery is deliberate: Cloudinary stores the uploaded DJI MPO/
+        # JPEG byte stream without image decoding, recompression, or metadata
+        # stripping. The worker will later create normal evidence derivatives.
+        "context": context,
+        "overwrite": "false",
+        "unique_filename": "false",
+        "use_filename": "false",
+        "allowed_formats": "jpg,jpeg",
+    }
+    try:
+        from cloudinary import utils  # noqa: PLC0415
+        signature = utils.api_sign_request(params, api_secret)
+    except Exception as error:
+        _log_cloudinary_failure("hybrid upload signature", error)
+        raise CloudinaryStorageError("Cloudinary upload authorization is unavailable") from None
+    return {
+        "cloud_name": cloud_name,
+        "api_key": api_key,
+        "signature": signature,
+        **params,
+    }
+
+
+def verify_hybrid_uploaded_asset(*, public_id: str, job_id: str, user_id: str,
+                                 expected_bytes: int, asset_id: str) -> dict:
+    """Verify browser-reported upload metadata through Cloudinary's Admin API.
+
+    This intentionally never downloads, decodes, or transforms the original
+    image. Cloudinary cannot report a SHA-256, so hash verification is recorded
+    as pending for the local inference worker rather than being falsely claimed
+    at upload confirmation time.
+    """
+    if (not _HYBRID_SOURCE_PUBLIC_ID_PATTERN.fullmatch(public_id)
+            or not re.fullmatch(r"[a-f0-9]{32}", job_id)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", user_id)
+            or not isinstance(expected_bytes, int) or expected_bytes < 1
+            or not isinstance(asset_id, str) or not asset_id):
+        raise CloudinaryStorageError("Invalid hybrid upload confirmation")
+    try:
+        _configure()
+        from cloudinary import api  # noqa: PLC0415
+        resource = api.resource(
+            public_id, resource_type="raw", type="authenticated", context=True,
+        )
+    except Exception as error:
+        _log_cloudinary_failure("hybrid upload verification", error)
+        raise CloudinaryStorageError("Cloudinary upload could not be verified") from None
+
+    context = resource.get("context") if isinstance(resource, dict) else None
+    custom_context = context.get("custom") if isinstance(context, dict) else None
+    expected_context = {"hybrid_job_id": job_id, "hybrid_user_id": user_id}
+    actual_context = custom_context if isinstance(custom_context, dict) else {}
+    image_format = str(resource.get("format") or "").lower() if isinstance(resource, dict) else ""
+    if (not isinstance(resource, dict)
+            or resource.get("public_id") != public_id
+            or resource.get("asset_id") != asset_id
+            or resource.get("resource_type") != "raw"
+            or resource.get("type") != "authenticated"
+            or int(resource.get("bytes") or -1) != expected_bytes
+            or image_format not in {"jpg", "jpeg"}
+            or actual_context != expected_context):
+        raise CloudinaryStorageError("Cloudinary upload verification failed")
+    version = resource.get("version")
+    try:
+        version = int(version)
+    except (TypeError, ValueError):
+        raise CloudinaryStorageError("Cloudinary upload verification failed") from None
+    return {
+        "provider": "cloudinary", "asset_id": asset_id, "public_id": public_id,
+        "resource_type": "raw", "delivery_type": "authenticated",
+        "version": version, "format": image_format,
+        "content_type": "image/jpeg", "byte_size": expected_bytes,
+        "ownership_context": expected_context,
+    }
 
 
 def _safe_diagnostic_message(message: object) -> str:
@@ -135,8 +232,12 @@ def _validate_reference(reference: dict) -> tuple[str, str]:
     if not isinstance(reference, dict) or reference.get("provider") != "cloudinary":
         raise CloudinaryStorageError("Invalid Cloudinary asset reference")
     public_id = reference.get("public_id")
-    if (not isinstance(public_id, str) or not _PUBLIC_ID_PATTERN.fullmatch(public_id)
-            or reference.get("resource_type") != "image"
+    resource_type = reference.get("resource_type")
+    normal_image = (isinstance(public_id, str) and _PUBLIC_ID_PATTERN.fullmatch(public_id)
+                    and resource_type == "image")
+    hybrid_source = (isinstance(public_id, str) and _HYBRID_SOURCE_PUBLIC_ID_PATTERN.fullmatch(public_id)
+                     and resource_type == "raw")
+    if (not (normal_image or hybrid_source)
             or reference.get("delivery_type") != "authenticated"):
         raise CloudinaryStorageError("Invalid Cloudinary asset reference")
     image_format = reference.get("format")
@@ -288,6 +389,76 @@ def upload_asset(content: bytes, content_type: str, category: str, *,
         raise CloudinaryStorageError("Cloudinary image upload failed") from None
 
 
+def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
+    """Store one stable, authenticated preview for a hybrid job.
+
+    Cloudinary and Firestore cannot commit atomically.  A deterministic public
+    ID and a signed digest in Cloudinary context let retries adopt the same
+    derivative after an ambiguous response, without another upload or any
+    automatic deletion.
+    """
+    if (not isinstance(content, bytes) or not content or len(content) > 1_000_000
+            or not isinstance(job_id, str) or not re.fullmatch(r"[a-f0-9]{32}", job_id)):
+        raise CloudinaryStorageError("Hybrid thumbnail is invalid")
+    public_id = f"neuralcoco/detection-thumbnail/{job_id}"
+    digest = hashlib.sha256(content).hexdigest()
+    context = f"hybrid_job_id={job_id}|thumbnail_sha256={digest}"
+    try:
+        _configure()
+        from cloudinary import api, uploader  # noqa: PLC0415
+    except Exception as error:
+        _log_cloudinary_failure("hybrid thumbnail setup", error)
+        raise CloudinaryStorageError("Hybrid thumbnail storage is unavailable") from None
+
+    def verified_reference(resource):
+        if not isinstance(resource, dict):
+            return None
+        custom = (resource.get("context") or {}).get("custom") or {}
+        if (resource.get("public_id") != public_id
+                or resource.get("resource_type") != "image"
+                or resource.get("type") != "authenticated"
+                or resource.get("format") not in {"jpg", "jpeg"}
+                or resource.get("bytes") != len(content)
+                or custom != {"hybrid_job_id": job_id, "thumbnail_sha256": digest}
+                or not resource.get("asset_id") or not resource.get("version")):
+            raise CloudinaryStorageError("Hybrid thumbnail identity conflict")
+        return {
+            "provider": "cloudinary", "asset_id": str(resource["asset_id"]),
+            "public_id": public_id, "resource_type": "image",
+            "delivery_type": "authenticated", "version": int(resource["version"]),
+            "format": str(resource["format"]), "content_type": "image/jpeg",
+            "byte_size": len(content), "sha256": digest,
+        }
+
+    def inspect_existing():
+        try:
+            return api.resource(public_id, resource_type="image", type="authenticated", context=True)
+        except Exception as error:
+            # Only a provider-confirmed 404 means there is no asset to adopt.
+            if _http_status(error) == 404:
+                return None
+            raise CloudinaryStorageError("Hybrid thumbnail inspection is unavailable") from None
+
+    existing = inspect_existing()
+    if existing is not None:
+        return verified_reference(existing)
+    try:
+        uploader.upload(
+            BytesIO(content), resource_type="image", type="authenticated",
+            public_id=public_id, overwrite=False, unique_filename=False,
+            use_filename=False, context=context,
+            timeout=config.CLOUDINARY_UPLOAD_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        # Upload may have succeeded despite a lost response.  An exact-ID
+        # inspection can adopt it; otherwise leave the job retryable.
+        pass
+    existing = inspect_existing()
+    if existing is None:
+        raise CloudinaryStorageError("Hybrid thumbnail could not be verified")
+    return verified_reference(existing)
+
+
 def delete_asset(reference: dict) -> bool:
     """Delete one newly-created asset by its validated, unique public ID."""
     try:
@@ -348,7 +519,8 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
     try:
         from cloudinary import utils  # noqa: PLC0415
         url = utils.private_download_url(
-            public_id, image_format, resource_type="image", type="authenticated",
+            public_id, image_format,
+            resource_type=str(reference.get("resource_type") or "image"), type="authenticated",
             expires_at=(int(time.time()) + max(
                 60,
                 _DOWNLOAD_MAX_ATTEMPTS * config.CLOUDINARY_READ_TIMEOUT_SECONDS
@@ -357,7 +529,8 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
             )),
         )
         parsed = urlsplit(url)
-        expected_prefix = f"/v1_1/{cloud_name}/image/download"
+        resource_type = str(reference.get("resource_type") or "image")
+        expected_prefix = f"/v1_1/{cloud_name}/{resource_type}/download"
         if parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com" or parsed.path != expected_prefix:
             raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
         content = _download_private_url(url)
@@ -367,6 +540,76 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
     except Exception as error:
         _log_cloudinary_failure("private download", error)
         raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+
+def stream_asset(reference: dict):
+    """Yield an authenticated asset without buffering it in the Render process.
+
+    This is used for hybrid raw originals only.  The first-party media route
+    retains Firebase ownership checks, while the provider URL and its signature
+    remain entirely server-side.
+    """
+    public_id, image_format = _validate_reference(reference)
+    if reference.get("resource_type") != "raw":
+        raise CloudinaryStorageError("Streaming is reserved for raw source assets")
+    cloud_name, _, _ = _configure()
+    try:
+        from cloudinary import utils  # noqa: PLC0415
+        url = utils.private_download_url(
+            public_id, image_format, resource_type="raw", type="authenticated",
+            expires_at=int(time.time()) + max(60, config.CLOUDINARY_READ_TIMEOUT_SECONDS + 30),
+        )
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com"
+                or parsed.path != f"/v1_1/{cloud_name}/raw/download"):
+            raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
+    except CloudinaryStorageError:
+        raise
+    except Exception as error:
+        _log_cloudinary_failure("private stream", error)
+        raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+    response = None
+    try:
+        for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+            response = requests.get(
+                url, timeout=(5, config.CLOUDINARY_READ_TIMEOUT_SECONDS),
+                stream=True, allow_redirects=False,
+            )
+            if response.status_code in _RETRYABLE_DOWNLOAD_STATUSES and attempt + 1 < _DOWNLOAD_MAX_ATTEMPTS:
+                response.close()
+                response = None
+                time.sleep(_DOWNLOAD_RETRY_BACKOFF_SECONDS[attempt])
+                continue
+            response.raise_for_status()
+            break
+    except Exception as error:
+        if response is not None:
+            response.close()
+        _log_cloudinary_failure("private stream", error)
+        raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+    def iterator():
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > config.MAX_IMAGE_UPLOAD_BYTES:
+                    raise CloudinaryStorageError("Stored image exceeds the configured limit")
+                yield chunk
+            if not total:
+                raise CloudinaryStorageError("Cloudinary returned an empty image")
+        except Exception as error:
+            _log_cloudinary_failure("private stream", error)
+            # Once headers were sent, the client receives a truncated stream;
+            # never substitute an untrusted source or expose provider details.
+            raise CloudinaryStorageError("Cloudinary image stream was interrupted") from None
+        finally:
+            response.close()
+
+    return iterator()
 
 
 def download_asset(reference: dict) -> tuple[bytes, str]:

@@ -14,6 +14,9 @@ from google.auth.credentials import AnonymousCredentials
 import pytest
 
 
+_real_firestore_client = firestore.client
+
+
 def blocked(*args, **kwargs):
     raise AssertionError("External network, Firebase, and historical SQLite access are forbidden in tests")
 
@@ -21,6 +24,22 @@ def blocked(*args, **kwargs):
 class OfflineCredential(credentials.Base):
     def get_credential(self):
         return AnonymousCredentials()
+
+
+def emulator_only_firestore_client(*args, **kwargs):
+    """Permit only the explicitly fenced local Firestore integration tests.
+
+    This is intentionally stricter than merely checking the emulator host: an
+    Admin app for the production project cannot obtain a client even if a test
+    accidentally sets a local host.
+    """
+    app = kwargs.get("app")
+    if (os.environ.get("FIRESTORE_EMULATOR_HOST") == "127.0.0.1:8080"
+            and os.environ.get("GOOGLE_CLOUD_PROJECT") == "demo-coconutai-hybrid-tests"
+            and app is not None
+            and app.project_id == "demo-coconutai-hybrid-tests"):
+        return _real_firestore_client(*args, **kwargs)
+    return blocked(*args, **kwargs)
 
 
 _guards = pytest.MonkeyPatch()
@@ -34,11 +53,12 @@ _guards.setenv("EXPERT_ACCOUNT_PASSWORD", "offline-test-password-only")
 _guards.setenv("FIREBASE_STORAGE_BUCKET", "demo-neuralcoco-tests.appspot.com")
 if not firebase_admin._apps:
     firebase_admin.initialize_app(OfflineCredential(), options={"projectId": "demo-neuralcoco-tests"})
-for adapter, method in ((firestore, "client"), (storage, "bucket"), (db, "reference"),
+for adapter, method in ((storage, "bucket"), (db, "reference"),
                         (auth, "verify_id_token"), (auth, "create_user"),
                         (auth, "update_user"), (auth, "set_custom_user_claims"),
                         (auth, "get_user_by_email"), (auth, "delete_user")):
     _guards.setattr(adapter, method, blocked)
+_guards.setattr(firestore, "client", emulator_only_firestore_client)
 def local_only(original):
     def connect(sock, address):
         # Windows asyncio implements socketpair using a loopback connection.
