@@ -68,6 +68,12 @@ def download_verified_source(asset: dict, expected_sha256: str, expected_bytes: 
         handle.close()
         if total != expected_bytes or not hmac_compare(digest.hexdigest(), expected_sha256.lower()):
             raise SourceIntegrityError("Hybrid source hash or byte count does not match its upload intent")
+        # Raw Cloudinary assets can report format=None. The signed public ID
+        # alone is not proof that the original bytes are JPEG/MPO. The full
+        # decoder still validates the image after this bounded header check.
+        with path.open("rb") as source:
+            if source.read(3) != b"\xff\xd8\xff":
+                raise SourceIntegrityError("Hybrid source is not a JPEG/MPO image")
         succeeded = True
         return path
     except requests.RequestException as error:

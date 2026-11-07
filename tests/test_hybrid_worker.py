@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from app.services import hybrid_source
 from app.services.hybrid_source import SourceIntegrityError
+from app.infrastructure import cloudinary_storage
 from app.services.hybrid_worker_auth import canonical_worker_message, sign_worker_request
 
 
@@ -94,7 +95,7 @@ def test_worker_request_rejects_declared_oversize_without_reading_body():
 
 
 def test_streamed_source_is_verified_before_decode(monkeypatch):
-    content=b"exact-original-bytes"
+    content=b"\xff\xd8\xff\xe0exact-original-bytes\xff\xd9"
     monkeypatch.setattr(hybrid_source, "_configure", lambda: ("cloud", "key", "secret"))
     monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *a, **k: "https://api.cloudinary.com/v1_1/cloud/raw/download")
     monkeypatch.setattr(hybrid_source.requests, "get", lambda *a, **k: Response([content[:4], content[4:]]))
@@ -102,6 +103,40 @@ def test_streamed_source_is_verified_before_decode(monkeypatch):
     try:
         path=hybrid_source.download_verified_source(_asset(), hashlib.sha256(content).hexdigest(), len(content), directory)
         assert path.read_bytes() == content
+    finally:
+        shutil.rmtree(directory)
+
+
+def test_admin_format_none_produces_worker_downloadable_jpeg_reference(monkeypatch):
+    public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
+    content = b"\xff\xd8\xff\xe0original-jpeg-bytes\xff\xd9"
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("cloud", "key", "secret"))
+    monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: {
+        "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
+        "type": "authenticated", "bytes": len(content), "format": None, "version": 7,
+        "context": {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "farmer"}},
+    })
+    reference = cloudinary_storage.verify_hybrid_uploaded_asset(
+        public_id=public_id, job_id="b" * 32, user_id="farmer",
+        expected_bytes=len(content), asset_id="asset-1",
+    )
+    monkeypatch.setattr(hybrid_source, "_configure", lambda: ("cloud", "key", "secret"))
+    requested = {}
+    def private_url(_public_id, image_format, **kwargs):
+        requested.update(public_id=_public_id, image_format=image_format, **kwargs)
+        return "https://api.cloudinary.com/v1_1/cloud/raw/download"
+    monkeypatch.setattr("cloudinary.utils.private_download_url", private_url)
+    monkeypatch.setattr(hybrid_source.requests, "get", lambda *a, **k: Response([content]))
+    directory = _workspace_temp()
+    try:
+        path = hybrid_source.download_verified_source(
+            reference, hashlib.sha256(content).hexdigest(), len(content), directory,
+        )
+        assert path.read_bytes() == content
+        assert requested["public_id"] == public_id
+        assert requested["image_format"] == "jpg"
+        assert requested["resource_type"] == "raw"
+        assert requested["type"] == "authenticated"
     finally:
         shutil.rmtree(directory)
 
@@ -115,6 +150,23 @@ def test_streamed_source_hash_mismatch_removes_temp_file(monkeypatch):
     try:
         with pytest.raises(SourceIntegrityError):
             hybrid_source.download_verified_source(_asset(), "0"*64, len(content), directory)
+        assert list(directory.iterdir()) == []
+    finally:
+        shutil.rmtree(directory)
+
+
+def test_matching_hash_does_not_authorize_non_jpeg_bytes(monkeypatch):
+    content = b"\x89PNG\r\n\x1a\nrenamed-as-jpeg"
+    monkeypatch.setattr(hybrid_source, "_configure", lambda: ("cloud", "key", "secret"))
+    monkeypatch.setattr("cloudinary.utils.private_download_url", lambda *a, **k:
+                        "https://api.cloudinary.com/v1_1/cloud/raw/download")
+    monkeypatch.setattr(hybrid_source.requests, "get", lambda *a, **k: Response([content]))
+    directory = _workspace_temp()
+    try:
+        with pytest.raises(SourceIntegrityError, match="not a JPEG/MPO"):
+            hybrid_source.download_verified_source(
+                _asset(), hashlib.sha256(content).hexdigest(), len(content), directory,
+            )
         assert list(directory.iterdir()) == []
     finally:
         shutil.rmtree(directory)

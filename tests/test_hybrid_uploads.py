@@ -84,6 +84,69 @@ def test_admin_verification_rejects_wrong_owner_or_asset(monkeypatch):
         cloudinary_storage.verify_hybrid_uploaded_asset(public_id=public_id, job_id="b"*32, user_id="other", expected_bytes=12, asset_id="asset")
 
 
+def test_authenticated_raw_asset_without_admin_format_is_verified_as_jpeg(monkeypatch):
+    public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
+    resource = {
+        "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
+        "type": "authenticated", "bytes": 123, "format": None, "version": 7,
+        "context": {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "farmer"}},
+    }
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: dict(resource))
+    reference = cloudinary_storage.verify_hybrid_uploaded_asset(
+        public_id=public_id, job_id="b" * 32, user_id="farmer",
+        expected_bytes=123, asset_id="asset-1",
+    )
+    assert reference["format"] == "jpg"
+    assert reference["content_type"] == "image/jpeg"
+    assert reference["resource_type"] == "raw"
+    assert reference["delivery_type"] == "authenticated"
+    assert reference["asset_id"] == "asset-1"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("public_id", "neuralcoco/hybrid-original/" + "c" * 64 + ".jpg"),
+    ("asset_id", "different-asset"),
+    ("resource_type", "image"),
+    ("type", "upload"),
+    ("bytes", 122),
+    ("format", "png"),
+    ("format", ""),
+    ("context", {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "other"}}),
+])
+def test_missing_admin_format_does_not_bypass_asset_checks(monkeypatch, field, value):
+    public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
+    resource = {
+        "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
+        "type": "authenticated", "bytes": 123, "format": None, "version": 7,
+        "context": {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "farmer"}},
+    }
+    resource[field] = value
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: dict(resource))
+    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="verification failed"):
+        cloudinary_storage.verify_hybrid_uploaded_asset(
+            public_id=public_id, job_id="b" * 32, user_id="farmer",
+            expected_bytes=123, asset_id="asset-1",
+        )
+
+
+def test_missing_admin_format_field_is_rejected(monkeypatch):
+    public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
+    resource = {
+        "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
+        "type": "authenticated", "bytes": 123, "version": 7,
+        "context": {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "farmer"}},
+    }
+    monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
+    monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: dict(resource))
+    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="verification failed"):
+        cloudinary_storage.verify_hybrid_uploaded_asset(
+            public_id=public_id, job_id="b" * 32, user_id="farmer",
+            expected_bytes=123, asset_id="asset-1",
+        )
+
+
 def test_authorization_is_idempotent_and_confirmation_is_owner_bound(monkeypatch):
     store=HybridJobStore(DB(), now=lambda: datetime(2026,1,1,tzinfo=timezone.utc))
     monkeypatch.setattr(hybrid_uploads, "_store", lambda: store)

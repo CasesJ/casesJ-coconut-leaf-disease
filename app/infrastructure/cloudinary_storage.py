@@ -116,13 +116,17 @@ def verify_hybrid_uploaded_asset(*, public_id: str, job_id: str, user_id: str,
     custom_context = context.get("custom") if isinstance(context, dict) else None
     expected_context = {"hybrid_job_id": job_id, "hybrid_user_id": user_id}
     actual_context = custom_context if isinstance(custom_context, dict) else {}
-    image_format = str(resource.get("format") or "").lower() if isinstance(resource, dict) else ""
+    reported_format = resource.get("format") if isinstance(resource, dict) else None
+    image_format = (
+        "jpg" if reported_format is None else str(reported_format).lower()
+    )
     if (not isinstance(resource, dict)
             or resource.get("public_id") != public_id
             or resource.get("asset_id") != asset_id
             or resource.get("resource_type") != "raw"
             or resource.get("type") != "authenticated"
             or int(resource.get("bytes") or -1) != expected_bytes
+            or "format" not in resource
             or image_format not in {"jpg", "jpeg"}
             or actual_context != expected_context):
         raise CloudinaryStorageError("Cloudinary upload verification failed")
