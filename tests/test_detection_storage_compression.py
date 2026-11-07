@@ -159,6 +159,47 @@ def test_48mp_dji_dimensions_are_bounded_before_pillow_load(monkeypatch):
     assert DroneGPS.extract_image_metadata(stored)["gps"] == {"latitude": 7.3, "longitude": 125.6}
 
 
+@pytest.mark.parametrize("dimensions,cap,expected", [
+    ((6120, 6035), 12_000_000, (3060, 3018)),
+    ((6121, 6035), 12_000_000, (3061, 3018)),
+    ((101, 101), 2_500, (26, 26)),
+])
+def test_odd_jpeg_draft_selects_bounded_dct_raster(dimensions, cap, expected):
+    """Exercise Pillow draft selection before decoding a large synthetic raster."""
+    output = BytesIO()
+    with Image.new("RGB", (8, 8), (20, 120, 30)) as image:
+        image.save(output, "JPEG")
+    header = bytearray(output.getvalue())
+    sof = header.index(b"\xff\xc0")
+    header[sof + 5:sof + 7] = dimensions[1].to_bytes(2, "big")
+    header[sof + 7:sof + 9] = dimensions[0].to_bytes(2, "big")
+
+    with Image.open(BytesIO(header)) as source:
+        assert source.size == dimensions
+        target = images._storage_draft_size(*dimensions, cap)
+        source.draft("RGB", target)
+        assert source.size == expected
+        assert source.width * source.height <= cap
+
+
+def test_odd_jpeg_storage_derivative_preserves_metadata_and_byte_cap(monkeypatch):
+    source = photo((101, 101), metadata=True)
+    monkeypatch.setattr(images.config, "CLOUDINARY_MAX_IMAGE_PIXELS", 2_500)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 2_500)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 8_000_000)
+
+    stored, representation = images._prepare_cloudinary_copy(source, "image/jpeg")
+
+    assert representation == "reduced_jpeg_storage_copy"
+    assert len(stored) <= images.config.DETECTION_STORAGE_MAX_BYTES
+    with Image.open(BytesIO(source)) as original, Image.open(BytesIO(stored)) as derivative:
+        assert original.size == (101, 101)
+        assert derivative.size == (26, 26)
+        assert derivative.width * derivative.height <= images.config.DETECTION_STORAGE_MAX_PIXELS
+    assert images._jpeg_protected_segments(stored) == images._jpeg_protected_segments(source)
+    assert DroneGPS.extract_image_metadata(stored)["gps"] == DroneGPS.extract_image_metadata(source)["gps"]
+
+
 def test_missing_metadata_is_not_invented_during_compression(monkeypatch):
     source = photo((1000, 1000), noisy=True, metadata=False)
     monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
