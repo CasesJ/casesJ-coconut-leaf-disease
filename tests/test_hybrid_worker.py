@@ -50,6 +50,21 @@ def test_worker_signatures_cover_method_path_nonce_timestamp_and_body():
     assert sign_worker_request("secret", "POST", "/hybrid/worker/claim", 10, "n", b"{}") != sign_worker_request("secret", "POST", "/hybrid/worker/claim", 10, "other", b"{}")
 
 
+def test_render_worker_memory_log_uses_existing_rss_and_cgroup_metrics(monkeypatch, caplog):
+    from app.api import hybrid_worker as worker_api
+    monkeypatch.setattr(worker_api, "process_memory_metrics", lambda: {
+        "rss_bytes": 260 * 1024 * 1024,
+        "cgroup_current_bytes": 290 * 1024 * 1024,
+        "cgroup_limit_bytes": 512 * 1024 * 1024,
+        "cgroup_oom_kill": 0,
+    })
+    with caplog.at_level("INFO", logger=worker_api.__name__):
+        worker_api._log_render_memory("worker_reconcile")
+    assert "stage=worker_reconcile rss_mib=260.0 cgroup_mib=290.0" in caplog.text
+    assert "cgroup_limit_mib=512.0 oom_kill=0" in caplog.text
+    assert "secret" not in caplog.text.lower()
+
+
 def test_worker_request_rejects_oversize_before_full_buffer_or_hmac(monkeypatch):
     from app.api import hybrid_worker as worker_api
     chunks=[b"x" * (worker_api._MAX_BODY - 1), b"yz", b"must-not-read"]

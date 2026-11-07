@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import re
 import time
 from datetime import timedelta
@@ -14,14 +15,31 @@ from app.core.config import (
     HYBRID_WORKER_AUTH_SKEW_SECONDS, HYBRID_WORKER_LEASE_SECONDS,
     HYBRID_WORKER_NONCE_TTL_SECONDS, HYBRID_WORKER_SHARED_SECRET,
 )
+from app.core.resource_metrics import process_memory_metrics
 from app.services.hybrid_jobs import HybridJobError, HybridJobStore, LeaseConflict
 from app.services.hybrid_worker_auth import canonical_worker_message
 
 router = APIRouter(prefix="/hybrid/worker", tags=["hybrid-worker-inactive"])
+logger = logging.getLogger(__name__)
 _WORKER_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _JOB_ID = re.compile(r"^[a-f0-9]{32}$")
 _LEASE_TOKEN = re.compile(r"^[a-f0-9]{32}$")
 _MAX_BODY = 256 * 1024
+
+
+def _log_render_memory(stage: str) -> None:
+    """Sample existing RSS/cgroup diagnostics during the bounded worker cycle."""
+    metrics = process_memory_metrics()
+
+    def mib(value):
+        return round(value / (1024 * 1024), 1) if value is not None else "unavailable"
+
+    logger.info(
+        "Hybrid Render memory stage=%s rss_mib=%s cgroup_mib=%s cgroup_limit_mib=%s oom_kill=%s",
+        stage, mib(metrics["rss_bytes"]), mib(metrics["cgroup_current_bytes"]),
+        mib(metrics["cgroup_limit_bytes"]),
+        metrics["cgroup_oom_kill"] if metrics["cgroup_oom_kill"] is not None else "unavailable",
+    )
 
 
 def _store() -> HybridJobStore:
@@ -135,12 +153,14 @@ async def complete(job_id: str, request: Request):
         raise HTTPException(400, "Worker result is invalid")
     try:
         store = _store()
+        _log_render_memory("before_result_commit")
         job = await run_in_threadpool(store.complete, job_id, worker_id, _lease_token(payload), result)
         # Record projection is idempotent and transactionally binds the job to
         # its canonical record. A crash after completion is recoverable by the
         # bounded reconciliation endpoint; it cannot create a partial record.
         from app.services.hybrid_record_commit import commit_completed_job  # noqa: PLC0415
         outcome = await run_in_threadpool(commit_completed_job, store.db, job_id)
+        _log_render_memory("after_result_commit")
         return {"status": job["status"], **outcome}
     except LeaseConflict:
         raise HTTPException(409, "Worker lease is no longer valid") from None
@@ -150,6 +170,7 @@ async def complete(job_id: str, request: Request):
 async def reconcile(request: Request):
     """Bounded recovery plus read-only orphan review; never deletes assets."""
     await _authenticated_payload(request)
+    _log_render_memory("worker_reconcile")
     from app.services.hybrid_record_commit import reconcile_completed_jobs  # noqa: PLC0415
     try:
         store = _store()
