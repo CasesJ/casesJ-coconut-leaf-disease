@@ -6,8 +6,8 @@ SOURCE = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="u
 HTML = (Path(__file__).parents[1] / "static" / "index.html").read_text(encoding="utf-8")
 
 
-def test_hybrid_browser_feature_is_explicitly_disabled_by_default():
-    assert "hybridUploads: false" in HTML
+def test_hybrid_browser_feature_requires_server_capability_for_canary():
+    assert "hybridUploads: true" in HTML
     assert "hybridUploadFeatureEnabled = false" in SOURCE
     assert "accountInfo?.features?.hybrid_uploads === true" in SOURCE
     assert ": detectImage(files[index]" in SOURCE
