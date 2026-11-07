@@ -5,6 +5,8 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 from PIL import Image
 import pytest
 
@@ -318,6 +320,56 @@ def test_hybrid_raw_http_route_streams_only_to_owner(client, monkeypatch):
     assert http.get("/media/detections/hybrid-rec/original").content == b"firstsecond"
     actor["uid"] = "farmer-b"
     assert http.get("/media/detections/hybrid-rec/original").status_code == 404
+
+
+@pytest.mark.parametrize("alias", [
+    media_api.protected_legacy_original,
+    media_api.protected_legacy_root_original,
+])
+def test_hybrid_raw_historical_alias_is_lazy_and_never_buffers_source(alias, monkeypatch):
+    record = _hybrid_raw_record()
+    monkeypatch.setattr(detection_service, "get_all_user_records", lambda limit: [record])
+    monkeypatch.setattr(media_service, "read_detection_image",
+                        lambda *args: pytest.fail("hybrid raw source must not be buffered"))
+    reads = []
+    def large_source(_reference):
+        reads.append("opened")
+        return (b"x" * (64 * 1024) for _ in range(750))
+    monkeypatch.setattr(media_service, "stream_asset", large_source)
+
+    response = alias("hybrid-rec.jpg", {"uid": "farmer-a"})
+    assert isinstance(response, StreamingResponse)
+    assert response.media_type == "image/jpeg"
+    assert response.headers["cache-control"] == "private, no-store"
+    # The route creates an iterator, but has not read or retained any of the
+    # simulated 46.9 MiB original before returning the streaming response.
+    assert reads == ["opened"]
+    assert not hasattr(response, "body")
+
+
+def test_hybrid_raw_historical_alias_denies_other_farmers_before_stream(monkeypatch):
+    monkeypatch.setattr(detection_service, "get_all_user_records",
+                        lambda limit: [_hybrid_raw_record()])
+    monkeypatch.setattr(media_service, "stream_asset",
+                        lambda *args: pytest.fail("unauthorized farmer must not stream"))
+    with pytest.raises(HTTPException) as denied:
+        media_api.protected_legacy_original("hybrid-rec.jpg", {"uid": "farmer-b"})
+    assert denied.value.status_code == 404
+
+
+@pytest.mark.parametrize("alias", [
+    media_api.protected_legacy_original,
+    media_api.protected_legacy_root_original,
+])
+def test_legacy_historical_alias_keeps_existing_buffered_response(alias, monkeypatch):
+    record = {"id": "rec", "user_id": "farmer-a", "image_url": "/static/uploads/rec.jpg"}
+    monkeypatch.setattr(detection_service, "get_all_user_records", lambda limit: [record])
+    monkeypatch.setattr(media_service, "read_detection_image",
+                        lambda value, kind: (b"legacy-private", "image/jpeg"))
+    response = alias("rec.jpg", {"uid": "farmer-a"})
+    assert not isinstance(response, StreamingResponse)
+    assert response.body == b"legacy-private"
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 def test_hybrid_raw_media_never_decodes_render_thumbnail_or_annotation(monkeypatch):
