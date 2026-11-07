@@ -111,16 +111,21 @@ def test_authenticated_raw_asset_without_admin_format_is_verified_as_jpeg(monkey
     ("type", "upload"),
     ("bytes", 122),
     ("format", "png"),
+    ("format", "webp"),
     ("format", ""),
+    ("version", None),
     ("context", {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "other"}}),
 ])
-def test_missing_admin_format_does_not_bypass_asset_checks(monkeypatch, field, value):
+@pytest.mark.parametrize("format_present", [False, True])
+def test_missing_admin_format_does_not_bypass_asset_checks(monkeypatch, field, value, format_present):
     public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
     resource = {
         "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
         "type": "authenticated", "bytes": 123, "format": None, "version": 7,
         "context": {"custom": {"hybrid_job_id": "b" * 32, "hybrid_user_id": "farmer"}},
     }
+    if not format_present:
+        resource.pop("format")
     resource[field] = value
     monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
     monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: dict(resource))
@@ -131,7 +136,7 @@ def test_missing_admin_format_does_not_bypass_asset_checks(monkeypatch, field, v
         )
 
 
-def test_missing_admin_format_field_is_rejected(monkeypatch):
+def test_missing_admin_format_field_is_verified_as_jpeg(monkeypatch):
     public_id = "neuralcoco/hybrid-original/" + "a" * 64 + ".jpg"
     resource = {
         "public_id": public_id, "asset_id": "asset-1", "resource_type": "raw",
@@ -140,11 +145,14 @@ def test_missing_admin_format_field_is_rejected(monkeypatch):
     }
     monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
     monkeypatch.setattr("cloudinary.api.resource", lambda *a, **k: dict(resource))
-    with pytest.raises(cloudinary_storage.CloudinaryStorageError, match="verification failed"):
-        cloudinary_storage.verify_hybrid_uploaded_asset(
-            public_id=public_id, job_id="b" * 32, user_id="farmer",
-            expected_bytes=123, asset_id="asset-1",
-        )
+    reference = cloudinary_storage.verify_hybrid_uploaded_asset(
+        public_id=public_id, job_id="b" * 32, user_id="farmer",
+        expected_bytes=123, asset_id="asset-1",
+    )
+    assert reference["format"] == "jpg"
+    assert reference["content_type"] == "image/jpeg"
+    assert reference["asset_id"] == "asset-1"
+    assert reference["version"] == 7
 
 
 def test_authorization_is_idempotent_and_confirmation_is_owner_bound(monkeypatch):

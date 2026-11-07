@@ -126,7 +126,6 @@ def verify_hybrid_uploaded_asset(*, public_id: str, job_id: str, user_id: str,
             or resource.get("resource_type") != "raw"
             or resource.get("type") != "authenticated"
             or int(resource.get("bytes") or -1) != expected_bytes
-            or "format" not in resource
             or image_format not in {"jpg", "jpeg"}
             or actual_context != expected_context):
         raise CloudinaryStorageError("Cloudinary upload verification failed")
