@@ -6,6 +6,9 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
+      # Pin a supported interpreter: inference-sdk does not currently publish for Python 3.14.
+      - key: PYTHON_VERSION
+        value: "3.12.11"
       - key: INFERENCE_BACKEND
         value: openvino
       - key: OPENVINO_MODEL_DIR
