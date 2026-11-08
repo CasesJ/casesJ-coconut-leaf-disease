@@ -4,11 +4,12 @@ These guards are installed before application imports during test collection.
 Tests explicitly replace the adapters they exercise with in-memory doubles.
 """
 import os
-import socket
 import sqlite3
+from urllib import request as urlrequest
 
 import dotenv
 import firebase_admin
+import requests
 from firebase_admin import auth, credentials, db, firestore, storage
 from google.auth.credentials import AnonymousCredentials
 import pytest
@@ -39,17 +40,12 @@ for adapter, method in ((firestore, "client"), (storage, "bucket"), (db, "refere
                         (auth, "update_user"), (auth, "set_custom_user_claims"),
                         (auth, "get_user_by_email"), (auth, "delete_user")):
     _guards.setattr(adapter, method, blocked)
-def local_only(original):
-    def connect(sock, address):
-        # Windows asyncio implements socketpair using a loopback connection.
-        if isinstance(address, tuple) and address[0] in {"127.0.0.1", "::1"}:
-            return original(sock, address)
-        return blocked()
-    return connect
-
-
-_guards.setattr(socket.socket, "connect", local_only(socket.socket.connect))
-_guards.setattr(socket.socket, "connect_ex", local_only(socket.socket.connect_ex))
+# Do not patch socket.socket.connect: on Windows, Python's Proactor loop uses
+# a loopback socketpair internally and a method-level socket monkeypatch makes
+# asyncio.run() hang before the test body starts. Network-facing libraries are
+# blocked instead; Firebase adapters above are independently replaced.
+_guards.setattr(requests.sessions.Session, "request", blocked)
+_guards.setattr(urlrequest, "urlopen", blocked)
 _guards.setattr(sqlite3, "connect", blocked)
 
 

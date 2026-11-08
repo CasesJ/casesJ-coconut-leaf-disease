@@ -30,6 +30,12 @@ _DOWNLOAD_RETRY_BACKOFF_SECONDS = (0.2, 0.5)
 _RETRYABLE_DOWNLOAD_STATUSES = {408, 500, 502, 503, 504}
 _DOWNLOAD_URL_EXPIRY_MARGIN_SECONDS = 30
 _PUBLIC_ID_PATTERN = re.compile(r"^neuralcoco/[a-z0-9_-]+/[a-f0-9]{32}$")
+# Read-only compatibility for sources created by the retired hybrid worker.
+# This pattern is deliberately narrower than the normal asset namespace and
+# is not used by any upload, queue, or worker code in this cloud-only release.
+_HYBRID_SOURCE_PUBLIC_ID_PATTERN = re.compile(
+    r"^neuralcoco/hybrid-original/(?:[a-f0-9]{32}|[a-f0-9]{64})\.jpg$"
+)
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
 _URL_PATTERN = re.compile(r"(?i)\b(?:https?://|cloudinary://)\S+")
 _SENSITIVE_PARAMETER_PATTERN = re.compile(
@@ -135,8 +141,12 @@ def _validate_reference(reference: dict) -> tuple[str, str]:
     if not isinstance(reference, dict) or reference.get("provider") != "cloudinary":
         raise CloudinaryStorageError("Invalid Cloudinary asset reference")
     public_id = reference.get("public_id")
-    if (not isinstance(public_id, str) or not _PUBLIC_ID_PATTERN.fullmatch(public_id)
-            or reference.get("resource_type") != "image"
+    resource_type = reference.get("resource_type")
+    normal_image = (isinstance(public_id, str) and _PUBLIC_ID_PATTERN.fullmatch(public_id)
+                    and resource_type == "image")
+    hybrid_source = (isinstance(public_id, str) and _HYBRID_SOURCE_PUBLIC_ID_PATTERN.fullmatch(public_id)
+                     and resource_type == "raw")
+    if (not (normal_image or hybrid_source)
             or reference.get("delivery_type") != "authenticated"):
         raise CloudinaryStorageError("Invalid Cloudinary asset reference")
     image_format = reference.get("format")
@@ -348,7 +358,8 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
     try:
         from cloudinary import utils  # noqa: PLC0415
         url = utils.private_download_url(
-            public_id, image_format, resource_type="image", type="authenticated",
+            public_id, image_format,
+            resource_type=str(reference.get("resource_type") or "image"), type="authenticated",
             expires_at=(int(time.time()) + max(
                 60,
                 _DOWNLOAD_MAX_ATTEMPTS * config.CLOUDINARY_READ_TIMEOUT_SECONDS
@@ -357,7 +368,8 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
             )),
         )
         parsed = urlsplit(url)
-        expected_prefix = f"/v1_1/{cloud_name}/image/download"
+        resource_type = str(reference.get("resource_type") or "image")
+        expected_prefix = f"/v1_1/{cloud_name}/{resource_type}/download"
         if parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com" or parsed.path != expected_prefix:
             raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
         content = _download_private_url(url)
@@ -367,6 +379,74 @@ def _download_asset_once(reference: dict, public_id: str, image_format: str,
     except Exception as error:
         _log_cloudinary_failure("private download", error)
         raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+
+def stream_asset(reference: dict):
+    """Yield an authenticated retired-hybrid raw original without buffering it.
+
+    The caller performs the normal Firebase ownership check.  This function
+    accepts only the tightly validated raw-reference shape above; it has no
+    upload, mutation, queue, or worker behavior.
+    """
+    public_id, image_format = _validate_reference(reference)
+    if reference.get("resource_type") != "raw":
+        raise CloudinaryStorageError("Streaming is reserved for raw source assets")
+    cloud_name, _, _ = _configure()
+    try:
+        from cloudinary import utils  # noqa: PLC0415
+        url = utils.private_download_url(
+            public_id, image_format, resource_type="raw", type="authenticated",
+            expires_at=int(time.time()) + max(60, config.CLOUDINARY_READ_TIMEOUT_SECONDS + 30),
+        )
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or parsed.hostname != "api.cloudinary.com"
+                or parsed.path != f"/v1_1/{cloud_name}/raw/download"):
+            raise CloudinaryStorageError("Cloudinary generated an invalid download URL")
+    except CloudinaryStorageError:
+        raise
+    except Exception as error:
+        _log_cloudinary_failure("private stream", error)
+        raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+    response = None
+    try:
+        for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+            response = requests.get(
+                url, timeout=(5, config.CLOUDINARY_READ_TIMEOUT_SECONDS),
+                stream=True, allow_redirects=False,
+            )
+            if response.status_code in _RETRYABLE_DOWNLOAD_STATUSES and attempt + 1 < _DOWNLOAD_MAX_ATTEMPTS:
+                response.close()
+                response = None
+                time.sleep(_DOWNLOAD_RETRY_BACKOFF_SECONDS[attempt])
+                continue
+            response.raise_for_status()
+            break
+    except Exception as error:
+        if response is not None:
+            response.close()
+        _log_cloudinary_failure("private stream", error)
+        raise CloudinaryStorageError("Cloudinary image is temporarily unavailable") from None
+
+    def iterator():
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > config.MAX_IMAGE_UPLOAD_BYTES:
+                    raise CloudinaryStorageError("Stored image exceeds the configured limit")
+                yield chunk
+            if not total:
+                raise CloudinaryStorageError("Cloudinary returned an empty image")
+        except Exception as error:
+            _log_cloudinary_failure("private stream", error)
+            raise CloudinaryStorageError("Cloudinary image stream was interrupted") from None
+        finally:
+            response.close()
+
+    return iterator()
 
 
 def download_asset(reference: dict) -> tuple[bytes, str]:

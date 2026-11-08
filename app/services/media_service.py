@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.core import config
-from app.infrastructure.cloudinary_storage import delete_asset, download_asset, upload_asset
+from app.infrastructure.cloudinary_storage import delete_asset, download_asset, stream_asset, upload_asset
 
 logger = logging.getLogger(__name__)
 _KINDS = {"original", "annotated"}
@@ -45,6 +45,17 @@ def _thumbnail_key(record: dict) -> tuple:
         str(original.get("asset_id") or ""),
         str(original.get("version") or ""),
         str(original.get("sha256") or ""),
+    )
+
+
+def _is_retired_hybrid_raw_record(record: dict) -> bool:
+    """Identify the fixed raw-source shape produced by the former worker."""
+    assets = record.get("image_assets") if isinstance(record.get("image_assets"), dict) else {}
+    original = assets.get("original") if isinstance(assets.get("original"), dict) else {}
+    return (
+        original.get("storage_representation") == "authenticated_raw_source"
+        and original.get("provider") == "cloudinary"
+        and original.get("resource_type") == "raw"
     )
 
 
@@ -259,6 +270,8 @@ def read_detection_image(record: dict, kind: str) -> tuple[bytes, str]:
             except Exception as error:
                 logger.warning("Cloudinary thumbnail read failed (%s)", type(error).__name__)
                 raise MediaUnavailable("Image preview is temporarily unavailable") from None
+        if _is_retired_hybrid_raw_record(record):
+            raise MediaUnavailable("Hybrid image preview is not available yet")
         try:
             return _generate_detection_thumbnail(record)
         except Exception as error:
@@ -275,11 +288,26 @@ def read_detection_image(record: dict, kind: str) -> tuple[bytes, str]:
     except MediaNotFound:
         if kind != "annotated":
             raise
+        if _is_retired_hybrid_raw_record(record):
+            raise MediaUnavailable("Hybrid annotation preview is not available yet") from None
         original, content_type = _read_one(
             record, "original", record_id,
             url_field="image_url", path_field="original_storage_path",
         )
         return _render_annotated_preview(record, original), "image/jpeg"
+
+
+def stream_detection_original(record: dict):
+    """Return a lazy stream only for retired hybrid raw originals."""
+    if not _is_retired_hybrid_raw_record(record):
+        return None
+    assets = record.get("image_assets") or {}
+    original = assets.get("original")
+    try:
+        return stream_asset(original), _content_type(original)
+    except Exception as error:
+        logger.warning("Cloudinary retired-hybrid raw stream failed (%s)", type(error).__name__)
+        raise MediaUnavailable("Image is temporarily unavailable") from None
 
 
 def persist_detection_thumbnail(record: dict, thumbnail_bytes: bytes) -> None:
@@ -487,6 +515,8 @@ def has_record_image(record: dict, kind: str) -> bool:
                  or _local_file(record.get("image_path"), kind, record_id, allow_leaf=False) is not None)
     if available:
         return True
+    if kind == "annotated" and _is_retired_hybrid_raw_record(record):
+        return False
     if kind == "annotated":
         return has_record_image(record, "original")
     return False
@@ -514,7 +544,9 @@ def present_detection_record(record: dict, *, expert: bool = False) -> dict:
             value[field] = f"{base}/{kind}"
         else:
             value.pop(field, None)
-    if has_record_image(record, "original"):
+    if has_record_image(record, "original") and (
+            not _is_retired_hybrid_raw_record(record)
+            or isinstance((record.get("image_assets") or {}).get("thumbnail"), dict)):
         value["thumbnail_url"] = f"{base}/thumbnail"
     else:
         value.pop("thumbnail_url", None)

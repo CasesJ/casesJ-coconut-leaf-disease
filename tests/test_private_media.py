@@ -5,6 +5,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from fastapi import BackgroundTasks, HTTPException
 from PIL import Image
 import pytest
 
@@ -285,6 +286,70 @@ def test_cloudinary_download_error_is_not_replaced_with_local_fallback(monkeypat
     monkeypatch.setattr(media_service, "_local_file", lambda *args: pytest.fail("No local fallback"))
     with pytest.raises(media_service.MediaUnavailable):
         media_service.read_detection_image(record, "original")
+
+
+def _retired_hybrid_raw_record():
+    return {
+        "id": "hybrid-rec", "user_id": "farmer-a",
+        "image_assets": {"original": {
+            "provider": "cloudinary", "asset_id": "asset",
+            "public_id": "neuralcoco/hybrid-original/" + "a" * 32 + ".jpg",
+            "resource_type": "raw", "delivery_type": "authenticated",
+            "format": "jpg", "content_type": "image/jpeg",
+            "storage_representation": "authenticated_raw_source",
+        }},
+    }
+
+
+def test_retired_hybrid_raw_original_streams_without_render_buffering(monkeypatch):
+    record = _retired_hybrid_raw_record()
+    monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
+
+    streamed = media_service.stream_detection_original(record)
+
+    assert streamed is not None
+    chunks, content_type = streamed
+    assert b"".join(chunks) == b"firstsecond"
+    assert content_type == "image/jpeg"
+
+
+def test_retired_hybrid_raw_route_streams_only_to_owner(monkeypatch):
+    record = _retired_hybrid_raw_record()
+    monkeypatch.setattr(
+        detection_service, "find_canonical_record_for_user",
+        lambda uid, rid: record if uid == "farmer-a" and rid == "hybrid-rec" else None,
+    )
+    monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
+
+    response = media_api.farmer_detection_image(
+        "hybrid-rec", "original", BackgroundTasks(), {"uid": "farmer-a"},
+    )
+    assert response.headers["cache-control"] == "private, no-store"
+
+    with pytest.raises(HTTPException, match="Image not found") as denied:
+        media_api.farmer_detection_image(
+            "hybrid-rec", "original", BackgroundTasks(), {"uid": "farmer-b"},
+        )
+    assert denied.value.status_code == 404
+
+
+def test_retired_hybrid_raw_record_never_generates_render_preview(monkeypatch):
+    record = _retired_hybrid_raw_record()
+    monkeypatch.setattr(
+        media_service, "_generate_detection_thumbnail",
+        lambda *_: pytest.fail("must not decode retired hybrid raw source"),
+    )
+    monkeypatch.setattr(
+        media_service, "_render_annotated_preview",
+        lambda *_: pytest.fail("must not decode retired hybrid raw source"),
+    )
+
+    with pytest.raises(media_service.MediaUnavailable):
+        media_service.read_detection_image(record, "thumbnail")
+    with pytest.raises(media_service.MediaUnavailable):
+        media_service.read_detection_image(record, "annotated")
+    assert not media_service.has_record_image(record, "annotated")
+    assert "thumbnail_url" not in media_service.present_detection_record(record)
 
 
 def test_monitoring_media_enforces_farmer_owner_and_expert_role(client, monkeypatch):

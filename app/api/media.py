@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from app.core.security import verify_verified_firebase_token
 from app.domain.expert import is_authorized_expert_identity
@@ -69,6 +69,22 @@ def _read_or_http_error(read, after_read=None) -> Response:
         raise HTTPException(503, "Image is temporarily unavailable") from None
 
 
+def _stream_or_read_detection(record: dict, kind: str, after_read=None,
+                              *, monitoring: bool = False) -> Response:
+    if kind == "original":
+        streamed = media_service.stream_detection_original(record)
+        if streamed is not None:
+            chunks, content_type = streamed
+            return StreamingResponse(chunks, media_type=content_type, headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+                "Vary": "Authorization",
+            })
+    read = media_service.read_monitoring_image if monitoring else media_service.read_detection_image
+    return _read_or_http_error(lambda: read(record, kind), after_read)
+
+
 def _detection_record(farmer_id: str, record_id: str) -> dict:
     if not _SAFE_ID.fullmatch(farmer_id) or not _SAFE_ID.fullmatch(record_id):
         raise HTTPException(404, "Image not found")
@@ -92,7 +108,7 @@ def farmer_detection_image(record_id: str, kind: str, background_tasks: Backgrou
         if (should_cache_thumbnail
                 and media_service.claim_detection_thumbnail_persistence(record)):
             background_tasks.add_task(media_service.persist_detection_thumbnail, record, contents)
-    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
+    return _stream_or_read_detection(record, kind, after_read)
 
 
 @router.get("/expert/media/detections/{farmer_id}/{record_id}/{kind}")
@@ -108,7 +124,7 @@ def expert_detection_image(farmer_id: str, record_id: str, kind: str, background
         if (should_cache_thumbnail
                 and media_service.claim_detection_thumbnail_persistence(record)):
             background_tasks.add_task(media_service.persist_detection_thumbnail, record, contents)
-    return _read_or_http_error(lambda: media_service.read_detection_image(record, kind), after_read)
+    return _stream_or_read_detection(record, kind, after_read)
 
 
 def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
@@ -134,7 +150,7 @@ def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
             record["_media_scope"] = "detection"
         else:
             record["predictions"] = case.get("baseline_prediction_snapshot") or []
-        return _read_or_http_error(lambda: media_service.read_monitoring_image(record, kind))
+        return _stream_or_read_detection(record, kind, monitoring=True)
     if not follow_up_id:
         raise HTTPException(404, "Monitoring evidence not found")
     record = monitoring_service.get_follow_up(farmer_id, case_id, follow_up_id)
@@ -142,7 +158,7 @@ def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
             or record.get("case_id") != case_id or record.get("id") != follow_up_id):
         raise HTTPException(404, "Monitoring evidence not found")
     record["_media_scope"] = "monitoring"
-    return _read_or_http_error(lambda: media_service.read_monitoring_image(record, kind))
+    return _stream_or_read_detection(record, kind, monitoring=True)
 
 
 @router.get("/media/monitoring/{case_id}/baseline/{kind}")
@@ -199,7 +215,7 @@ def _legacy_static_image(filename: str, kind: str, decoded: dict) -> Response:
     owners = {str(record.get("user_id") or "") for record in matches}
     if len(owners) != 1:
         raise HTTPException(404, "Image not found")
-    return _read_or_http_error(lambda: media_service.read_detection_image(matches[0], kind))
+    return _stream_or_read_detection(matches[0], kind)
 
 
 @router.get("/static/uploads/{filename:path}")

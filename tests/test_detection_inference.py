@@ -266,7 +266,7 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     from drone_gps import DroneGPS
     gps = DroneGPS()
     monkeypatch.setattr("drone_gps.get_drone_gps", lambda: gps)
-    monkeypatch.setattr(detections, "set_initial_farm_center", lambda *_args: None)
+    monkeypatch.setattr(detections, "set_initial_farm_center", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(detections, "save_detection_record",
                         lambda **kwargs: saved.append(kwargs))
     result = _call_detect(mpo_bytes)
@@ -274,7 +274,9 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     assert len(seen) == 1
     # OpenCV applies EXIF orientation while retaining the same pixel count.
     assert seen[0].shape[:2] == (32, 24)
-    assert result["image_dimensions"] == {"width": 24, "height": 32}
+    # Source identity retains the encoded dimensions; OpenCV may orient the
+    # decoded inference raster separately.
+    assert result["image_dimensions"] == {"width": 32, "height": 24}
     assert result["gps_lat"] == pytest.approx(7.3)
     assert result["gps_lng"] == pytest.approx(125.6)
     assert result["gps_source"] == "dji_exif"
