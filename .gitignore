@@ -43,9 +43,3 @@ coconut-leaf-disease-dcf9a-firebase-adminsdk-fbsvc-54bd5a7488.json
 
 # Generated report-preview artifacts
 tmp/
-
-# Local test and Firebase Emulator diagnostics
-.pytest_cache/
-pytest_temp/
-firebase-debug.log
-firestore-debug.log

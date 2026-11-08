@@ -18,7 +18,6 @@ from app.core.config import (
     PASSWORD_RECOVERY_ATTEMPTS_PER_MINUTE,
 )
 from app.core.rate_limit import client_ip, limiter
-from app.core.hybrid_canary import is_hybrid_upload_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -76,7 +75,6 @@ async def verify_user_token(request: LoginRequest, http_request: Request):
             "email": decoded.get("email"),
             "role": "expert" if is_expert else "farmer",
             "is_expert": is_expert,
-            "features": {"hybrid_uploads": not is_expert and is_hybrid_upload_user(decoded.get("uid"))},
             "message": "Token verified successfully",
         }
     except Exception as exc:
@@ -133,7 +131,6 @@ async def get_current_user(decoded: dict = Depends(verify_verified_firebase_toke
         "role": "expert" if is_expert else "farmer",
         "is_expert": is_expert,
         "authenticated": True,
-        "features": {"hybrid_uploads": not is_expert and is_hybrid_upload_user(decoded.get("uid"))},
     }
 
 

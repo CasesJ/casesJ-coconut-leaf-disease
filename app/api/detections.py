@@ -35,9 +35,7 @@ from app.core.config import (
 from app.core.rate_limit import limiter
 from app.core.resource_metrics import process_memory_metrics
 from app.core.security import verify_verified_firebase_token
-from app.core.hybrid_canary import is_hybrid_upload_user
 from app.domain.detection import _extract_primary_disease, apply_record_defaults
-from app.domain.expert import is_expert_identity
 from app.domain.recommendation import build_recommendation_response
 from app.schemas.recommendation import FarmerRecommendationUpdate
 from app.services.detection_service import (
@@ -112,26 +110,16 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
                 mpo.seek(0)
                 exif = mpo.info.get("exif")
                 icc_profile = mpo.info.get("icc_profile")
-                xmp = mpo.info.get("xmp")
-                output = BytesIO()
-                save_options = {"format": "JPEG", "quality": 100, "subsampling": 0}
-                if exif:
-                    save_options["exif"] = exif
-                if icc_profile:
-                    save_options["icc_profile"] = icc_profile
-                if xmp:
-                    save_options["xmp"] = xmp
-                # DJI's primary MPO frame is already RGB. Calling convert("RGB")
-                # materialises a second full-resolution raster before encoding.
-                # Saving it directly emits the same JPEG bytes without that copy.
-                # Non-RGB MPOs retain the existing conversion behavior.
-                if mpo.mode == "RGB":
-                    mpo.save(output, **save_options)
-                else:
-                    with mpo.convert("RGB") as primary:
-                        primary.save(output, **save_options)
-                inference_contents = output.getvalue()
-                output.close()
+                with mpo.convert("RGB") as primary:
+                    output = BytesIO()
+                    save_options = {"format": "JPEG", "quality": 100, "subsampling": 0}
+                    if exif:
+                        save_options["exif"] = exif
+                    if icc_profile:
+                        save_options["icc_profile"] = icc_profile
+                    primary.save(output, **save_options)
+                    inference_contents = output.getvalue()
+                    output.close()
             _log_memory(operation_id, "after_mpo_primary_conversion")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
@@ -280,6 +268,7 @@ async def detect_image(
     operation_id = idempotency_key or uuid.uuid4().hex[:12]
     performance_ms: dict[str, float] = {}
     rss_samples = [_process_rss_mib()]
+    from model import detector  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415
 
     # --- Auth (requires a verified Firebase identity) ---
@@ -293,15 +282,8 @@ async def detect_image(
     user_id = str(decoded.get("uid") or "").strip()
     if not user_id or decoded.get("token_verified_offline"):
         raise HTTPException(status_code=401, detail="Verified Firebase authentication is required")
-    # Defense in depth for direct function tests and alternate ASGI hosts.  The
-    # application middleware performs the same check *before* multipart body
-    # parsing in normal deployments.
-    if not is_expert_identity(decoded) and is_hybrid_upload_user(user_id):
-        raise HTTPException(status_code=409, detail="This account uses the secure hybrid uploader. Refresh the page and retry.")
     email = decoded.get("email", "unknown")
     is_offline = False
-
-    from model import detector  # noqa: PLC0415
 
     # --- Read upload ---
     declared_size = request.headers.get("content-length")

@@ -4,25 +4,17 @@ app/api/health.py — Health check and utility endpoints.
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, Response
 
-from app.core.config import INFERENCE_BACKEND
-
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
 def health():
-    """Return process health without initializing the inference model.
-
-    Render uses this route while deciding whether the web process is ready.
-    Importing ``model`` here constructs and compiles the OpenVINO singleton,
-    which turns a lightweight readiness probe into an inference startup path.
-    """
-    weights = "weights.xml" if INFERENCE_BACKEND == "openvino" else "weights.pt"
+    from model import detector  # noqa: PLC0415
     return {
         "status": "ok",
         "model": "YOLO26 v6",
-        "backend": INFERENCE_BACKEND,
-        "weights": weights,
+        "backend": detector.backend,
+        "weights": detector.active_model_path.name if detector.active_model_path else None,
     }
 
 

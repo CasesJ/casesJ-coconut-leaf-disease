@@ -215,9 +215,6 @@ def _legacy_static_image(filename: str, kind: str, decoded: dict) -> Response:
     owners = {str(record.get("user_id") or "") for record in matches}
     if len(owners) != 1:
         raise HTTPException(404, "Image not found")
-    # Historical aliases can also match a hybrid record by its record ID.
-    # Use the same owner-checked streaming path as canonical media routes so a
-    # large authenticated raw original is never buffered by this alias.
     return _stream_or_read_detection(matches[0], kind)
 
 

@@ -235,20 +235,13 @@ def _log_memory(stage: str, operation_id: str) -> None:
 
 def _storage_draft_size(width: int, height: int, max_pixels: int) -> tuple[int, int] | None:
     """Choose a libjpeg power-of-two DCT reduction that is at or below the cap."""
-    if width * height <= max_pixels:
+    pixels = width * height
+    if pixels <= max_pixels:
         return None
-    for factor in (2, 4, 8):
-        # libjpeg rounds decoded dimensions up, while Pillow chooses its DCT
-        # factor from source_dimension // requested_dimension. Requesting the
-        # rounded-up size can therefore select a smaller factor on odd images.
-        decoded_width = (width + factor - 1) // factor
-        decoded_height = (height + factor - 1) // factor
-        if (width >= factor and height >= factor
-                and decoded_width * decoded_height <= max_pixels):
-            return width // factor, height // factor
-    raise DetectionImageProcessingError(
-        "JPEG storage pixel limit cannot be met with supported DCT scaling"
-    )
+    factor = 2
+    while (width * height) / (factor * factor) > max_pixels:
+        factor *= 2
+    return max(1, (width + factor - 1) // factor), max(1, (height + factor - 1) // factor)
 
 
 def _prepare_cloudinary_copy(

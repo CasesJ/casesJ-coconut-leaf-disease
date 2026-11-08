@@ -5,8 +5,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from fastapi import HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import BackgroundTasks, HTTPException
 from PIL import Image
 import pytest
 
@@ -289,7 +288,7 @@ def test_cloudinary_download_error_is_not_replaced_with_local_fallback(monkeypat
         media_service.read_detection_image(record, "original")
 
 
-def _hybrid_raw_record():
+def _retired_hybrid_raw_record():
     return {
         "id": "hybrid-rec", "user_id": "farmer-a",
         "image_assets": {"original": {
@@ -302,85 +301,55 @@ def _hybrid_raw_record():
     }
 
 
-def test_hybrid_raw_original_streams_without_render_buffering(monkeypatch):
-    record = _hybrid_raw_record()
+def test_retired_hybrid_raw_original_streams_without_render_buffering(monkeypatch):
+    record = _retired_hybrid_raw_record()
     monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
+
     streamed = media_service.stream_detection_original(record)
+
     assert streamed is not None
     chunks, content_type = streamed
-    assert b"".join(chunks) == b"firstsecond" and content_type == "image/jpeg"
+    assert b"".join(chunks) == b"firstsecond"
+    assert content_type == "image/jpeg"
 
 
-def test_hybrid_raw_http_route_streams_only_to_owner(client, monkeypatch):
-    http, actor = client
-    record = _hybrid_raw_record()
-    monkeypatch.setattr(detection_service, "find_canonical_record_for_user",
-                        lambda uid, rid: record if uid == "farmer-a" and rid == "hybrid-rec" else None)
+def test_retired_hybrid_raw_route_streams_only_to_owner(monkeypatch):
+    record = _retired_hybrid_raw_record()
+    monkeypatch.setattr(
+        detection_service, "find_canonical_record_for_user",
+        lambda uid, rid: record if uid == "farmer-a" and rid == "hybrid-rec" else None,
+    )
     monkeypatch.setattr(media_service, "stream_asset", lambda reference: iter((b"first", b"second")))
-    assert http.get("/media/detections/hybrid-rec/original").content == b"firstsecond"
-    actor["uid"] = "farmer-b"
-    assert http.get("/media/detections/hybrid-rec/original").status_code == 404
 
-
-@pytest.mark.parametrize("alias", [
-    media_api.protected_legacy_original,
-    media_api.protected_legacy_root_original,
-])
-def test_hybrid_raw_historical_alias_is_lazy_and_never_buffers_source(alias, monkeypatch):
-    record = _hybrid_raw_record()
-    monkeypatch.setattr(detection_service, "get_all_user_records", lambda limit: [record])
-    monkeypatch.setattr(media_service, "read_detection_image",
-                        lambda *args: pytest.fail("hybrid raw source must not be buffered"))
-    reads = []
-    def large_source(_reference):
-        reads.append("opened")
-        return (b"x" * (64 * 1024) for _ in range(750))
-    monkeypatch.setattr(media_service, "stream_asset", large_source)
-
-    response = alias("hybrid-rec.jpg", {"uid": "farmer-a"})
-    assert isinstance(response, StreamingResponse)
-    assert response.media_type == "image/jpeg"
+    response = media_api.farmer_detection_image(
+        "hybrid-rec", "original", BackgroundTasks(), {"uid": "farmer-a"},
+    )
     assert response.headers["cache-control"] == "private, no-store"
-    # The route creates an iterator, but has not read or retained any of the
-    # simulated 46.9 MiB original before returning the streaming response.
-    assert reads == ["opened"]
-    assert not hasattr(response, "body")
 
-
-def test_hybrid_raw_historical_alias_denies_other_farmers_before_stream(monkeypatch):
-    monkeypatch.setattr(detection_service, "get_all_user_records",
-                        lambda limit: [_hybrid_raw_record()])
-    monkeypatch.setattr(media_service, "stream_asset",
-                        lambda *args: pytest.fail("unauthorized farmer must not stream"))
-    with pytest.raises(HTTPException) as denied:
-        media_api.protected_legacy_original("hybrid-rec.jpg", {"uid": "farmer-b"})
+    with pytest.raises(HTTPException, match="Image not found") as denied:
+        media_api.farmer_detection_image(
+            "hybrid-rec", "original", BackgroundTasks(), {"uid": "farmer-b"},
+        )
     assert denied.value.status_code == 404
 
 
-@pytest.mark.parametrize("alias", [
-    media_api.protected_legacy_original,
-    media_api.protected_legacy_root_original,
-])
-def test_legacy_historical_alias_keeps_existing_buffered_response(alias, monkeypatch):
-    record = {"id": "rec", "user_id": "farmer-a", "image_url": "/static/uploads/rec.jpg"}
-    monkeypatch.setattr(detection_service, "get_all_user_records", lambda limit: [record])
-    monkeypatch.setattr(media_service, "read_detection_image",
-                        lambda value, kind: (b"legacy-private", "image/jpeg"))
-    response = alias("rec.jpg", {"uid": "farmer-a"})
-    assert not isinstance(response, StreamingResponse)
-    assert response.body == b"legacy-private"
-    assert response.headers["cache-control"] == "private, no-store"
+def test_retired_hybrid_raw_record_never_generates_render_preview(monkeypatch):
+    record = _retired_hybrid_raw_record()
+    monkeypatch.setattr(
+        media_service, "_generate_detection_thumbnail",
+        lambda *_: pytest.fail("must not decode retired hybrid raw source"),
+    )
+    monkeypatch.setattr(
+        media_service, "_render_annotated_preview",
+        lambda *_: pytest.fail("must not decode retired hybrid raw source"),
+    )
 
-
-def test_hybrid_raw_media_never_decodes_render_thumbnail_or_annotation(monkeypatch):
-    record = _hybrid_raw_record()
-    monkeypatch.setattr(media_service, "_generate_detection_thumbnail", lambda *_: pytest.fail("must not decode raw source"))
-    monkeypatch.setattr(media_service, "_render_annotated_preview", lambda *_: pytest.fail("must not decode raw source"))
     with pytest.raises(media_service.MediaUnavailable):
         media_service.read_detection_image(record, "thumbnail")
     with pytest.raises(media_service.MediaUnavailable):
         media_service.read_detection_image(record, "annotated")
     assert not media_service.has_record_image(record, "annotated")
+    assert "thumbnail_url" not in media_service.present_detection_record(record)
 
 
 def test_monitoring_media_enforces_farmer_owner_and_expert_role(client, monkeypatch):
