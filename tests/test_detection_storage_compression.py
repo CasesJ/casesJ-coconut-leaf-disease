@@ -123,6 +123,24 @@ def test_large_dji_jpeg_uses_draft_reduction_and_preserves_gps(monkeypatch):
     assert DroneGPS.extract_image_metadata(stored)["gps"] == {"latitude": 7.3, "longitude": 125.6}
 
 
+def test_phone_jpeg_falls_back_to_bounded_resize_when_draft_is_ignored(monkeypatch):
+    """A valid large phone JPEG must not fail merely because draft() is ignored."""
+    source = photo((1600, 1200), noisy=True)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)
+    monkeypatch.setattr(images.config, "CLOUDINARY_MAX_IMAGE_PIXELS", 1_000_000)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 1_000_000)
+    monkeypatch.setattr(Image.Image, "draft", lambda self, *_args: None)
+
+    stored, representation = images._prepare_cloudinary_copy(source, "image/jpeg")
+
+    assert representation == "reduced_jpeg_storage_copy"
+    with Image.open(BytesIO(stored)) as derivative:
+        assert derivative.width * derivative.height <= 1_000_000
+        assert derivative.getexif()[274] == 6
+        assert derivative.info.get("icc_profile") == Image.open(BytesIO(source)).info.get("icc_profile")
+    assert DroneGPS.extract_image_metadata(stored)["gps"] == {"latitude": 7.3, "longitude": 125.6}
+
+
 def test_storage_asset_records_resized_dimensions(monkeypatch):
     source = photo((1600, 1200), noisy=True)
     monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 500_000)

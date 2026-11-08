@@ -23,6 +23,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.core.config import (
     IMAGE_INFERENCE_DAILY_LIMIT,
+    INFERENCE_BACKEND,
     IMAGE_INFERENCE_PER_MINUTE,
     INFERENCE_DECODE_MAX_PIXELS, MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS,
     PENDING_VERIFICATION_STATUS,
@@ -77,6 +78,104 @@ def _log_memory(operation_id: str, stage: str) -> None:
     )
 
 
+def _mpo_primary_jpeg_bytes(contents: bytes) -> bytes:
+    """Return the first JPEG frame from an MPO without decoding its pixels.
+
+    DJI MPO files begin with the primary JPEG followed by another JPEG frame.
+    The first EOI marker ends that primary frame; retaining those bytes keeps its
+    original EXIF/GPS/ICC data and avoids an expensive 48 MP RGB conversion.
+    """
+    if not contents.startswith(b"\xff\xd8"):
+        raise ValueError("MPO primary frame is not a JPEG")
+    offset = 2
+    in_scan = False
+    end = None
+    while offset < len(contents):
+        if in_scan:
+            marker_start = contents.find(b"\xff", offset)
+            if marker_start < 0:
+                break
+            marker_offset = marker_start + 1
+            while marker_offset < len(contents) and contents[marker_offset] == 0xFF:
+                marker_offset += 1
+            if marker_offset >= len(contents):
+                break
+            marker = contents[marker_offset]
+            # Stuffed bytes and restart markers are part of JPEG entropy data.
+            if marker == 0x00 or 0xD0 <= marker <= 0xD7:
+                offset = marker_offset + 1
+                continue
+            if marker == 0xD9:
+                end = marker_offset + 1
+                break
+            offset = marker_start
+            in_scan = False
+            continue
+
+        if contents[offset] != 0xFF:
+            raise ValueError("MPO primary frame has an invalid JPEG layout")
+        while offset < len(contents) and contents[offset] == 0xFF:
+            offset += 1
+        if offset >= len(contents):
+            break
+        marker = contents[offset]
+        offset += 1
+        if marker == 0xD9:
+            end = offset
+            break
+        if marker in {0x00, 0xD8} or 0xD0 <= marker <= 0xD7:
+            raise ValueError("MPO primary frame has an invalid JPEG layout")
+        if offset + 2 > len(contents):
+            break
+        length = int.from_bytes(contents[offset:offset + 2], "big")
+        marker_end = offset + length
+        if length < 2 or marker_end > len(contents):
+            break
+        offset = marker_end
+        if marker == 0xDA:
+            in_scan = True
+    if end is None:
+        raise ValueError("MPO primary frame is incomplete")
+    primary = contents[:end]
+    # Remove only the MPO index (APP2/MPF) from the first JPEG. Keeping that
+    # index makes Pillow identify a single extracted frame as another MPO,
+    # while EXIF/GPS and ICC live in their own markers and remain untouched.
+    normalized = bytearray(b"\xff\xd8")
+    offset = 2
+    while offset < len(primary):
+        marker_start = offset
+        if primary[offset] != 0xFF:
+            raise ValueError("MPO primary frame has an invalid JPEG layout")
+        while offset < len(primary) and primary[offset] == 0xFF:
+            offset += 1
+        if offset >= len(primary):
+            raise ValueError("MPO primary frame is incomplete")
+        marker = primary[offset]
+        offset += 1
+        if marker == 0xD9:
+            normalized.extend(primary[marker_start:offset])
+            break
+        if offset + 2 > len(primary):
+            raise ValueError("MPO primary frame is incomplete")
+        length = int.from_bytes(primary[offset:offset + 2], "big")
+        marker_end = offset + length
+        if length < 2 or marker_end > len(primary):
+            raise ValueError("MPO primary frame is incomplete")
+        payload = primary[offset + 2:marker_end]
+        if not (marker == 0xE2 and payload.startswith(b"MPF\x00")):
+            normalized.extend(primary[marker_start:marker_end])
+        if marker == 0xDA:
+            normalized.extend(primary[marker_end:])
+            break
+        offset = marker_end
+    primary = bytes(normalized)
+    with Image.open(BytesIO(primary)) as image:
+        if image.format != "JPEG":
+            raise ValueError("MPO primary frame is not a JPEG")
+        image.verify()
+    return primary
+
+
 def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "unknown"):
     """Validate, extract GPS and decode unchanged source pixels in a worker."""
     from drone_gps import get_drone_gps, init_drone_gps
@@ -84,9 +183,17 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
     inference_contents = contents
     source_width = source_height = 0
     image_format = None
+    preparation_rss_samples: list[float] = []
+
+    def sample_memory(stage: str) -> None:
+        _log_memory(operation_id, stage)
+        rss = _process_rss_mib()
+        if rss is not None:
+            preparation_rss_samples.append(rss)
+
     validation_started = time.perf_counter()
     try:
-        _log_memory(operation_id, "before_pillow_validation")
+        sample_memory("before_pillow_validation")
         with Image.open(BytesIO(contents)) as source_image:
             image_format = source_image.format
             if image_format not in {"JPEG", "MPO", "PNG", "WEBP", "BMP", "TIFF"}:
@@ -102,32 +209,21 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
                     f"the upload limit is {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels"
                 )
             source_image.verify()
-        _log_memory(operation_id, "after_pillow_validation")
+        sample_memory("after_pillow_validation")
         if image_format == "MPO":
-            # Read metadata from the untouched MPO first; convert only its primary
-            # JPEG frame so inference and durable evidence use the same pixels.
-            with Image.open(BytesIO(contents)) as mpo:
-                mpo.seek(0)
-                exif = mpo.info.get("exif")
-                icc_profile = mpo.info.get("icc_profile")
-                with mpo.convert("RGB") as primary:
-                    output = BytesIO()
-                    save_options = {"format": "JPEG", "quality": 100, "subsampling": 0}
-                    if exif:
-                        save_options["exif"] = exif
-                    if icc_profile:
-                        save_options["icc_profile"] = icc_profile
-                    primary.save(output, **save_options)
-                    inference_contents = output.getvalue()
-                    output.close()
-            _log_memory(operation_id, "after_mpo_primary_conversion")
+            # Extract the encoded primary frame rather than converting it to a
+            # full-resolution RGB raster and recompressing it. The extracted JPEG
+            # retains the evidence metadata used by Cloudinary and GPS handling.
+            inference_contents = _mpo_primary_jpeg_bytes(contents)
+            image_format = "JPEG"
+            sample_memory("after_mpo_primary_extraction")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "Upload must be a valid image") from exc
     performance_ms["validation_ms"] = (time.perf_counter() - validation_started) * 1000
     # The decoded signature identifies the format; camera/browser MIME labels
     # can be empty, generic or incorrect, especially for uppercase extensions.
     metadata_started = time.perf_counter()
-    _log_memory(operation_id, "before_exif_gps_extraction")
+    sample_memory("before_exif_gps_extraction")
     metadata_reader = get_drone_gps() or init_drone_gps()
     image_metadata = metadata_reader.extract_image_metadata(contents, filename)
 
@@ -162,7 +258,7 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
     else:
         lat, lng = None, None
     performance_ms["metadata_gps_ms"] = (time.perf_counter() - metadata_started) * 1000
-    _log_memory(operation_id, "after_exif_gps_extraction")
+    sample_memory("after_exif_gps_extraction")
 
     decode_started = time.perf_counter()
     # --- Inference ---
@@ -179,13 +275,13 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
             decode_flag = cv2.IMREAD_REDUCED_COLOR_4
         elif source_pixels > INFERENCE_DECODE_MAX_PIXELS:
             decode_flag = cv2.IMREAD_REDUCED_COLOR_2
-    _log_memory(operation_id, "before_opencv_decode")
+    sample_memory("before_opencv_decode")
     image = imdecode(np_arr, decode_flag)
     del np_arr
     if image is None:
         raise HTTPException(status_code=400, detail="Upload must be a valid image")
     performance_ms["decode_ms"] = (time.perf_counter() - decode_started) * 1000
-    _log_memory(operation_id, "after_opencv_decode")
+    sample_memory("after_opencv_decode")
     logger.info(
         "Upload decode operation_id=%s source_bytes=%d decoded_mib=%.1f decode_flag=%d",
         operation_id, len(inference_contents), image.nbytes / (1024 * 1024), decode_flag,
@@ -193,6 +289,8 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
     scale_x = source_width / image.shape[1]
     scale_y = source_height / image.shape[0]
     performance_ms["inference_decode_scale"] = max(scale_x, scale_y)
+    if preparation_rss_samples:
+        performance_ms["preparation_peak_rss_mib"] = max(preparation_rss_samples)
     return (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
             image, {"width": source_width, "height": source_height}, scale_x, scale_y,
             performance_ms)
@@ -310,6 +408,7 @@ async def detect_image(
     _log_memory(operation_id, "after_prepare_upload")
     performance_ms.update(preparation_ms)
     rss_samples.append(_process_rss_mib())
+    rss_samples.append(preparation_ms.get("preparation_peak_rss_mib"))
     logger.info(
         "Upload accepted operation_id=%s bytes=%d dimensions=%dx%d pixels=%d",
         operation_id, len(contents), source_dimensions["width"], source_dimensions["height"],
@@ -349,9 +448,18 @@ async def detect_image(
         )
     except InferenceUnavailable as exc:
         logger.error("Image inference failed for upload by %s: %s", user_id, exc)
+        if exc.category == "image_too_large":
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            detail = "The image is too large for disease analysis after safe preparation."
+        elif exc.category in {"rate_limited", "cooldown", "request_in_progress"}:
+            status_code = status.HTTP_429_TOO_MANY_REQUESTS
+            detail = "Disease analysis is temporarily busy. Please try again shortly."
+        else:
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            detail = "Disease analysis is temporarily unavailable. Your image was not saved."
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Disease analysis is temporarily unavailable. Your image was not saved.",
+            status_code=status_code,
+            detail=detail,
         ) from exc
     inference_ms = (time.perf_counter() - inference_started) * 1000
     _log_memory(operation_id, "after_inference")
@@ -555,6 +663,12 @@ def get_user_detections_endpoint(
 @router.websocket("/detect/stream")
 async def detect_stream(websocket: WebSocket):
     """Real-time webcam disease detection stream."""
+    if INFERENCE_BACKEND == "roboflow":
+        # Cloud Workflow inference is intentionally image-upload-only. This
+        # avoids accidental per-frame credit consumption and never imports a
+        # local OpenVINO detector in cloud mode.
+        await websocket.close(code=1013, reason="Live streaming is disabled for cloud inference")
+        return
     from model import detector  # noqa: PLC0415
     from drone_gps import get_current_drone_position  # noqa: PLC0415
     from app.infrastructure.firebase.auth import verify_token  # noqa: PLC0415

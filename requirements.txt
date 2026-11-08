@@ -34,6 +34,7 @@ matplotlib>=3.8.0
 # ─── Inference Engines ────────────────────────────────────────────────────
 openvino>=2024.0.0
 ultralytics>=8.3.0
+inference-sdk>=1.5.0,<2
 
 # ─── Hardware Communication ───────────────────────────────────────────────
 pyserial>=3.5

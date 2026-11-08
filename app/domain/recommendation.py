@@ -10,6 +10,7 @@ import math
 from typing import Optional
 
 from app.core.config import EXPERT_RECOMMENDATIONS_PATH
+from app.domain.disease_labels import canonical_disease_key, canonical_disease_label
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,6 @@ def build_recommendation_response(
     accuracy: Optional[float] = None,
 ) -> dict:
     """Build the default recommendation payload for one detection."""
-    # Lazy import to avoid circular dependencies at module load time.
-    from model import detector  # noqa: PLC0415
-
     if not disease_name or not isinstance(disease_name, str):
         raise ValueError("Invalid disease name provided")
     if not isinstance(confidence, (int, float)) or math.isnan(confidence) or math.isinf(confidence):
@@ -111,12 +109,23 @@ def build_recommendation_response(
             "accuracy": accuracy if accuracy else 10.0,
         }
 
-    recommendations = detector.get_fertilizer_recommendation(
-        disease_name=disease_name,
-        confidence=confidence,
-        gps_data=None,
-        user_location=user_location,
-    )
+    canonical_label = canonical_disease_label(disease_name)
+    disease_key = canonical_disease_key(disease_name)
+    if canonical_label is None or disease_key is None:
+        raise ValueError("Unsupported disease name provided")
+    confidence_percent = confidence if confidence > 1 else confidence * 100
+    rules = {
+        "bud rot": ("Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.", "Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.", "Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown."),
+        "caterpillars": ("Use NPK 10:10:10 balanced fertilizer monthly to boost tree vigor and recovery.", "PRIMARY: Spray Bacillus thuringiensis (Bt) at 1.5-2g per liter every 7 days for 3-4 weeks (organic option). ALTERNATIVE: Spinosad (0.5%) every 5-7 days or Phosphine (0.05%) for severe infestations. MANUAL: Handpick affected leaves in early morning when caterpillars are most active.", "Monitor leaves regularly for egg clusters and caterpillar droppings. Remove heavily infested fronds. Encourage natural predators like birds and parasitic wasps. Maintain tree vigor."),
+        "drying of leaflets": ("Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.", "Confirm whether the symptom is nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.", "Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early."),
+        "stem bleeding": ("Use a soil-test-based fertilizer program to maintain palm vigor. Do not treat stem bleeding with fertilizer alone.", "Have the diagnosis confirmed promptly. Remove diseased bark only when advised by a qualified agricultural specialist, protect exposed tissue as recommended locally, and improve drainage around affected palms.", "Avoid trunk wounds, disinfect tools between palms, maintain drainage, remove severely affected palms when advised, and inspect nearby trees regularly for fresh bleeding lesions."),
+        "healthy": ("Apply balanced NPK 12:12:12 every 3 months. Use phosphate rich during flowering season.", "No treatment needed. Continue regular monitoring.", "Maintain regular fertilization. Water consistently. Remove dead leaves. Monitor for pests."),
+        "pestalotiopsis": ("Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.", "Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.", "Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather."),
+    }
+    fertilizer, treatment, prevention = rules[disease_key]
+    location = ({"source": "browser_geolocation", "latitude": user_location["lat"], "longitude": user_location["lng"], "accuracy": user_location["accuracy"]} if user_location else {"source": "davao_default", "latitude": 7.0731, "longitude": 125.6123, "accuracy": 50000})
+    confidence_note = " (High confidence - follow recommendations closely)" if confidence_percent >= 85 else (" (Good confidence - follow recommendations)" if confidence_percent >= 70 else " (Lower confidence - consult agricultural expert to confirm)")
+    recommendations = {"disease": canonical_label, "confidence": round(confidence_percent, 2), "model": "Hardcoded", "fertilizer": fertilizer, "treatment": treatment, "prevention": [prevention], "location": location, "note": f"Davao region recommendations{confidence_note}. Location: {location['source'].replace('_', ' ')}"}
 
     prevention = recommendations.get("prevention", [])
     if isinstance(prevention, str):

@@ -99,8 +99,24 @@ TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
 # Inference backend. Render must opt in explicitly; local development keeps the
 # established Ultralytics/PyTorch path unless this value is changed.
 INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "ultralytics").strip().lower()
-if INFERENCE_BACKEND not in {"ultralytics", "openvino"}:
-    raise RuntimeError("INFERENCE_BACKEND must be 'ultralytics' or 'openvino'")
+if INFERENCE_BACKEND not in {"ultralytics", "openvino", "roboflow"}:
+    raise RuntimeError("INFERENCE_BACKEND must be 'ultralytics', 'openvino', or 'roboflow'")
+
+# Roboflow is intentionally opt-in. Render remains configured for OpenVINO until
+# a separate deployment approval sets INFERENCE_BACKEND=roboflow and provides
+# ROBOFLOW_API_KEY through Render's secret environment settings.
+ROBOFLOW_API_URL = os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com").strip()
+ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "jamess-workspace-cjnrd").strip()
+ROBOFLOW_WORKFLOW_ID = os.getenv(
+    "ROBOFLOW_WORKFLOW_ID",
+    "coconut-leaf-disease-j9noh-19-yolo26s-t1-vcoconut-leaf-disease-j9noh-19-yolo26s-t1-logic",
+).strip()
+ROBOFLOW_IMAGE_INPUT_KEY = os.getenv("ROBOFLOW_IMAGE_INPUT_KEY", "image").strip()
+ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "").strip()
+ROBOFLOW_MAX_IMAGE_DIMENSION = _positive_int_env("ROBOFLOW_MAX_IMAGE_DIMENSION", 1600)
+ROBOFLOW_MAX_IMAGE_BYTES = _positive_int_env("ROBOFLOW_MAX_IMAGE_BYTES", 3_500_000)
+ROBOFLOW_TIMEOUT_SECONDS = _positive_int_env("ROBOFLOW_TIMEOUT_SECONDS", 20)
+ROBOFLOW_FAILURE_COOLDOWN_SECONDS = _positive_int_env("ROBOFLOW_FAILURE_COOLDOWN_SECONDS", 15)
 
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.

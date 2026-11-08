@@ -19,6 +19,11 @@ import numpy as np
 class InferenceUnavailable(RuntimeError):
     """Raised when a detector could not analyse an image reliably."""
 
+    def __init__(self, message: str, *, category: str = "execution_failed") -> None:
+        super().__init__(message)
+        # This is deliberately a small local category, never a provider response.
+        self.category = category
+
 
 def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
                         annotate: bool = True) -> dict[str, Any]:
@@ -41,7 +46,10 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
                     # CoconutDiseaseDetector supports annotate=False.
                     result = detector.predict(image, conf=confidence)
     except Exception as exc:
-        raise InferenceUnavailable("Detector execution failed") from exc
+        raise InferenceUnavailable(
+            "Detector execution failed",
+            category=str(getattr(exc, "category", "execution_failed")),
+        ) from exc
 
     if not isinstance(result, dict):
         raise InferenceUnavailable("Detector returned an invalid response")

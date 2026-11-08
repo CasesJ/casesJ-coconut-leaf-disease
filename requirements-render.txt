@@ -23,3 +23,5 @@ openvino>=2024.0.0
 pyserial>=3.5
 psutil>=5.9.0
 asyncio-contextmanager>=1.0.0
+# Used only when INFERENCE_BACKEND=roboflow; OpenVINO remains the deployed default.
+inference-sdk>=1.5.0,<2

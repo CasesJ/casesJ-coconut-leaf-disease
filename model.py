@@ -440,5 +440,10 @@ class CoconutDiseaseDetector:
             'note': f"Davao region recommendations{confidence_note}. Location: {location_info['source'].replace('_', ' ')}"
         }
     
-# Singleton — loaded once on startup
-detector = CoconutDiseaseDetector()
+# Singleton — loaded once on startup. Cloud mode imports no OpenVINO module or weights.
+if INFERENCE_BACKEND == "roboflow":
+    from app.infrastructure.ml.roboflow_detector import RoboflowDiseaseDetector
+
+    detector = RoboflowDiseaseDetector()
+else:
+    detector = CoconutDiseaseDetector()

@@ -6,6 +6,7 @@ import hashlib
 import logging
 import time
 
+import cv2
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -233,7 +234,7 @@ def _log_memory(stage: str, operation_id: str) -> None:
     )
 
 
-def _storage_draft_size(width: int, height: int, max_pixels: int) -> tuple[int, int] | None:
+def _storage_draft_factor(width: int, height: int, max_pixels: int) -> int | None:
     """Choose a libjpeg power-of-two DCT reduction that is at or below the cap."""
     pixels = width * height
     if pixels <= max_pixels:
@@ -241,7 +242,22 @@ def _storage_draft_size(width: int, height: int, max_pixels: int) -> tuple[int, 
     factor = 2
     while (width * height) / (factor * factor) > max_pixels:
         factor *= 2
+    return factor
+
+
+def _storage_draft_size(width: int, height: int, max_pixels: int) -> tuple[int, int] | None:
+    factor = _storage_draft_factor(width, height, max_pixels)
+    if factor is None:
+        return None
     return max(1, (width + factor - 1) // factor), max(1, (height + factor - 1) // factor)
+
+
+def _opencv_reduced_flag(factor: int) -> int:
+    return {
+        2: cv2.IMREAD_REDUCED_COLOR_2,
+        4: cv2.IMREAD_REDUCED_COLOR_4,
+        8: cv2.IMREAD_REDUCED_COLOR_8,
+    }[factor] | cv2.IMREAD_IGNORE_ORIENTATION
 
 
 def _prepare_cloudinary_copy(
@@ -265,42 +281,95 @@ def _prepare_cloudinary_copy(
     source_width, source_height = original_metadata["dimensions"]
     storage_pixel_limit = min(config.CLOUDINARY_MAX_IMAGE_PIXELS,
                               config.DETECTION_STORAGE_MAX_PIXELS)
+    draft_factor = _storage_draft_factor(source_width, source_height, storage_pixel_limit)
     draft_size = _storage_draft_size(source_width, source_height, storage_pixel_limit)
     if len(content) <= config.DETECTION_STORAGE_MAX_BYTES and draft_size is None:
         return content, "source_original"
     compression_ms = 0.0
+    rss_samples: list[float] = []
+
+    def sample_memory(stage: str) -> None:
+        _log_memory(stage, operation_id)
+        rss_bytes = process_memory_metrics()["rss_bytes"]
+        if rss_bytes is not None:
+            rss_samples.append(rss_bytes / (1024 * 1024))
+
+    def record_peak() -> None:
+        if timings is not None and rss_samples:
+            timings["storage_preparation_peak_rss_mib"] = max(rss_samples)
+
     try:
         with Image.open(BytesIO(content)) as source:
             if draft_size is not None:
                 # Must precede load(): libjpeg can then decode only the selected
                 # DCT raster instead of allocating the full DJI image.
                 source.draft("RGB", draft_size)
-            _log_memory("before_pillow_load", operation_id)
+                if source.size[0] * source.size[1] > storage_pixel_limit:
+                    # This JPEG ignores Pillow's draft request. Do not load its
+                    # full raster: OpenCV can perform the same decoder-level
+                    # reduction while retaining the protected metadata below.
+                    sample_memory("before_opencv_reduced_decode")
+                    raster = cv2.imdecode(
+                        np.frombuffer(content, np.uint8), _opencv_reduced_flag(draft_factor),
+                    )
+                    sample_memory("after_opencv_reduced_decode")
+                    if raster is None or raster.shape[0] * raster.shape[1] > storage_pixel_limit:
+                        raise DetectionImageProcessingError(
+                            "JPEG cannot be safely reduced within the storage pixel limit"
+                        )
+                    for quality in _JPEG_QUALITIES:
+                        compression_started = time.perf_counter()
+                        sample_memory(f"before_opencv_jpeg_encode_q{quality}")
+                        encoded, output = cv2.imencode(
+                            ".jpg", raster, [cv2.IMWRITE_JPEG_QUALITY, quality],
+                        )
+                        sample_memory(f"after_opencv_jpeg_encode_q{quality}")
+                        compression_ms += (time.perf_counter() - compression_started) * 1000
+                        if not encoded:
+                            continue
+                        candidate = _inject_protected_segments(output.tobytes(), protected_segments)
+                        if len(candidate) > config.DETECTION_STORAGE_MAX_BYTES:
+                            continue
+                        metadata_started = time.perf_counter()
+                        sample_memory("before_storage_metadata_verification")
+                        candidate_metadata = _metadata_snapshot(candidate)
+                        metadata_ms += (time.perf_counter() - metadata_started) * 1000
+                        sample_memory("after_storage_metadata_verification")
+                        if _metadata_matches_resized(original_metadata, candidate_metadata):
+                            if timings is not None:
+                                timings["image_compression_ms"] = compression_ms
+                                timings["image_metadata_verification_ms"] = metadata_ms
+                            record_peak()
+                            return candidate, "reduced_jpeg_storage_copy"
+                    raise DetectionImageProcessingError(
+                        "JPEG cannot fit the storage byte limit while preserving required metadata"
+                    )
+            sample_memory("before_pillow_load")
             source.load()
-            _log_memory("after_pillow_load", operation_id)
+            sample_memory("after_pillow_load")
             stored_dimensions = source.size
             if stored_dimensions[0] * stored_dimensions[1] > storage_pixel_limit:
                 raise DetectionImageProcessingError(
-                    "JPEG decoder could not reduce image within storage pixel limit"
+                    "JPEG cannot be safely reduced within the storage pixel limit"
                 )
             for quality in _JPEG_QUALITIES:
                 compression_started = time.perf_counter()
-                _log_memory(f"before_jpeg_encode_q{quality}", operation_id)
+                sample_memory(f"before_jpeg_encode_q{quality}")
                 output = BytesIO()
                 options = {"format": "JPEG", "quality": quality, "optimize": True}
                 source.save(output, **options)
                 candidate = _inject_protected_segments(output.getvalue(), protected_segments)
                 output.close()
                 compression_ms += (time.perf_counter() - compression_started) * 1000
-                _log_memory(f"after_jpeg_encode_q{quality}", operation_id)
+                sample_memory(f"after_jpeg_encode_q{quality}")
                 if len(candidate) > config.DETECTION_STORAGE_MAX_BYTES:
                     del candidate
                     continue
                 metadata_started = time.perf_counter()
-                _log_memory("before_storage_metadata_verification", operation_id)
+                sample_memory("before_storage_metadata_verification")
                 candidate_metadata = _metadata_snapshot(candidate)
                 metadata_ms += (time.perf_counter() - metadata_started) * 1000
-                _log_memory("after_storage_metadata_verification", operation_id)
+                sample_memory("after_storage_metadata_verification")
                 matches = (_metadata_matches_resized(original_metadata, candidate_metadata)
                            if draft_size is not None else _metadata_matches(original_metadata, candidate_metadata))
                 if not matches:
@@ -312,6 +381,7 @@ def _prepare_cloudinary_copy(
                 if timings is not None:
                     timings["image_compression_ms"] = compression_ms
                     timings["image_metadata_verification_ms"] = metadata_ms
+                record_peak()
                 return candidate, ("reduced_jpeg_storage_copy" if draft_size is not None
                                    else "compressed_jpeg_storage_copy")
     except DetectionImageProcessingError:

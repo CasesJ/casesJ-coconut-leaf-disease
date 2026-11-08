@@ -400,9 +400,15 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_ima
         )
     except InferenceUnavailable as exc:
         logger.error("Monitoring inference failed for %s/%s: %s", farmer_id, case_id, exc)
+        if exc.category == "image_too_large":
+            status_code, detail = 413, "The follow-up image is too large for disease analysis."
+        elif exc.category in {"rate_limited", "cooldown", "request_in_progress"}:
+            status_code, detail = 429, "Disease analysis is temporarily busy. Please try again shortly."
+        else:
+            status_code, detail = 503, "Disease analysis is temporarily unavailable. The follow-up was not saved."
         raise HTTPException(
-            503,
-            "Disease analysis is temporarily unavailable. The follow-up was not saved.",
+            status_code,
+            detail,
         ) from exc
     image_height, image_width = decoded_image.shape[:2]
     image_dimensions = {"width": int(image_width), "height": int(image_height)}
