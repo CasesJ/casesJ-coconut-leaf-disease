@@ -1,4 +1,5 @@
 """Offline worker protocol and source-integrity tests; no model/provider calls."""
+import asyncio
 import hashlib
 import os
 import shutil
@@ -51,6 +52,18 @@ def test_worker_signatures_cover_method_path_nonce_timestamp_and_body():
     assert sign_worker_request("secret", "POST", "/hybrid/worker/claim", 10, "n", b"{}") != sign_worker_request("secret", "POST", "/hybrid/worker/claim", 10, "other", b"{}")
 
 
+def test_worker_timing_log_is_bounded_and_contains_no_payload_data(caplog):
+    from hybrid_worker import _log_timing
+
+    with caplog.at_level("INFO", logger="coconutai.hybrid_worker"):
+        _log_timing("a" * 32, "worker_pipeline", duration_ms=12.345, ignored=float("inf"))
+
+    assert "job_id=" + "a" * 32 in caplog.text
+    assert "duration_ms=12.3" in caplog.text
+    assert "ignored" not in caplog.text
+    assert "secret" not in caplog.text.lower()
+
+
 def test_render_worker_memory_log_uses_existing_rss_and_cgroup_metrics(monkeypatch, caplog):
     from app.api import hybrid_worker as worker_api
     monkeypatch.setattr(worker_api, "process_memory_metrics", lambda: {
@@ -64,6 +77,41 @@ def test_render_worker_memory_log_uses_existing_rss_and_cgroup_metrics(monkeypat
     assert "stage=worker_reconcile rss_mib=260.0 cgroup_mib=290.0" in caplog.text
     assert "cgroup_limit_mib=512.0 oom_kill=0" in caplog.text
     assert "secret" not in caplog.text.lower()
+
+
+def test_worker_completion_survives_timing_persistence_failure(monkeypatch, caplog):
+    from app.api import hybrid_worker as worker_api
+
+    class Store:
+        db = object()
+        completed = False
+        def complete(self, *_args):
+            self.completed = True
+            return {"status": "completed"}
+        def record_timing(self, *_args):
+            raise RuntimeError("diagnostics unavailable")
+
+    store=Store()
+    async def authenticated(_request):
+        return "worker", {"lease_token":"a"*32, "result":{}}
+    async def inline(function, *args):
+        return function(*args)
+
+    monkeypatch.setattr(worker_api, "_authenticated_payload", authenticated)
+    monkeypatch.setattr(worker_api, "_store", lambda: store)
+    monkeypatch.setattr(worker_api, "run_in_threadpool", inline)
+    monkeypatch.setattr(worker_api, "_log_render_memory", lambda _stage: None)
+    monkeypatch.setattr("app.services.hybrid_record_commit.commit_completed_job", lambda *_args: {
+        "record_id":"hybrid_record", "created":True,
+    })
+
+    with caplog.at_level("WARNING", logger=worker_api.__name__):
+        response=asyncio.run(worker_api.complete("b"*32, object()))
+
+    assert response == {"status":"completed", "record_id":"hybrid_record", "created":True}
+    assert store.completed
+    assert "stage=render_completion" in caplog.text
+    assert "diagnostics unavailable" not in caplog.text
 
 
 def test_worker_request_rejects_oversize_before_full_buffer_or_hmac(monkeypatch):

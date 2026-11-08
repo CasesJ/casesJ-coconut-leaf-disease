@@ -26,3 +26,11 @@ def test_hybrid_browser_avoids_duplicate_direct_upload_after_ambiguous_outcome()
     assert "uploadOutcomeUnknown" in SOURCE
     assert "Do not upload this file again" in SOURCE
     assert "HYBRID_POLL_TIMEOUT_MS" in SOURCE
+
+
+def test_hybrid_browser_keeps_timing_diagnostics_separate_from_farmer_summary():
+    assert "measured_ms" in SOURCE
+    assert "wall_clock_ms" in SOURCE
+    assert "Developer timing diagnostics" in SOURCE
+    assert "frontend_result_markup_ms" in SOURCE
+    assert "derived from job timestamps" in SOURCE

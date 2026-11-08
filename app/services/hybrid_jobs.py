@@ -6,6 +6,7 @@ Cloudinary, image, model, or browser dependencies.
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import time
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,16 @@ FAILED = "failed"
 COMPLETED = "completed"
 CLEANUP_PENDING = "cleanup_pending"
 CLEANED = "cleaned"
+
+# Only bounded elapsed-time values may be persisted in a hybrid job. These are
+# operational diagnostics, never request payloads, URLs, identities, or image
+# metadata. New fields are optional so jobs created before telemetry remain
+# fully readable.
+TIMING_FIELDS = frozenset({
+    "render_authorization_ms", "render_confirmation_verification_ms",
+    "render_confirmation_total_ms", "render_completion_job_ms",
+    "render_record_persistence_ms",
+})
 
 _ALLOWED = {
     UPLOAD_INTENT: {PENDING, CLEANUP_PENDING},
@@ -258,6 +269,28 @@ class HybridJobStore:
             if not job or job.get("user_id") != user_id:
                 raise HybridJobError("Hybrid upload intent not found")
             return job
+        return self._run(operation)
+
+    def record_timing(self, job_id: str, values: dict[str, float]) -> dict:
+        """Merge bounded measured durations into a job without changing its state."""
+        safe = {
+            name: round(float(value), 1)
+            for name, value in values.items()
+            if (name in TIMING_FIELDS and isinstance(value, (int, float))
+                and math.isfinite(value) and 0 <= value <= 600_000)
+        }
+        if not safe:
+            return {}
+
+        def operation(txn):
+            ref = self._job_ref(job_id)
+            job = _snapshot_dict(txn.get(ref))
+            if not job:
+                raise HybridJobError("Hybrid job not found")
+            current = job.get("timing") if isinstance(job.get("timing"), dict) else {}
+            merged = {**current, **safe}
+            txn.update(ref, {"timing": merged, "updated_at": self.now()})
+            return merged
         return self._run(operation)
 
     def get_job(self, job_id):

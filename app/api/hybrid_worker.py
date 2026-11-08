@@ -154,13 +154,30 @@ async def complete(job_id: str, request: Request):
     try:
         store = _store()
         _log_render_memory("before_result_commit")
+        completion_started = time.perf_counter()
         job = await run_in_threadpool(store.complete, job_id, worker_id, _lease_token(payload), result)
+        job_completion_ms = (time.perf_counter() - completion_started) * 1000
         # Record projection is idempotent and transactionally binds the job to
         # its canonical record. A crash after completion is recoverable by the
         # bounded reconciliation endpoint; it cannot create a partial record.
         from app.services.hybrid_record_commit import commit_completed_job  # noqa: PLC0415
+        record_started = time.perf_counter()
         outcome = await run_in_threadpool(commit_completed_job, store.db, job_id)
+        record_persistence_ms = (time.perf_counter() - record_started) * 1000
+        try:
+            await run_in_threadpool(store.record_timing, job_id, {
+                "render_completion_job_ms": job_completion_ms,
+                "render_record_persistence_ms": record_persistence_ms,
+            })
+        except Exception:
+            # Completion and record persistence have already succeeded.  A
+            # telemetry failure must not make the worker retry that success.
+            logger.warning("Hybrid timing persistence failed job_id=%s stage=render_completion", job_id)
         _log_render_memory("after_result_commit")
+        logger.info(
+            "Hybrid timing job_id=%s stage=render_completion job_completion_ms=%.1f record_persistence_ms=%.1f",
+            job_id, job_completion_ms, record_persistence_ms,
+        )
         return {"status": job["status"], **outcome}
     except LeaseConflict:
         raise HTTPException(409, "Worker lease is no longer valid") from None

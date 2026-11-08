@@ -392,7 +392,7 @@ def upload_asset(content: bytes, content_type: str, category: str, *,
         raise CloudinaryStorageError("Cloudinary image upload failed") from None
 
 
-def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
+def upload_hybrid_thumbnail(content: bytes, job_id: str, *, timing: dict[str, float] | None = None) -> dict:
     """Store one stable, authenticated preview for a hybrid job.
 
     Cloudinary and Firestore cannot commit atomically.  A deterministic public
@@ -434,7 +434,8 @@ def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
             "byte_size": len(content), "sha256": digest,
         }
 
-    def inspect_existing():
+    def inspect_existing(stage: str):
+        started = time.perf_counter()
         try:
             return api.resource(public_id, resource_type="image", type="authenticated", context=True)
         except Exception as error:
@@ -443,10 +444,16 @@ def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
             if isinstance(error, NotFound) or _http_status(error) == 404:
                 return None
             raise CloudinaryStorageError("Hybrid thumbnail inspection is unavailable") from None
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000
+            if timing is not None:
+                timing[f"worker_thumbnail_{stage}_ms"] = round(duration_ms, 1)
+            logger.info("Hybrid timing job_id=%s stage=thumbnail_%s duration_ms=%.1f", job_id, stage, duration_ms)
 
-    existing = inspect_existing()
+    existing = inspect_existing("initial_inspection")
     if existing is not None:
         return verified_reference(existing)
+    upload_started = time.perf_counter()
     try:
         uploader.upload(
             BytesIO(content), resource_type="image", type="authenticated",
@@ -458,7 +465,12 @@ def upload_hybrid_thumbnail(content: bytes, job_id: str) -> dict:
         # Upload may have succeeded despite a lost response.  An exact-ID
         # inspection can adopt it; otherwise leave the job retryable.
         pass
-    existing = inspect_existing()
+    finally:
+        duration_ms = (time.perf_counter() - upload_started) * 1000
+        if timing is not None:
+            timing["worker_thumbnail_upload_ms"] = round(duration_ms, 1)
+        logger.info("Hybrid timing job_id=%s stage=thumbnail_upload duration_ms=%.1f", job_id, duration_ms)
+    existing = inspect_existing("validation")
     if existing is None:
         raise CloudinaryStorageError("Hybrid thumbnail could not be verified")
     return verified_reference(existing)

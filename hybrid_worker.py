@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -26,6 +27,17 @@ from app.services.hybrid_worker_auth import make_worker_headers
 from app.infrastructure.cloudinary_storage import CloudinaryStorageError
 
 logger = logging.getLogger("coconutai.hybrid_worker")
+
+
+def _log_timing(job_id: str, stage: str, **durations: float) -> None:
+    """Emit only bounded elapsed milliseconds and the non-secret job identifier."""
+    safe = {
+        name: round(float(value), 1)
+        for name, value in durations.items()
+        if isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 600_000
+    }
+    fields = " ".join(f"{name}={value:.1f}" for name, value in safe.items())
+    logger.info("Hybrid timing job_id=%s stage=%s %s", job_id, stage, fields)
 
 
 class WorkerProtocolError(RuntimeError):
@@ -131,20 +143,28 @@ def _run_existing_pipeline(job: dict, source_path: Path) -> dict:
     """Use the existing decode/inference functions unchanged after verification."""
     from app.api.detections import _map_detections_to_source, _prepare_upload  # noqa: PLC0415
     from app.services.inference_service import run_image_inference  # noqa: PLC0415
+    model_started = time.monotonic()
     from model import detector  # noqa: PLC0415
+    model_load_ms = (time.monotonic() - model_started) * 1000
 
     contents = source_path.read_bytes()  # Hash/length were already verified while streamed.
+    preparation_started = time.monotonic()
     (inference_contents, image_metadata, lat, lng, gps_source, gps_accuracy,
      image, dimensions, scale_x, scale_y, timings) = _prepare_upload(
         contents, job["public_id"], f"hybrid-{job['id']}",
     )
+    preparation_ms = (time.monotonic() - preparation_started) * 1000
     del inference_contents
+    inference_started = time.monotonic()
     result = run_image_inference(detector, image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD, annotate=False)
+    inference_ms = (time.monotonic() - inference_started) * 1000
     detections = _map_detections_to_source(result["detections"], scale_x, scale_y)
     recorded = [item for item in detections if item["confidence"] >= UPLOAD_RECORD_CONFIDENCE_THRESHOLD]
     # This is a display-only derivative.  It reuses the local inference raster
     # and never changes source bytes, detector preprocessing, or box mapping.
+    thumbnail_started = time.monotonic()
     thumbnail = _encode_hybrid_thumbnail(image) if recorded else None
+    thumbnail_generation_ms = (time.monotonic() - thumbnail_started) * 1000 if recorded else None
     del image, result, contents
     # Stage 2C stores a private job result only. A later approved stage will
     # create detection records/evidence with the established Render workflow.
@@ -157,13 +177,25 @@ def _run_existing_pipeline(job: dict, source_path: Path) -> dict:
         "image_metadata": image_metadata,
         "inference_backend": detector.backend,
         "source_identity": {"public_id": job["public_id"], "sha256": job["source_sha256"], "bytes": job["source_bytes"]},
-        "diagnostics": {"decode_scale": max(scale_x, scale_y), "preparation_ms": timings},
+        "diagnostics": {
+            "decode_scale": max(scale_x, scale_y), "preparation_ms": timings,
+            "worker_model_load_ms": round(model_load_ms, 1),
+            "worker_preparation_total_ms": round(preparation_ms, 1),
+            "worker_validation_ms": round(timings.get("validation_ms", 0), 1),
+            "worker_metadata_gps_ms": round(timings.get("metadata_gps_ms", 0), 1),
+            "worker_decode_ms": round(timings.get("decode_ms", 0), 1),
+            "worker_inference_ms": round(inference_ms, 1),
+            **({"worker_thumbnail_generation_ms": round(thumbnail_generation_ms, 1)}
+               if thumbnail_generation_ms is not None else {}),
+        },
         "thumbnail_bytes": thumbnail,
     }
 
 
 def process_one(client: WorkerClient) -> bool:
+    claim_started = time.monotonic()
     job = client.claim()
+    claim_ms = (time.monotonic() - claim_started) * 1000
     if not job:
         return False
     job_id = job["id"]
@@ -182,13 +214,27 @@ def process_one(client: WorkerClient) -> bool:
                 result = _run_existing_pipeline(job, source)
                 result.setdefault("diagnostics", {})["worker_download_ms"] = round(download_ms, 1)
                 result["diagnostics"]["worker_inference_total_ms"] = round((time.monotonic() - inference_started) * 1000, 1)
+                result["diagnostics"]["worker_claim_request_ms"] = round(claim_ms, 1)
+                _log_timing(
+                    job_id, "worker_pipeline", claim_ms=claim_ms, download_ms=download_ms,
+                    preparation_ms=result["diagnostics"].get("worker_preparation_total_ms", 0),
+                    inference_ms=result["diagnostics"].get("worker_inference_ms", 0),
+                    total_ms=result["diagnostics"]["worker_inference_total_ms"],
+                )
                 thumbnail = result.pop("thumbnail_bytes", None)
                 if thumbnail:
                     from app.infrastructure.cloudinary_storage import upload_hybrid_thumbnail  # noqa: PLC0415
-                    result["thumbnail_asset"] = upload_hybrid_thumbnail(thumbnail, job_id)
+                    thumbnail_timing: dict[str, float] = {}
+                    result["thumbnail_asset"] = upload_hybrid_thumbnail(
+                        thumbnail, job_id, timing=thumbnail_timing,
+                    )
+                    result["diagnostics"].update(thumbnail_timing)
             if lease.lost.is_set():
                 return True
+            completion_started = time.monotonic()
             client.complete(job_id, lease_token, result)
+            completion_ms = (time.monotonic() - completion_started) * 1000
+            _log_timing(job_id, "worker_completion_request", duration_ms=completion_ms)
             logger.info("Hybrid worker completed job_id=%s detections=%d", job_id, len(result["detections"]))
         except SourceIntegrityError:
             if not lease.lost.is_set():

@@ -175,6 +175,46 @@ def test_authorization_is_idempotent_and_confirmation_is_owner_bound(monkeypatch
         hybrid_uploads.confirm_upload(user_id="u", job_id=first["job_id"], asset_id="different")
 
 
+def test_authorization_survives_timing_persistence_failure(monkeypatch, caplog):
+    store=HybridJobStore(DB(), now=lambda: datetime(2026,1,1,tzinfo=timezone.utc))
+    monkeypatch.setattr(hybrid_uploads, "_store", lambda: store)
+    monkeypatch.setattr(hybrid_uploads, "create_hybrid_upload_signature", lambda **kw: {"cloud_name":"test", "signature":"sig", **kw})
+    monkeypatch.setattr(store, "record_timing", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("diagnostics unavailable")))
+
+    with caplog.at_level("WARNING", logger=hybrid_uploads.__name__):
+        authorization=hybrid_uploads.create_upload_authorization(
+            user_id="private-farmer", idempotency_key="a"*16, source_sha256="c"*64, source_bytes=10,
+        )
+
+    assert authorization["job_id"]
+    assert store.get_job(authorization["job_id"])["status"] == "upload_intent"
+    assert "stage=render_authorization" in caplog.text
+    assert "private-farmer" not in caplog.text and "diagnostics unavailable" not in caplog.text
+
+
+def test_confirmation_survives_timing_persistence_failure(monkeypatch, caplog):
+    store=HybridJobStore(DB(), now=lambda: datetime(2026,1,1,tzinfo=timezone.utc))
+    monkeypatch.setattr(hybrid_uploads, "_store", lambda: store)
+    job,_=store.create_upload_intent(
+        user_id="private-farmer", idempotency_key="a"*16,
+        public_id="neuralcoco/hybrid-original/"+"a"*32+".jpg", source_sha256="c"*64,
+        source_bytes=10, route_type="detection",
+        upload_expires_at=datetime(2026,1,1,1,tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(hybrid_uploads, "verify_hybrid_uploaded_asset", lambda **kw: {
+        "asset_id":"asset", "public_id":kw["public_id"], "byte_size":10,
+    })
+    monkeypatch.setattr(store, "record_timing", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("diagnostics unavailable")))
+
+    with caplog.at_level("WARNING", logger=hybrid_uploads.__name__):
+        confirmed=hybrid_uploads.confirm_upload(user_id="private-farmer", job_id=job, asset_id="asset")
+
+    assert confirmed["status"] == "pending"
+    assert store.get_job(job)["status"] == "pending"
+    assert "stage=render_confirmation" in caplog.text
+    assert "private-farmer" not in caplog.text and "diagnostics unavailable" not in caplog.text
+
+
 def test_hybrid_http_routes_are_absent_from_default_render_local_app():
     from app.main import create_app
 
@@ -193,6 +233,48 @@ def test_owner_status_projection_hides_source_and_worker_secrets(monkeypatch):
     status=hybrid_uploads.upload_status(user_id="u", job_id=job)
     assert status["status"] == "upload_intent"
     assert "cloudinary_asset" not in status and "source_sha256" not in status and "lease_owner" not in status
+
+
+def test_owner_status_exposes_only_bounded_timing_diagnostics(monkeypatch):
+    store = HybridJobStore(DB(), now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
+    monkeypatch.setattr(hybrid_uploads, "_store", lambda: store)
+    job, _ = store.create_upload_intent(
+        user_id="u", idempotency_key="z" * 16,
+        public_id="neuralcoco/hybrid-original/" + "a" * 32 + ".jpg",
+        source_sha256="c" * 64, source_bytes=12, route_type="detection",
+    )
+    store.record_timing(job, {
+        "render_authorization_ms": 12.345,
+        "render_confirmation_total_ms": 23.456,
+        "not_a_timing_field": 99,
+    })
+
+    status = hybrid_uploads.upload_status(user_id="u", job_id=job)
+
+    assert status["timing"]["measured_ms"] == {
+        "render_authorization_ms": 12.3,
+        "render_confirmation_total_ms": 23.5,
+    }
+    assert "source_sha256" not in str(status)
+    assert "cloudinary_asset" not in str(status)
+
+
+def test_authorization_timing_log_contains_only_job_identifier(monkeypatch, caplog):
+    store = HybridJobStore(DB(), now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
+    monkeypatch.setattr(hybrid_uploads, "_store", lambda: store)
+    monkeypatch.setattr(hybrid_uploads, "create_hybrid_upload_signature", lambda **_kwargs: {
+        "cloud_name": "cloud", "signature": "must-not-be-logged",
+    })
+
+    with caplog.at_level("INFO", logger=hybrid_uploads.__name__):
+        result = hybrid_uploads.create_upload_authorization(
+            user_id="farmer-private-id", idempotency_key="z" * 16,
+            source_sha256="c" * 64, source_bytes=12,
+        )
+
+    assert f"job_id={result['job_id']}" in caplog.text
+    assert "must-not-be-logged" not in caplog.text
+    assert "farmer-private-id" not in caplog.text
 
 
 def test_hybrid_thumbnail_retry_adopts_exact_existing_asset(monkeypatch):
@@ -244,11 +326,18 @@ def test_hybrid_thumbnail_sdk_not_found_uploads_once_and_verifies(monkeypatch):
     monkeypatch.setattr(cloudinary_storage, "_configure", lambda: ("test", "key", "secret"))
     monkeypatch.setattr(api, "resource", inspect)
     monkeypatch.setattr(uploader, "upload", upload)
-    reference = cloudinary_storage.upload_hybrid_thumbnail(content, job_id)
+    timing = {}
+    reference = cloudinary_storage.upload_hybrid_thumbnail(content, job_id, timing=timing)
     assert len(stored) == 1 and len(inspections) == 2
     assert reference["asset_id"] == "new-asset"
     assert reference["sha256"] == digest
     assert reference["delivery_type"] == "authenticated"
+    assert set(timing) == {
+        "worker_thumbnail_initial_inspection_ms",
+        "worker_thumbnail_upload_ms",
+        "worker_thumbnail_validation_ms",
+    }
+    assert all(value >= 0 for value in timing.values())
 
 
 def test_hybrid_thumbnail_sdk_not_found_rejects_wrong_uploaded_identity(monkeypatch):
