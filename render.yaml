@@ -10,7 +10,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.11"
       - key: INFERENCE_BACKEND
-        value: openvino
+        value: roboflow
       - key: OPENVINO_MODEL_DIR
         value: models/yolo26s_openvino_model
       - key: MAX_IMAGE_UPLOAD_BYTES
