@@ -274,9 +274,9 @@ def test_mpo_primary_frame_is_converted_for_inference_with_exif_preserved(monkey
     assert len(seen) == 1
     # OpenCV applies EXIF orientation while retaining the same pixel count.
     assert seen[0].shape[:2] == (32, 24)
-    # Source identity retains the encoded dimensions; OpenCV may orient the
-    # decoded inference raster separately.
-    assert result["image_dimensions"] == {"width": 32, "height": 24}
+    # Coordinates and display dimensions use the EXIF-oriented raster, which
+    # is the coordinate system rendered by browsers and Cloudinary.
+    assert result["image_dimensions"] == {"width": 24, "height": 32}
     assert result["gps_lat"] == pytest.approx(7.3)
     assert result["gps_lng"] == pytest.approx(125.6)
     assert result["gps_source"] == "dji_exif"

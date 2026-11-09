@@ -95,6 +95,12 @@ def _prepare_upload(contents: bytes, filename: str | None, operation_id: str = "
                 raise ValueError("Upload a single-frame photograph, not an animation or multi-page image")
             pixels = source_image.width * source_image.height
             source_width, source_height = source_image.size
+            # OpenCV applies EXIF orientation by default.  Store dimensions in
+            # that same display/oriented coordinate space so boxes align with
+            # browser and Cloudinary rendering of portrait phone/drone photos.
+            orientation = source_image.getexif().get(274)
+            if orientation in {5, 6, 7, 8}:
+                source_width, source_height = source_height, source_width
             if pixels > MAX_IMAGE_UPLOAD_PIXELS:
                 raise ValueError(
                     f"Image resolution is {source_image.width} x {source_image.height} "
@@ -462,12 +468,14 @@ async def detect_image(
         "message": f"{len(all_detections)} detections found ({len(high_confidence_detections)} saved)",
         "display_confidence_threshold": UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD,
         "record_confidence_threshold": UPLOAD_RECORD_CONFIDENCE_THRESHOLD,
-        "model": {
-            "name": "YOLO26 v6",
-            "backend": detector.backend,
-            "weights": detector.active_model_path.name if detector.active_model_path else None,
-            "classes": detector.class_names,
-        },
+        "model": (
+            detector.model_info() if callable(getattr(detector, "model_info", None)) else {
+                "name": "YOLO26 v6",
+                "backend": detector.backend,
+                "weights": detector.active_model_path.name if detector.active_model_path else None,
+                "classes": detector.class_names,
+            }
+        ),
         "gps_lat": lat, "gps_lng": lng, "gps_accuracy": gps_accuracy,
         "gps_source": gps_source, "gps_metadata_found": lat is not None and lng is not None,
         "image_metadata": image_metadata,

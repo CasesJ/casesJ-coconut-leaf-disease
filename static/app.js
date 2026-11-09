@@ -763,12 +763,15 @@ window.loadDashboardStats = async function loadDashboardStats() {
 
 function normalizeDiseaseClass(label) {
   const normalized = String(label || '').toLowerCase().trim().replace(/_/g, ' ');
-  return normalized === 'bud root' ? 'bud rot' : normalized;
+  if (normalized === 'bud root') return 'bud rot';
+  // Old records retain their source label in Firestore.  This display and
+  // filtering alias preserves their usability without rewriting their history.
+  return normalized === 'pestalotiopsis' ? 'grey leaf spot' : normalized;
 }
 
 function formatDiseaseClass(label) {
   const normalized = normalizeDiseaseClass(label);
-  if (normalized === 'pestalotiopsis') return 'Grey Leaf Spot';
+  if (normalized === 'grey leaf spot') return 'Grey Leaf Spot';
   return normalized.replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -792,7 +795,7 @@ const DETECTION_CLASS_COLORS = {
   'caterpillars': '#f97316',
   'stem bleeding': '#dc2626',
   'drying of leaflets': '#2563eb',
-  'pestalotiopsis': '#06b6d4',
+  'grey leaf spot': '#06b6d4',
   'bud rot': '#eab308',
   unknown: '#64748b'
 };
@@ -1066,10 +1069,10 @@ function renderDashboardHighlights(records) {
 }
 
 function getTreatmentRecommendation(diseaseName) {
-  const normalized = String(diseaseName).toLowerCase();
+  const normalized = normalizeDiseaseClass(diseaseName);
   if (normalized.includes('stem bleeding')) return 'Promptly inspect the trunk for bleeding lesions, improve drainage, avoid bark wounds, and have an agricultural specialist confirm the diagnosis and recommend a locally registered treatment.';
   if (normalized.includes('bud') || normalized.includes('root')) return 'Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.';
-  if (normalized.includes('pestalotiopsis')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
+  if (normalized.includes('grey leaf spot')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
   if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
   return 'Inspect the field closely, isolate the affected trees, and consult a local agronomist for treatment guidance.';
 }
@@ -1484,7 +1487,7 @@ function aggregateClassDistribution(records) {
     });
   });
 
-  const preferredOrder = ['healthy', 'caterpillars', 'drying of leaflets', 'pestalotiopsis', 'bud rot', 'stem bleeding'];
+  const preferredOrder = ['healthy', 'caterpillars', 'drying of leaflets', 'grey leaf spot', 'bud rot', 'stem bleeding'];
   const labels = preferredOrder.filter(label => counts[label]).concat(
     Object.keys(counts).filter(label => !preferredOrder.includes(label))
   );
@@ -1584,7 +1587,7 @@ function renderDetectionColorKey(distribution) {
   const container = document.getElementById('detection-color-key');
   if (!container) return;
 
-  const labels = ['healthy', 'pestalotiopsis', 'bud rot', 'stem bleeding'];
+  const labels = ['healthy', 'grey leaf spot', 'bud rot', 'stem bleeding'];
   const present = new Set((distribution?.labels || []).map(normalizeDiseaseClass));
   const rows = labels.map(label => {
     const color = getDetectionClassColor(label);
@@ -3362,7 +3365,7 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
       });
       return diseases.length > 0;
     });
-    const verifiedHistoryDiseases = ['bud rot', 'stem bleeding', 'pestalotiopsis'];
+    const verifiedHistoryDiseases = ['bud rot', 'stem bleeding', 'grey leaf spot'];
     // A single verified upload can contain more than one disease detection.
     // Keep the overall total on the same basis as the disease cards.
     const totalVerifiedDiseases = Object.values(diseaseCounts).reduce((total, count) => total + count, 0);

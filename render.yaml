@@ -7,9 +7,19 @@ services:
     healthCheckPath: /health
     envVars:
       - key: INFERENCE_BACKEND
-        value: openvino
-      - key: OPENVINO_MODEL_DIR
-        value: models/yolo26s_openvino_model
+        value: roboflow
+      # Enter these values in Render before the first deploy.  `sync: false`
+      # keeps secrets and workflow settings out of source control.
+      - key: ROBOFLOW_API_KEY
+        sync: false
+      - key: ROBOFLOW_WORKSPACE
+        sync: false
+      - key: ROBOFLOW_WORKFLOW_ID
+        sync: false
+      - key: ROBOFLOW_IMAGE_INPUT_KEY
+        value: image
+      - key: ROBOFLOW_TIMEOUT_SECONDS
+        value: "45"
       - key: MAX_IMAGE_UPLOAD_BYTES
         value: "50000000"
       - key: MAX_IMAGE_UPLOAD_PIXELS

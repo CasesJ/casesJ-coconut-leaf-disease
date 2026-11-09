@@ -98,9 +98,18 @@ TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS")
 
 # Inference backend. Render must opt in explicitly; local development keeps the
 # established Ultralytics/PyTorch path unless this value is changed.
-INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "ultralytics").strip().lower()
-if INFERENCE_BACKEND not in {"ultralytics", "openvino"}:
-    raise RuntimeError("INFERENCE_BACKEND must be 'ultralytics' or 'openvino'")
+# The hosted workflow is the production path.  Unlike the local backends it
+# does not load PyTorch or OpenVINO into a 512 MB Render worker.  Local modes
+# remain explicit development fallbacks; they are never selected accidentally.
+INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "roboflow").strip().lower()
+if INFERENCE_BACKEND not in {"roboflow", "ultralytics", "openvino"}:
+    raise RuntimeError("INFERENCE_BACKEND must be 'roboflow', 'ultralytics' or 'openvino'")
+ROBOFLOW_API_URL = os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com").rstrip("/")
+ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "").strip()
+ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "").strip()
+ROBOFLOW_WORKFLOW_ID = os.getenv("ROBOFLOW_WORKFLOW_ID", "").strip()
+ROBOFLOW_IMAGE_INPUT_KEY = os.getenv("ROBOFLOW_IMAGE_INPUT_KEY", "image").strip() or "image"
+ROBOFLOW_TIMEOUT_SECONDS = _positive_int_env("ROBOFLOW_TIMEOUT_SECONDS", 45)
 
 # ── Confidence thresholds ──────────────────────────────────────────────────────
 # Show all detections >= 5% to the farmer; still record and save them.
@@ -143,7 +152,7 @@ EXPERT_DISEASE_OPTIONS: list[str] = [
     "Caterpillars",
     "Drying of Leaflets",
     "Healthy",
-    "Pestalotiopsis",
+    "Grey Leaf Spot",
     "Bud Rot",
     "Stem Bleeding",
 ]

@@ -189,7 +189,8 @@ def _build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         "caterpillars":         "#F97316",
         "stem bleeding":        "#DC2626",
         "drying of leaflets":   "#2563EB",
-        "pestalotiopsis":       "#06B6D4",
+        "grey leaf spot":       "#06B6D4",
+        "pestalotiopsis":       "#06B6D4",  # Historical record alias.
         "bud rot":              "#D97706",
     }
 
@@ -200,7 +201,7 @@ def _build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         nd = disease.lower()
         if any(n in nd for n in ("lethal", "bud rot")):
             return "Critical"
-        if any(n in nd for n in ("blight", "pestalotiopsis")):
+        if any(n in nd for n in ("blight", "pestalotiopsis", "grey leaf spot")):
             return "Severe"
         if nd != "healthy":
             return "Moderate"

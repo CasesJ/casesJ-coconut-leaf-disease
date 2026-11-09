@@ -10,12 +10,12 @@ router = APIRouter(tags=["health"])
 @router.get("/health")
 def health():
     from model import detector  # noqa: PLC0415
-    return {
-        "status": "ok",
-        "model": "YOLO26 v6",
+    model = (detector.model_info() if callable(getattr(detector, "model_info", None)) else {
+        "name": "YOLO26 v6",
         "backend": detector.backend,
         "weights": detector.active_model_path.name if detector.active_model_path else None,
-    }
+    })
+    return {"status": "ok", "model": model["name"], **{key: value for key, value in model.items() if key != "name"}}
 
 
 @router.get("/classes")

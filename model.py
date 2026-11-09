@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 
 from app.core.config import INFERENCE_BACKEND, OPENVINO_MODEL_DIR
+from app.domain.disease import normalize_current_disease_label
+from app.infrastructure.ml.roboflow import RoboflowWorkflowDetector
 
 # Keep Ultralytics from touching the user's profile directory on Windows.
 _ultralytics_config_dir = Path(__file__).resolve().parent / ".ultralytics"
@@ -42,9 +44,17 @@ class CoconutDiseaseDetector:
             1: "Cercospora",
             2: "Drying of Leaflets",
             3: "Healthy",
-            4: "Pestalotiopsis",
+            4: "Grey Leaf Spot",
             5: "bud rot",
         }
+
+        if self.backend == "roboflow":
+            # Keep this compatibility wrapper so recommendation code and
+            # legacy imports continue to refer to one detector singleton.
+            self._hosted = RoboflowWorkflowDetector()
+            self.backend = self._hosted.backend
+            self.class_names = self._hosted.class_names
+            return
 
         self.model_height = 640
         self.model_width = 640
@@ -76,6 +86,8 @@ class CoconutDiseaseDetector:
         if "description: Ultralytics YOLO26s" not in metadata or "dynamic: true" not in metadata:
             raise RuntimeError("OpenVINO model provenance check failed; expected the reviewed dynamic YOLO26s export")
         names = {int(key): value.strip() for key, value in re.findall(r"^  (\d+):\s*(.+)$", metadata, re.MULTILINE)}
+        # This validates the checked-in legacy OpenVINO export only.  Render
+        # uses Roboflow and does not initialise this backend.
         expected = {0: "bud root", 1: "healthy", 2: "pestalotiopsis", 3: "stem bleeding"}
         if names != expected:
             raise RuntimeError("OpenVINO model class mapping does not match the current weights.pt export")
@@ -170,6 +182,8 @@ class CoconutDiseaseDetector:
         """
         try:
             print(f"[PREDICT] Starting {self.backend} prediction with confidence threshold: {conf}")
+            if self.backend == "roboflow-serverless":
+                return self._hosted.predict(image, conf=conf, annotate=annotate)
             if self.backend == "ultralytics":
                 result = self._predict_with_ultralytics(image, conf, annotate=annotate)
             else:
@@ -186,6 +200,16 @@ class CoconutDiseaseDetector:
                 "inference_status": "failed",
                 "inference_error": "model_execution_failed",
             }
+
+    def model_info(self) -> dict:
+        if self.backend == "roboflow-serverless":
+            return self._hosted.model_info()
+        return {
+            "name": "YOLO26 v6",
+            "backend": self.backend,
+            "weights": self.active_model_path.name if self.active_model_path else None,
+            "classes": self.class_names,
+        }
 
     def _predict_with_ultralytics(self, image: np.ndarray, conf: float = 50, *, annotate: bool = True) -> dict:
         """Run inference directly on weights.pt using Ultralytics."""
@@ -404,7 +428,11 @@ class CoconutDiseaseDetector:
                 'treatment': 'No treatment needed. Continue regular monitoring.',
                 'prevention': 'Maintain regular fertilization. Water consistently. Remove dead leaves. Monitor for pests.'
             },
-            'pestalotiopsis': {
+            # Grey Leaf Spot is CoconutAI's current application label.  The
+            # historical `pestalotiopsis` key below is an application-level
+            # compatibility alias only; it does not claim that the diagnoses
+            # are biologically interchangeable.
+            'grey leaf spot': {
                 'fertilizer': 'Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.',
                 'treatment': 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.',
                 'prevention': 'Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather.'
@@ -413,10 +441,14 @@ class CoconutDiseaseDetector:
         
         # Normalize model labels for lookup. Some model versions emit the
         # misspelling "bud root" although the supported disease is bud rot.
-        disease_lower = disease_name.lower().strip().replace('_', ' ')
-        if disease_lower == 'bud root':
-            disease_lower = 'bud rot'
-        rec = recommendations.get(disease_lower, recommendations['healthy'])
+        disease_lower = normalize_current_disease_label(disease_name).lower()
+        rec = recommendations.get(disease_lower)
+        if rec is None:
+            rec = {
+                'fertilizer': 'Do not apply a disease-specific fertilizer recommendation until an agricultural expert reviews this unsupported model class.',
+                'treatment': 'No automatic treatment is available for this unsupported model class. Keep the image and request expert review.',
+                'prevention': 'Monitor the palm and nearby trees while awaiting expert review.',
+            }
         
         # Log the lookup for debugging
         print(f"[RECOMMENDATION] Disease: '{disease_name}' -> Normalized: '{disease_lower}' -> Found: {disease_lower in recommendations}")
