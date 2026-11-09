@@ -1,5 +1,6 @@
 """CSV output contract for historical and current detection representations."""
 from copy import deepcopy
+from pathlib import Path
 
 from app.services import export_service
 
@@ -33,3 +34,9 @@ def test_csv_keeps_legacy_json_fallbacks_coordinates_and_summary(monkeypatch):
     )
     assert records == original
     assert limits == [2000]
+
+
+def test_pdf_analytics_support_current_and_historical_grey_leaf_spot_labels():
+    source = (Path(__file__).resolve().parents[1] / "app/services/export_service.py").read_text(encoding="utf-8")
+    assert '"grey leaf spot":       "#06B6D4"' in source
+    assert '"pestalotiopsis":       "#06B6D4"' in source

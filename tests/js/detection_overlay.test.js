@@ -59,3 +59,11 @@ test('overlay markup retains normalized detections and protected image paths', (
   assert.match(html, /bbox_normalized/);
   assert.match(html, /detection-overlay-svg/);
 });
+
+test('overlay presents the current Grey Leaf Spot label', () => {
+  const svg = { ...fakeNode(), ownerDocument: { createElementNS: () => fakeNode() } };
+
+  overlay.draw(svg, [{ class: 'Grey Leaf Spot', confidence: 0.9, bbox: [0, 0, 20, 20] }], 20, 20);
+
+  assert.ok(svg.children.some(node => node.textContent === 'Grey Leaf Spot 90%'));
+});

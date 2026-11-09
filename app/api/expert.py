@@ -18,12 +18,12 @@ from app.domain.detection import _extract_primary_disease
 from app.domain.expert import (
     append_expert_audit_event,
     is_authorized_expert_identity,
-    normalize_disease_key,
     read_expert_audit_events,
 )
 from app.domain.notification import create_user_notification
 from app.domain.recommendation import (
     build_recommendation_response,
+    get_expert_recommendation_override,
     load_expert_recommendations,
     save_expert_recommendations,
 )
@@ -200,8 +200,7 @@ def get_expert_recommendation(disease: str, decoded: dict = Depends(verify_fireb
     """Fetch a single disease recommendation override."""
     _require_expert(decoded)
     overrides = load_expert_recommendations()
-    key = normalize_disease_key(disease)
-    return {"disease": disease, "override": overrides.get(key)}
+    return {"disease": disease, "override": get_expert_recommendation_override(overrides, disease)}
 
 
 @router.put("/recommendations/{disease}")

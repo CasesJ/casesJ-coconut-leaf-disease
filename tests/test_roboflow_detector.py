@@ -13,25 +13,39 @@ from app.domain.disease_labels import canonical_disease_label
 from app.infrastructure.ml.roboflow_detector import (
     RoboflowDiseaseDetector,
     RoboflowInferenceError,
+    UnsupportedRoboflowClassError,
     _extract_predictions,
 )
 
 
-def test_cloud_response_is_normalized_and_mapped_to_detector_input():
+def test_cloud_response_is_normalized_and_maps_grey_leaf_spot_to_current_label():
     payload = [{"outputs": {"predictions": [
         {"class": "bud root", "confidence": 0.964844, "x": 100, "y": 50, "width": 40, "height": 20},
-        {"class": "unknown", "confidence": 0.9, "x": 20, "y": 20, "width": 5, "height": 5},
+        {"class": "grey_leaf_spot", "confidence": 0.9, "x": 20, "y": 20, "width": 10, "height": 10},
     ]}}]
 
-    assert _extract_predictions(payload, scale_x=2.0, scale_y=3.0) == [{
-        "class": "Bud Rot", "confidence": 0.964844, "bbox": [160, 120, 240, 180],
-    }]
+    assert _extract_predictions(payload, scale_x=2.0, scale_y=3.0) == [
+        {"class": "Bud Rot", "confidence": 0.964844, "bbox": [160, 120, 240, 180]},
+        {"class": "Grey Leaf Spot", "confidence": 0.9, "bbox": [30, 45, 50, 75]},
+    ]
 
 
 def test_label_mapping_covers_supported_cloud_classes():
     assert canonical_disease_label("bud root") == "Bud Rot"
     assert canonical_disease_label("Stem_Bleeding") == "Stem Bleeding"
+    assert canonical_disease_label("Grey Leaf Spot") == "Grey Leaf Spot"
+    assert canonical_disease_label("Pestalotiopsis") == "Grey Leaf Spot"
     assert canonical_disease_label("Cercospora") is None
+
+
+def test_unknown_structurally_valid_cloud_class_is_not_a_successful_zero_detection():
+    payload = {"predictions": [{
+        "class": "future disease", "confidence": 0.9,
+        "x": 20, "y": 20, "width": 5, "height": 5,
+    }]}
+
+    with pytest.raises(UnsupportedRoboflowClassError, match="future disease"):
+        _extract_predictions(payload, scale_x=1.0, scale_y=1.0)
 
 
 def test_temporary_cloud_jpeg_is_bounded_and_has_no_metadata(monkeypatch):

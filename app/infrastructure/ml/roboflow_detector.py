@@ -24,6 +24,10 @@ class RoboflowInferenceError(RuntimeError):
         self.category = category
 
 
+class UnsupportedRoboflowClassError(ValueError):
+    """A structurally valid cloud prediction used an unsupported class."""
+
+
 def _finite_number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -60,9 +64,11 @@ def _prediction(value: Any, *, scale_x: float, scale_y: float) -> dict[str, Any]
     label = next((value.get(key) for key in ("class", "class_name", "label") if value.get(key) is not None), None)
     confidence = next((_finite_number(value.get(key)) for key in ("confidence", "score") if value.get(key) is not None), None)
     bbox = _xyxy(value)
-    canonical_label = canonical_disease_label(label)
-    if canonical_label is None or confidence is None or bbox is None:
+    if confidence is None or bbox is None:
         return None
+    canonical_label = canonical_disease_label(label)
+    if canonical_label is None:
+        raise UnsupportedRoboflowClassError(str(label or "unknown"))
     left, top, right, bottom = bbox
     return {
         "class": canonical_label,
@@ -119,10 +125,10 @@ class RoboflowDiseaseDetector:
 
     backend = "roboflow"
     active_model_path = None
-    class_names = {
-        0: "Caterpillars", 1: "Drying of Leaflets", 2: "Healthy",
-        3: "Pestalotiopsis", 4: "Bud Rot", 5: "Stem Bleeding",
-    }
+    # Workflow output is parsed by its string class name.  Do not publish
+    # guessed Roboflow numeric IDs or alter the checked-in four-class YOLO26
+    # metadata used by local backends.
+    class_names: dict[int, str] = {}
 
     def __init__(self) -> None:
         if not config.ROBOFLOW_API_KEY:
@@ -206,7 +212,10 @@ class RoboflowDiseaseDetector:
                     with self._lock:
                         if self._inflight is request:
                             self._inflight = None
-            detections = _extract_predictions(response, scale_x=scale_x, scale_y=scale_y)
+            try:
+                detections = _extract_predictions(response, scale_x=scale_x, scale_y=scale_y)
+            except UnsupportedRoboflowClassError as error:
+                raise RoboflowInferenceError("unsupported_class") from error
             output = image.copy() if annotate else image
             if annotate:
                 for detection in detections:

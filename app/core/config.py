@@ -159,7 +159,7 @@ EXPERT_DISEASE_OPTIONS: list[str] = [
     "Caterpillars",
     "Drying of Leaflets",
     "Healthy",
-    "Pestalotiopsis",
+    "Grey Leaf Spot",
     "Bud Rot",
     "Stem Bleeding",
 ]

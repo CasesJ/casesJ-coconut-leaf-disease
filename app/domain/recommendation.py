@@ -62,13 +62,29 @@ def save_expert_recommendations(data: dict) -> None:
 
 def normalize_disease_key(disease_name: str) -> str:
     """Create a stable dictionary key for recommendation overrides."""
-    return str(disease_name or "").strip().lower().replace(" ", "_")
+    canonical_label = canonical_disease_label(disease_name)
+    label = canonical_label if canonical_label is not None else str(disease_name or "")
+    return label.strip().lower().replace(" ", "_")
+
+
+def _recommendation_override_keys(disease_name: str) -> tuple[str, ...]:
+    """Prefer current override keys while retaining historic record overrides."""
+    key = normalize_disease_key(disease_name)
+    return (key, "pestalotiopsis") if key == "grey_leaf_spot" else (key,)
+
+
+def get_expert_recommendation_override(overrides: dict, disease_name: str) -> dict | None:
+    """Read current and historic expert override keys without migrating data."""
+    if not isinstance(overrides, dict):
+        return None
+    return next((overrides.get(key) for key in _recommendation_override_keys(disease_name)
+                 if isinstance(overrides.get(key), dict)), None)
 
 
 def apply_expert_recommendation_override(base_recommendation: dict, disease_name: str) -> dict:
     """Merge any expert override into the recommendation payload."""
     overrides = load_expert_recommendations()
-    override = overrides.get(normalize_disease_key(disease_name))
+    override = get_expert_recommendation_override(overrides, disease_name)
     if not override or not override.get("active", True):
         return base_recommendation
 
@@ -120,7 +136,7 @@ def build_recommendation_response(
         "drying of leaflets": ("Check soil and leaf nutrient status before fertilizing. Correct documented potassium, magnesium, or micronutrient deficiencies with a locally recommended coconut fertilizer program; do not apply high fertilizer rates to a severely stressed palm.", "Confirm whether the symptom is nutrient stress, drought, or pest injury before spraying. Remove only dead or heavily diseased fronds and use a locally registered fungicide only when a crop specialist confirms a fungal leaf disease.", "Maintain good drainage, mulch and water during dry periods, avoid crown and leaf injury, remove diseased debris, and monitor palms regularly so leaf symptoms are diagnosed early."),
         "stem bleeding": ("Use a soil-test-based fertilizer program to maintain palm vigor. Do not treat stem bleeding with fertilizer alone.", "Have the diagnosis confirmed promptly. Remove diseased bark only when advised by a qualified agricultural specialist, protect exposed tissue as recommended locally, and improve drainage around affected palms.", "Avoid trunk wounds, disinfect tools between palms, maintain drainage, remove severely affected palms when advised, and inspect nearby trees regularly for fresh bleeding lesions."),
         "healthy": ("Apply balanced NPK 12:12:12 every 3 months. Use phosphate rich during flowering season.", "No treatment needed. Continue regular monitoring.", "Maintain regular fertilization. Water consistently. Remove dead leaves. Monitor for pests."),
-        "pestalotiopsis": ("Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.", "Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.", "Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather."),
+        "grey leaf spot": ("Use a soil-test-based coconut fertilizer program. Keep potassium and chloride adequate; PCA reports KCl nutrition can improve resistance to coconut fungal leaf spots. Fertilizer supports recovery but does not cure the infection.", "Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.", "Use clean planting material, remove infected leaves promptly, keep nursery and field sanitation high, improve airflow and drainage, minimize leaf wounds, and monitor frequently in wet weather."),
     }
     fertilizer, treatment, prevention = rules[disease_key]
     location = ({"source": "browser_geolocation", "latitude": user_location["lat"], "longitude": user_location["lng"], "accuracy": user_location["accuracy"]} if user_location else {"source": "davao_default", "latitude": 7.0731, "longitude": 125.6123, "accuracy": 50000})
