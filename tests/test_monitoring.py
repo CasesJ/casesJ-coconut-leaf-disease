@@ -573,6 +573,7 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     assert overview.status_code == 200, overview.text
     body = overview.json()
     assert body["baseline"]["image_url"] == f"/media/monitoring/{case_id}/baseline/original"
+    assert body["baseline"]["thumbnail_url"] == f"/media/monitoring/{case_id}/baseline/thumbnail"
     assert body["treatment"]["recommendation_snapshot"]["recommendations"]["treatment"] == "Recorded guidance"
     assert body["follow_ups"][0]["confirmed_outcome"] == "improving"
     assert len(body["follow_ups"]) == 3

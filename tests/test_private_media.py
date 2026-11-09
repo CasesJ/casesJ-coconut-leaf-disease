@@ -384,6 +384,25 @@ def test_baseline_image_uses_snapshot_without_loading_overview(client, monkeypat
     assert response.status_code == 200 and response.content == b"snapshot"
 
 
+def test_baseline_thumbnail_reuses_canonical_detection_thumbnail(client, monkeypatch):
+    http, _ = client
+    snapshot_original = _cloudinary_ref("original")
+    thumbnail = _cloudinary_ref("thumbnail")
+    case = {"id": "case-1", "farmer_id": "farmer-a", "baseline_detection_id": "rec-1",
+            "baseline_image_reference": {"image_assets": {"original": snapshot_original}}}
+    monkeypatch.setattr(monitoring_service, "get_case", lambda *args: case)
+    monkeypatch.setattr(detection_service, "find_canonical_record_for_user", lambda uid, rid: {
+        "id": rid, "user_id": uid, "image_assets": {"thumbnail": thumbnail}})
+    downloads = []
+    monkeypatch.setattr(media_service, "download_asset",
+                        lambda asset: downloads.append(asset) or (b"thumbnail", "image/jpeg"))
+
+    response = http.get("/media/monitoring/case-1/baseline/thumbnail")
+
+    assert response.status_code == 200 and response.content == b"thumbnail"
+    assert downloads == [thumbnail]
+
+
 def test_baseline_recovers_delivery_only_snapshot_from_owned_detection(client, monkeypatch):
     http, _ = client
     case = {"id": "case-1", "farmer_id": "farmer-a", "baseline_detection_id": "rec-1",

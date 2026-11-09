@@ -129,7 +129,8 @@ def expert_detection_image(farmer_id: str, record_id: str, kind: str, background
 
 def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
                       kind: str, baseline: bool = False) -> Response:
-    if (kind not in {"original", "annotated"} or not _SAFE_ID.fullmatch(farmer_id)
+    if (kind not in ({"original", "annotated", "thumbnail"} if baseline else {"original", "annotated"})
+            or not _SAFE_ID.fullmatch(farmer_id)
             or not _SAFE_ID.fullmatch(case_id)
             or (follow_up_id is not None and not _SAFE_ID.fullmatch(follow_up_id))):
         raise HTTPException(404, "Image not found")
@@ -142,6 +143,17 @@ def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
         record["id"] = case.get("baseline_detection_id")
         record["user_id"] = farmer_id
         record["_media_scope"] = "detection"
+        if kind == "thumbnail":
+            # The live detection owns the durable preview.  Prefer it over
+            # the immutable case snapshot so monitoring reuses the same small
+            # authenticated asset as Detection Records.
+            try:
+                record = dict(_detection_record(farmer_id, str(case.get("baseline_detection_id") or "")))
+                record["_media_scope"] = "detection"
+            except HTTPException:
+                # Legacy cases can outlive their detection record.  Preserve
+                # their existing on-demand thumbnail fallback from the snapshot.
+                pass
         # Older snapshots sometimes contain only a first-party delivery URL,
         # not a durable provider reference. Resolve the exact owned detection
         # without loading treatment records, schedules, and all follow-ups.

@@ -331,7 +331,7 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
     .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || ''))).at(-1);
   const postTreatmentDue = monitoringDue(latestPostSchedule?.due_date || item.next_post_treatment_follow_up_date);
   const lifecycle = monitoringTreatmentLifecycle(overview);
-  const original = monitoringImageUrl(overview.baseline?.image_url || overview.baseline?.annotated_image_url);
+  const original = monitoringImageUrl(overview.baseline?.thumbnail_url || overview.baseline?.image_url || overview.baseline?.annotated_image_url);
   const after = monitoringImageUrl(selected?.image_url || selected?.annotated_image_url);
   const originalPreview = original
     ? (window.DetectionOverlay?.frameHtml(original, overview.baseline || {}, {

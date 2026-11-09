@@ -618,9 +618,11 @@ def present_monitoring_overview(overview: dict, *, expert: bool = False) -> dict
                   if expert else f"/media/monitoring/{case_id}/baseline")
         baseline["image_url"] = f"{prefix}/original"
         baseline["annotated_image_url"] = f"{prefix}/annotated"
+        baseline["thumbnail_url"] = f"{prefix}/thumbnail"
     else:
         baseline.pop("image_url", None)
         baseline.pop("annotated_image_url", None)
+        baseline.pop("thumbnail_url", None)
     _strip_image_storage_fields(baseline)
     value["baseline"] = baseline
     value["case"] = present_monitoring_case(case)
