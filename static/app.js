@@ -2042,6 +2042,17 @@ window.selectFarmArea = function(areaId) {
   if (lng) lng.value = longitude;
   updateBoundaryStatus();
   if (!mapsReady || !mainMap) return;
+  // The base farm outline is a fallback for farms without saved areas.  Once
+  // an area has a boundary, keep that exact boundary as the primary outline
+  // instead of leaving the default farm box underneath it.
+  const farmOutlineSource = mainMap.getSource('lanticse-farm-src');
+  if (farmOutlineSource) farmOutlineSource.setData({
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: area?.boundary_geojson?.coordinates || [farmBoundaryCoordinatesFor(farmLocation)]
+    }
+  });
   mainMap.resize();
   if (area?.boundary_geojson) { const ring = area.boundary_geojson.coordinates[0]; mainMap.fitBounds(ring.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(ring[0], ring[0])), { padding: 60, maxZoom: 18 }); }
   else mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
@@ -2102,9 +2113,14 @@ function applyFarmLocation(center) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   farmLocation = { latitude, longitude };
   AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
+  // A delayed farm-center response used to recenter the map on its default
+  // location after the user had selected a different saved area.  Preserve
+  // the selected area and its boundary until the user chooses another one.
+  const activeArea = selectedBoundary();
+  const keepSelectedArea = Boolean(activeArea?.boundary_geojson);
   const source = mainMap?.getSource?.('lanticse-farm-src');
-  if (source) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
-  if (mapsReady && mainMap) mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
+  if (source && !keepSelectedArea) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
+  if (mapsReady && mainMap && !keepSelectedArea) mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
   if (mapsReady && miniMap) miniMap.flyTo({ center: [longitude, latitude], zoom: 13.5 });
   return true;
 }
