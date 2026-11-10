@@ -1281,6 +1281,13 @@ function initializeMaps() {
     
     // Add fullscreen control
     mainMap.addControl(new maplibregl.FullscreenControl(), 'top-right');
+
+    // A boundary response can arrive while MapLibre is still creating its
+    // GeoJSON sources. Re-load after the sources exist so configured polygons
+    // and the remaining 2×2 cells are not lost to that startup race.
+    if (currentToken && !currentUserIsExpert) {
+      Promise.resolve(loadFarmBoundaries()).finally(() => loadAreaMonitoring());
+    }
   });
   
   // ✅ Don't request geolocation on page load - only request when user uploads or uses drone
@@ -1835,7 +1842,7 @@ function focusFilteredPins(entries, selectedArea) {
   }
 }
 
-window.applyMapFilters = function() {
+window.applyMapFilters = function({ focus = true } = {}) {
   const disease = document.getElementById('map-filter-disease')?.value || '';
   const area = document.getElementById('map-filter-area')?.value || '';
   const severity = document.getElementById('map-filter-severity')?.value || '';
@@ -1849,7 +1856,9 @@ window.applyMapFilters = function() {
   });
 
   updateFilteredHeatmap(matchingEntries);
-  focusFilteredPins(matchingEntries, area);
+  // Refreshes update marker visibility and heatmap data only.  Moving the
+  // camera belongs to the user explicitly applying a filter.
+  if (focus) focusFilteredPins(matchingEntries, area);
   renderLog();
 };
 window.viewDetection = index => flyTo(index);
@@ -1862,7 +1871,7 @@ function syncSessionMapPins() {
 }
 
 function refreshMapPins() {
-  applyMapFilters();
+  applyMapFilters({ focus: false });
   updateStats();
   const pinCountEl = document.getElementById('pin-count');
   if (pinCountEl) pinCountEl.textContent = log.length + ' pins';
@@ -2019,10 +2028,10 @@ function renderVertexMarkers() {
 }
 async function loadFarmBoundaries() {
   if (!currentToken || currentUserIsExpert) return;
-  try { const response = await fetch('/farm/areas', { headers: { Authorization: `Bearer ${currentToken}` } }); if (!response.ok) throw new Error('Could not load farm boundaries'); farmBoundaries = (await response.json()).areas || []; renderFarmBoundaries(); selectFarmArea(selectedFarmArea); }
+  try { const response = await fetch('/farm/areas', { headers: { Authorization: `Bearer ${currentToken}` } }); if (!response.ok) throw new Error('Could not load farm boundaries'); farmBoundaries = (await response.json()).areas || []; renderFarmBoundaries(); selectFarmArea(selectedFarmArea, { focus: false }); }
   catch (error) { console.warn(error); updateBoundaryStatus('Farm boundaries are unavailable right now.'); }
 }
-window.selectFarmArea = function(areaId) {
+window.selectFarmArea = function(areaId, { focus = true } = {}) {
   selectedFarmArea = Number(areaId); const area = selectedBoundary();
   // An unfinished drawing must never carry over to a different area slot.
   boundaryDraft = null; boundaryDrawing = false; clearVertexMarkers(); renderFarmBoundaries();
@@ -2042,20 +2051,9 @@ window.selectFarmArea = function(areaId) {
   if (lng) lng.value = longitude;
   updateBoundaryStatus();
   if (!mapsReady || !mainMap) return;
-  // The base farm outline is a fallback for farms without saved areas.  Once
-  // an area has a boundary, keep that exact boundary as the primary outline
-  // instead of leaving the default farm box underneath it.
-  const farmOutlineSource = mainMap.getSource('lanticse-farm-src');
-  if (farmOutlineSource) farmOutlineSource.setData({
-    type: 'Feature',
-    geometry: {
-      type: 'Polygon',
-      coordinates: area?.boundary_geojson?.coordinates || [farmBoundaryCoordinatesFor(farmLocation)]
-    }
-  });
   mainMap.resize();
-  if (area?.boundary_geojson) { const ring = area.boundary_geojson.coordinates[0]; mainMap.fitBounds(ring.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(ring[0], ring[0])), { padding: 60, maxZoom: 18 }); }
-  else mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
+  if (focus && area?.boundary_geojson) { const ring = area.boundary_geojson.coordinates[0]; mainMap.fitBounds(ring.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(ring[0], ring[0])), { padding: 60, maxZoom: 18 }); }
+  else if (focus) mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
   // MapLibre occasionally retains an empty raster canvas after a side-panel
   // selection/reflow.  A second resize forces tile requests for the new view.
   requestAnimationFrame(() => { mainMap.resize(); mainMap.triggerRepaint(); });
@@ -2113,14 +2111,11 @@ function applyFarmLocation(center) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   farmLocation = { latitude, longitude };
   AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
-  // A delayed farm-center response used to recenter the map on its default
-  // location after the user had selected a different saved area.  Preserve
-  // the selected area and its boundary until the user chooses another one.
-  const activeArea = selectedBoundary();
-  const keepSelectedArea = Boolean(activeArea?.boundary_geojson);
   const source = mainMap?.getSource?.('lanticse-farm-src');
-  if (source && !keepSelectedArea) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
-  if (mapsReady && mainMap && !keepSelectedArea) mainMap.flyTo({ center: [longitude, latitude], zoom: 17 });
+  if (source) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
+  // This can run after an upload or remote refresh. The map constructor uses
+  // farmLocation for initial setup; later data updates must not move the main
+  // camera away from a detection or a user-selected view.
   if (mapsReady && miniMap) miniMap.flyTo({ center: [longitude, latitude], zoom: 13.5 });
   return true;
 }
