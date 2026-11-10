@@ -1270,7 +1270,7 @@ function initializeMaps() {
     });
     mainMap.addLayer({
       id: 'area-monitoring-labels', type: 'symbol', source: 'area-monitoring-src',
-      layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['get', 'prevalence'], '% diseased'], 'text-size': 12, 'text-allow-overlap': true },
+      layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['to-string', ['get', 'diseased']], ' diseased detections'], 'text-size': 12, 'text-allow-overlap': true },
       paint: { 'text-color': '#123b2b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
     });
     mainMap.on('mouseenter', 'area-monitoring-fill', () => { mainMap.getCanvas().style.cursor = 'pointer'; });
@@ -2202,7 +2202,7 @@ function areaColor(prevalence) {
 function buildAreaFeatures(areas) {
   return areas.map(area => ({
     type: 'Feature',
-    properties: { name: area.name, prevalence: area.prevalence, diseased: area.diseased, samples: area.samples, color: area.color },
+    properties: { name: area.name, diseased: area.diseased, samples: area.samples, color: area.color },
     geometry: area.boundary_geojson || { type: 'Polygon', coordinates: [[
       [area.minLng, area.minLat], [area.maxLng, area.minLat], [area.maxLng, area.maxLat], [area.minLng, area.maxLat], [area.minLng, area.minLat]
     ]] }
@@ -2234,7 +2234,7 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
     const areas = [];
     for (let row = 0; row < 2; row++) for (let col = 0; col < 2; col++) {
       const areaId = row * 2 + col + 1, configured = farmBoundaries.find(item => Number(item.area_id) === areaId && item.boundary_geojson);
-      areas.push({ name: `Area ${areaId}`, row, col, minLat: AREA_MONITORING_BOUNDS.minLat + row * latStep, maxLat: AREA_MONITORING_BOUNDS.minLat + (row + 1) * latStep, minLng: AREA_MONITORING_BOUNDS.minLng + col * lngStep, maxLng: AREA_MONITORING_BOUNDS.minLng + (col + 1) * lngStep, boundary_geojson: configured?.boundary_geojson || null, configured: Boolean(configured), samples: 0, diseased: 0 });
+      areas.push({ areaId, name: `Area ${areaId}`, row, col, minLat: AREA_MONITORING_BOUNDS.minLat + row * latStep, maxLat: AREA_MONITORING_BOUNDS.minLat + (row + 1) * latStep, minLng: AREA_MONITORING_BOUNDS.minLng + col * lngStep, maxLng: AREA_MONITORING_BOUNDS.minLng + (col + 1) * lngStep, boundary_geojson: configured?.boundary_geojson || null, configured: Boolean(configured), samples: 0, diseased: 0 });
     }
     records.forEach(record => {
       if (record.type && record.type !== 'upload' && record.source !== 'upload') return;
@@ -2245,14 +2245,15 @@ window.loadAreaMonitoring = async function loadAreaMonitoring() {
       let area = configuredMatches[0];
       if (!area) { if (point.lat < AREA_MONITORING_BOUNDS.minLat || point.lat > AREA_MONITORING_BOUNDS.maxLat || point.lng < AREA_MONITORING_BOUNDS.minLng || point.lng > AREA_MONITORING_BOUNDS.maxLng) return; const col = Math.min(1, Math.floor((point.lng - AREA_MONITORING_BOUNDS.minLng) / lngStep)); const row = Math.min(1, Math.floor((point.lat - AREA_MONITORING_BOUNDS.minLat) / latStep)); area = areas[row * 2 + col]; if (area.configured) return; }
       area.samples += 1;
-      if ((record.detections || []).some(det => !isHealthyClass(det.class))) area.diseased += 1;
+      if (AreaMonitoringCalculations.hasDiseasedDetection(record.detections, isHealthyClass)) area.diseased += 1;
     });
-    areas.forEach(area => { area.prevalence = area.samples ? Math.round(area.diseased / area.samples * 100) : 0; area.color = areaColor(area.prevalence); area.severity = area.prevalence >= 60 ? 'High' : area.prevalence >= 30 ? 'Moderate' : 'Low'; });
+    // A GPS-tagged upload is a sample, not a reliably distinct assessed tree.
+    // Do not derive tree-level prevalence or severity from it.
+    areas.forEach(area => { area.color = areaColor(0); area.severity = 'Not assessed'; });
     const gpsSamples = areas.reduce((sum, area) => sum + area.samples, 0);
-    const diseasedSamples = areas.reduce((sum, area) => sum + area.diseased, 0);
-    const highest = [...areas].sort((a, b) => b.prevalence - a.prevalence)[0];
-    if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Disease Prevalence</h4><div class="stat-value">${gpsSamples ? Math.round(diseasedSamples / gpsSamples * 100) : 0}%</div><div class="stat-subtext">Across mapped areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${gpsSamples && highest.prevalence ? highest.name : '—'}</div><div class="stat-subtext">Highest disease prevalence</div></div>`;
-    gridEl.innerHTML = areas.map(area => `<button type="button" class="area-card" style="border-left-color:${area.color}" onclick="focusFarmArea(${Number(area.name.split(' ')[1])})" aria-label="Show ${area.name} on map, ${area.prevalence}% disease prevalence"><h5>${area.name}</h5><div class="area-prevalence">${area.samples ? area.prevalence + '%' : '—'}</div><div class="area-meta">${area.configured ? 'Boundary-aware monitoring' : 'Grid monitoring (not configured)'}</div><div class="area-details"><div><strong>${area.diseased}</strong>Diseased detections</div><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:${severityColor(area.severity.toLowerCase())}">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : (area.configured ? 'No samples' : 'Unconfigured')}</strong>Monitoring status</div></div><div class="area-bar"><span style="width:${area.prevalence}%;background:${area.color}"></span></div></button>`).join('');
+    const metrics = AreaMonitoringCalculations.dashboardMetrics(areas);
+    if (summaryEl) summaryEl.innerHTML = `<div class="stat-box"><h4>GPS Samples</h4><div class="stat-value">${gpsSamples}</div><div class="stat-subtext">Uploaded images mapped</div></div><div class="stat-box disease"><h4>Total Diseased Detections</h4><div class="stat-value">${metrics.totalDiseasedDetections}</div><div class="stat-subtext">Across all farm areas</div></div><div class="stat-box"><h4>Priority Area</h4><div class="stat-value" style="font-size:1.15rem">${metrics.priorityArea}</div><div class="stat-subtext">Most diseased detections</div></div>`;
+    gridEl.innerHTML = areas.map(area => `<button type="button" class="area-card" style="border-left-color:${area.color}" onclick="focusFarmArea(${area.areaId})" aria-label="Show ${area.name} on map, ${area.diseased} diseased detections"><h5>${area.name}</h5><div class="area-prevalence">${area.diseased}</div><div class="area-main-label">Diseased Detections</div><div class="area-meta">${area.configured ? 'Boundary-aware monitoring' : 'Grid monitoring (not configured)'}</div><div class="area-details"><div><strong>${area.samples}</strong>Mapped locations</div><div><strong style="color:#64748b">${area.severity}</strong>Severity status</div><div><strong>${area.samples ? 'Active' : (area.configured ? 'No samples' : 'Unconfigured')}</strong>Monitoring status</div></div></button>`).join('');
     if (mapsReady && mainMap.getSource('area-monitoring-src')) mainMap.getSource('area-monitoring-src').setData({ type: 'FeatureCollection', features: buildAreaFeatures(areas) });
     areaMonitoringLoaded = true;
   } catch (error) {
