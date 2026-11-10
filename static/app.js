@@ -727,6 +727,7 @@ window.loadDashboardStats = async function loadDashboardStats() {
       payload = await fetchUserRecords();
     }
     const records = Array.isArray(payload) ? payload : (payload.records || []);
+    if (!currentUserIsExpert) updateRecordSummaryCards(records);
     const normalized = (records || []).map(normalizeRecordForDashboard);
     const dashboardRecords = currentUserIsExpert
       ? normalized
@@ -3891,6 +3892,46 @@ window.filterExpertAuditLog = function filterExpertAuditLog() {
   renderExpertAuditLog();
 };
 
+function updateRecordSummaryCards(allRecords) {
+  const allDetections = [];
+  const diseaseCounts = {};
+
+  allRecords.forEach(record => {
+    if (record.detections && Array.isArray(record.detections)) {
+      record.detections.forEach(detection => {
+        allDetections.push(detection);
+        const diseaseClass = detection.class || 'unknown';
+        diseaseCounts[diseaseClass] = (diseaseCounts[diseaseClass] || 0) + 1;
+      });
+    }
+  });
+
+  const totalDiseases = allDetections.length;
+  const mostCommonDisease = Object.keys(diseaseCounts).length > 0
+    ? formatDiseaseClass(Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0])
+    : '—';
+  const healthyDetections = allDetections.filter((detection) => isHealthyClass(detection.class)).length;
+  const commonDiseases = new Set(
+    allDetections
+      .filter((detection) => isDiseaseClass(detection.class))
+      .map((detection) => normalizeDiseaseClass(detection.class))
+  ).size;
+
+  const totalDiseasesEl = document.getElementById('total-diseases-found');
+  const totalRecordsEl = document.getElementById('total-records-count');
+  const mostCommonEl = document.getElementById('most-common-disease');
+  const healthyCountEl = document.getElementById('records-healthy-count');
+  const commonDiseasesEl = document.getElementById('records-common-diseases');
+  const statsEl = document.getElementById('records-stats');
+
+  if (totalDiseasesEl) totalDiseasesEl.textContent = totalDiseases;
+  if (totalRecordsEl) totalRecordsEl.textContent = allRecords.length;
+  if (mostCommonEl) mostCommonEl.textContent = mostCommonDisease;
+  if (healthyCountEl) healthyCountEl.textContent = healthyDetections;
+  if (commonDiseasesEl) commonDiseasesEl.textContent = commonDiseases;
+  if (statsEl) statsEl.style.display = allRecords.length > 0 ? 'grid' : 'none';
+}
+
 async function loadUserRecords({ force = false } = {}) {
   if (!currentToken) {
     showToast('Please log in first');
@@ -3909,6 +3950,8 @@ async function loadUserRecords({ force = false } = {}) {
       listEl.innerHTML = '<div class="no-records">No detection records yet.<br>Upload an image or start the drone to record detections.</div>';
       return;
     }
+
+    updateRecordSummaryCards(allRecords);
 
     let records = currentUserRecordsFilter === 'all'
       ? allRecords
@@ -4024,49 +4067,6 @@ async function loadUserRecords({ force = false } = {}) {
       `;
       }).join('');
     }
-    
-    // ✅ Calculate and display disease statistics
-    const totalRecords = allRecords.length;
-    const allDetections = [];
-    const diseaseCounts = {};
-    
-    allRecords.forEach(record => {
-      if (record.detections && Array.isArray(record.detections)) {
-        record.detections.forEach(detection => {
-          allDetections.push(detection);
-          const diseaseClass = detection.class || 'unknown';
-          diseaseCounts[diseaseClass] = (diseaseCounts[diseaseClass] || 0) + 1;
-        });
-      }
-    });
-    
-    const totalDiseases = allDetections.length;
-    const mostCommonDisease = Object.keys(diseaseCounts).length > 0 
-      ? formatDiseaseClass(Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0])
-      : '—';
-    
-    const healthyDetections = allDetections.filter((detection) => isHealthyClass(detection.class)).length;
-    const commonDiseases = new Set(
-      allDetections
-        .filter((detection) => isDiseaseClass(detection.class))
-        .map((detection) => normalizeDiseaseClass(detection.class))
-    ).size;
-
-    // Update statistics display
-    const totalDiseasesEl = document.getElementById('total-diseases-found');
-    const totalRecordsEl = document.getElementById('total-records-count');
-    const mostCommonEl = document.getElementById('most-common-disease');
-    const healthyCountEl = document.getElementById('records-healthy-count');
-    const commonDiseasesEl = document.getElementById('records-common-diseases');
-    const statsEl = document.getElementById('records-stats');
-    
-    if (totalDiseasesEl) totalDiseasesEl.textContent = totalDiseases;
-    if (totalRecordsEl) totalRecordsEl.textContent = totalRecords;
-    if (mostCommonEl) mostCommonEl.textContent = mostCommonDisease;
-    if (healthyCountEl) healthyCountEl.textContent = healthyDetections;
-    if (commonDiseasesEl) commonDiseasesEl.textContent = commonDiseases;
-    if (statsEl) statsEl.style.display = totalRecords > 0 ? 'grid' : 'none';
-    
     
   } catch (error) {
     console.error('Error loading records:', error);

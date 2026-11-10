@@ -1899,15 +1899,33 @@
     </div>
     <div class="dashboard-reference-grid">
       <div class="dashboard-main-column">
-        <section class="dashboard-white-card dashboard-quick-card">
-          <div class="dashboard-card-heading"><h4>Quick Actions</h4></div>
-          <div id="dashboard-quick-actions" class="dashboard-action-grid">
-            <button id="dashboard-primary-action" class="dashboard-action scan" type="button" onclick="openDashboardPrimaryAction()"><span class="action-symbol"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M8 6l1-2h6l1 2"/></svg></span><strong id="dashboard-primary-action-title">Scan Coconut Leaf</strong><small id="dashboard-primary-action-description">Upload an image to detect coconut diseases.</small><b>→</b></button>
-            <button class="dashboard-action history" type="button" onclick="switchTab('records',document.getElementById('nav-records-link'))"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg></span><strong>View History</strong><small>Check previous scans and results.</small><b>→</b></button>
-            <button class="dashboard-action guide" type="button" onclick="switchTab('history',document.getElementById('nav-history-link'))"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M4 5h7a3 3 0 0 1 3 3v12a3 3 0 0 0-3-3H4z"/><path d="M20 5h-7a3 3 0 0 0-3 3v12a3 3 0 0 1 3-3h7z"/></svg></span><strong>Verified Disease History</strong><small>Review verified disease information.</small><b>→</b></button>
-            <button class="dashboard-action reports" type="button" onclick="switchTab('map',document.getElementById('nav-map-link'))"><span class="action-symbol"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></svg></span><strong>View Reports</strong><small>Explore farm health activity.</small><b>→</b></button>
+        <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
+          <div class="stat-box">
+            <h4>Diseased Trees</h4>
+            <div class="stat-value" id="total-diseases-found">0</div>
+            <div class="stat-subtext">All disease cases recorded</div>
           </div>
-        </section>
+          <div class="stat-box">
+            <h4>Detection Records</h4>
+            <div class="stat-value" id="total-records-count">0</div>
+            <div class="stat-subtext">Detection sessions</div>
+          </div>
+          <div class="stat-box">
+            <h4>Most Common Disease</h4>
+            <div class="stat-value" id="most-common-disease">—</div>
+            <div class="stat-subtext">Detected on farm</div>
+          </div>
+          <div class="stat-box healthy">
+            <h4>Healthy</h4>
+            <div class="stat-value" id="records-healthy-count">0</div>
+            <div class="stat-subtext">No disease detected</div>
+          </div>
+          <div class="stat-box mapped">
+            <h4>Common Diseases</h4>
+            <div class="stat-value" id="records-common-diseases">0</div>
+            <div class="stat-subtext">Disease types detected</div>
+          </div>
+        </div>
     <!-- Health Analytics & Trends Dashboard -->
     <div class="records-container" id="analytics-section">
       <div class="records-head">
@@ -2062,35 +2080,6 @@
   <div id="panel-records" class="panel">
     <div class="panels">
       <p class="section-label" id="records-section-label">My Detection Records</p>
-      <!-- Disease Stats -->
-      <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
-        <div class="stat-box">
-          <h4>Diseased Trees</h4>
-          <div class="stat-value" id="total-diseases-found">0</div>
-          <div class="stat-subtext">All disease cases recorded</div>
-        </div>
-        <div class="stat-box">
-          <h4>Detection Records</h4>
-          <div class="stat-value" id="total-records-count">0</div>
-          <div class="stat-subtext">Detection sessions</div>
-        </div>
-        <div class="stat-box">
-          <h4>Most Common Disease</h4>
-          <div class="stat-value" id="most-common-disease">—</div>
-          <div class="stat-subtext">Detected on farm</div>
-        </div>
-        <div class="stat-box healthy">
-          <h4>Healthy</h4>
-          <div class="stat-value" id="records-healthy-count">0</div>
-          <div class="stat-subtext">No disease detected</div>
-        </div>
-        <div class="stat-box mapped">
-          <h4>Common Diseases</h4>
-          <div class="stat-value" id="records-common-diseases">0</div>
-          <div class="stat-subtext">Disease types detected</div>
-        </div>
-      </div>
-
       <div class="records-container" id="detection-history-container">
         <div class="records-head">
           <h4>Detection Records</h4>
