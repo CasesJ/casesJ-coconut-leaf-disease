@@ -84,14 +84,14 @@ test('pins added before map initialization get their markers once maps are ready
   assert.equal(h.counts.writes, 1);
 });
 
-test('map initialization is deferred and repeated navigation reuses both maps', () => {
+test('map initialization is deferred and repeated navigation reuses the main map', () => {
   const h = harness(0);
   let created = 0;
   h.context.maplibregl.Map = class { constructor() { created++; } on() {} };
   assert.equal(created, 0);
   h.context.initializeMaps();
   h.context.initializeMaps();
-  assert.equal(created, 2);
+  assert.equal(created, 1);
 });
 
 test('concurrent geocoding for one coordinate shares one request', async () => {
@@ -147,6 +147,34 @@ test('invalidating records rejects an older response instead of repopulating the
   complete({ ok: true, json: async () => ({ records: [{ id: 'old' }] }) });
   await assert.rejects(request, /Records changed/);
   assert.equal(h.context.getCachedUserRecords(), null);
+});
+
+test('upload timing summary separates transfer, post-upload wait, backend stages, and retries', () => {
+  const h = harness(0);
+  const summary = h.context.buildUploadTimingSummary({
+    request_body_bytes: 20_600_000,
+    upload_duration_ms: 16_480,
+    upload_mbps: 10,
+    upload_complete_to_http_response_ms: 2_310,
+    successful_attempt: 2,
+    attempts: [{ attempt: 1, outcome: 'network_error', total_duration_ms: 850 }, { attempt: 2, outcome: 'success' }],
+  }, {
+    request_total_ms: 2_000,
+    inference_ms: 1_200,
+    persistence_total_ms: 500,
+  });
+  assert.match(summary, /Upload: 20\.6 MB in 16 s \(10\.00 Mbps\)/);
+  assert.match(summary, /After upload: 2\.3 s/);
+  assert.match(summary, /Backend reported: 2\.0 s/);
+  assert.match(summary, /Inference: 1\.2 s/);
+  assert.match(summary, /Saving: 500 ms/);
+  assert.match(summary, /Attempt 2 of 2 succeeded; prior attempts are excluded from this rate/);
+  assert.match(summary, /Prior attempt 1: network error after 850 ms/);
+});
+
+test('upload timing summary is omitted when client upload timing is unavailable', () => {
+  const h = harness(0);
+  assert.equal(h.context.buildUploadTimingSummary(null, { request_total_ms: 1 }), '');
 });
 
 test('switching accounts never exposes the previous cached records', async () => {

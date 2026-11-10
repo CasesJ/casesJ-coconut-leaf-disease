@@ -2330,6 +2330,53 @@ const uploadIdempotencyKeys = new WeakMap();
 let stagedPreviewGeneration = 0;
 const STAGED_PREVIEW_EDGE = 320;
 
+function formatUploadDuration(milliseconds) {
+  const value = Number(milliseconds);
+  if (!Number.isFinite(value) || value < 0) return 'unavailable';
+  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)} s` : `${Math.round(value)} ms`;
+}
+
+function formatUploadMegabytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return 'unavailable';
+  return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)} MB`;
+}
+
+function buildUploadTimingSummary(timing, backendTimings) {
+  if (!timing || typeof timing !== 'object') return '';
+  const upload = formatUploadDuration(timing.upload_duration_ms);
+  const bytes = formatUploadMegabytes(timing.request_body_bytes);
+  const speed = Number(timing.upload_mbps);
+  const afterUpload = formatUploadDuration(timing.upload_complete_to_http_response_ms);
+  const parts = [`Upload: ${bytes} in ${upload}`];
+  if (Number.isFinite(speed) && speed >= 0) parts[0] += ` (${speed.toFixed(2)} Mbps)`;
+  parts.push(`After upload: ${afterUpload}`);
+  const backendTotal = Number(backendTimings?.request_total_ms);
+  if (Number.isFinite(backendTotal) && backendTotal >= 0) {
+    parts.push(`Backend reported: ${formatUploadDuration(backendTotal)}`);
+  }
+  const inference = Number(backendTimings?.inference_ms);
+  if (Number.isFinite(inference) && inference >= 0) {
+    parts.push(`Inference: ${formatUploadDuration(inference)}`);
+  }
+  const persistence = Number(backendTimings?.persistence_total_ms);
+  if (Number.isFinite(persistence) && persistence >= 0) {
+    parts.push(`Saving: ${formatUploadDuration(persistence)}`);
+  }
+  const attempts = Array.isArray(timing.attempts) ? timing.attempts : [];
+  if (attempts.length > 1) {
+    const successfulAttempt = timing.successful_attempt || attempts.length;
+    const priorAttempts = attempts.filter(item => Number(item?.attempt) !== Number(successfulAttempt));
+    parts.push(`Attempt ${successfulAttempt} of ${attempts.length} succeeded; prior attempts are excluded from this rate`);
+    priorAttempts.forEach(item => {
+      const outcome = String(item?.outcome || 'failed').replace(/_/g, ' ');
+      const duration = formatUploadDuration(item?.total_duration_ms);
+      parts.push(`Prior attempt ${item?.attempt || '?'}: ${outcome} after ${duration}`);
+    });
+  }
+  return parts.join(' · ');
+}
+
 function stageUploadImage(files) {
   const selectedFiles = Array.from(files || []);
   const imageFiles = selectedFiles.filter(file => file.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(file.name));
@@ -2527,6 +2574,7 @@ async function detectImages(files, detectedAt = performance.now()) {
               click_to_result_ms: Math.round(performance.now() - detectedAt),
               http_200_to_result_dom_ms: Math.round(performance.now() - result.client_response_received_at),
               ...result.client_timing_ms,
+              backend_performance_ms: result.performance_ms,
             });
           });
         }
@@ -2632,24 +2680,47 @@ async function detectImage(file, onUploadProgress){
     uploadIdempotencyKeys.set(file, idempotencyKey);
   }
   
-  const sendDetectionRequest = () => new Promise((resolve, reject) => {
+  const uploadAttempts = [];
+  const sendDetectionRequest = attempt => new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
       const timings = { request_created_at: performance.now() };
+      // Each retry gets an isolated timing record. Only the successful attempt
+      // contributes to the displayed transfer rate.
+      const attemptTiming = { attempt, request_body_bytes: null, upload_duration_ms: null, upload_mbps: null };
+      let lastUploadedBytes = 0;
+      let lastUploadTotal = 0;
       request.open('POST', '/detect/image');
       request.timeout = 300_000;
       if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
       request.setRequestHeader('Idempotency-Key', idempotencyKey);
       request.upload.addEventListener('progress', event => {
-        if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
+        if (event.lengthComputable) {
+          lastUploadedBytes = event.loaded;
+          lastUploadTotal = event.total;
+          onUploadProgress?.({ loaded: event.loaded, total: event.total });
+        }
       });
       request.upload.addEventListener('loadstart', () => { timings.upload_started_at = performance.now(); });
       request.upload.addEventListener('load', () => {
         timings.upload_completed_at = performance.now();
+        const uploadDuration = timings.upload_completed_at - timings.upload_started_at;
+        // XHR upload events report multipart request-body bytes (not merely the
+        // source file size). If the browser cannot compute them, leave the
+        // value unknown instead of presenting the file size as transferred data.
+        const requestBodyBytes = lastUploadedBytes || lastUploadTotal || null;
+        attemptTiming.request_body_bytes = requestBodyBytes;
+        attemptTiming.upload_duration_ms = Math.max(0, uploadDuration);
+        attemptTiming.upload_mbps = uploadDuration > 0
+          ? (requestBodyBytes * 8) / (uploadDuration * 1000)
+          : null;
         onUploadProgress?.({ complete: true });
       });
       request.addEventListener('load', () => {
         timings.response_received_at = performance.now();
         if (request.status < 200 || request.status >= 300) {
+          attemptTiming.outcome = `http_${request.status}`;
+          attemptTiming.total_duration_ms = Math.max(0, timings.response_received_at - timings.request_created_at);
+          uploadAttempts.push(attemptTiming);
           const detail = request.responseText || '';
           const error = new Error(`Server error ${request.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
           error.retryable = [502, 503, 504].includes(request.status);
@@ -2667,6 +2738,20 @@ async function detectImage(file, onUploadProgress){
               request_total_ms: Math.round(timings.response_received_at - timings.request_created_at),
             },
           });
+          attemptTiming.outcome = 'success';
+          attemptTiming.upload_complete_to_http_response_ms = Math.max(
+            0, timings.response_received_at - (timings.upload_completed_at || timings.request_created_at),
+          );
+          attemptTiming.total_duration_ms = Math.max(0, timings.response_received_at - timings.request_created_at);
+          uploadAttempts.push(attemptTiming);
+          Object.defineProperty(data, 'client_upload_timing', {
+            enumerable: false,
+            value: {
+              ...attemptTiming,
+              attempts: uploadAttempts.map(item => ({ ...item })),
+              successful_attempt: attempt,
+            },
+          });
           Object.defineProperty(data, 'client_response_received_at', {
             enumerable: false,
             value: timings.response_received_at,
@@ -2677,11 +2762,17 @@ async function detectImage(file, onUploadProgress){
         }
       });
       request.addEventListener('error', () => {
+        attemptTiming.outcome = 'network_error';
+        attemptTiming.total_duration_ms = Math.max(0, performance.now() - timings.request_created_at);
+        uploadAttempts.push(attemptTiming);
         const error = new Error('Network error while uploading image.');
         error.retryable = true;
         reject(error);
       });
       request.addEventListener('timeout', () => {
+        attemptTiming.outcome = 'timeout';
+        attemptTiming.total_duration_ms = Math.max(0, performance.now() - timings.request_created_at);
+        uploadAttempts.push(attemptTiming);
         const error = new Error('Image upload timed out. Check your records before retrying.');
         error.retryable = true;
         reject(error);
@@ -2695,7 +2786,7 @@ async function detectImage(file, onUploadProgress){
   let data;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      data = await sendDetectionRequest();
+      data = await sendDetectionRequest(attempt);
       break;
     } catch (error) {
       if (!error.retryable || attempt === 2) throw error;
@@ -2752,6 +2843,11 @@ function renderUpload(data, originalFile = null, originalObjectUrl = '') {
   if (feedToolbar) feedToolbar.style.display='none';
   if (uploadDrop) uploadDrop.style.display='none';
   if (resultArea) resultArea.style.display='block';
+  const timingSummary = document.getElementById('upload-timing-summary');
+  if (timingSummary) {
+    timingSummary.textContent = buildUploadTimingSummary(data.client_upload_timing, data.performance_ms);
+    timingSummary.style.display = timingSummary.textContent ? 'block' : 'none';
+  }
   setDetectionWorkflowStep(4);
   
   const allDetections = Array.isArray(data.detections) ? data.detections : [];
