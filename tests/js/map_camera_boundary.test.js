@@ -23,7 +23,7 @@ test('routine map refreshes preserve the current camera', () => {
   assert.doesNotMatch(farmLocation, /mainMap\.flyTo/);
 });
 
-test('By Area data keeps configured polygons and unconfigured grid cells', () => {
+test('By Area data renders only configured farm polygons', () => {
   const context = {};
   vm.runInNewContext(section('function buildAreaFeatures(areas)', 'function pointInFarmBoundary'), context);
   const polygon = id => ({ type: 'Polygon', coordinates: [[[id, 0], [id + .1, 0], [id + .1, .1], [id, .1], [id, 0]]] });
@@ -34,15 +34,21 @@ test('By Area data keeps configured polygons and unconfigured grid cells', () =>
   }));
   const features = context.buildAreaFeatures(areas);
 
-  assert.equal(features.length, 4);
+  assert.equal(features.length, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(features[0].geometry)), areas[0].boundary_geojson);
-  assert.deepEqual(JSON.parse(JSON.stringify(features[2].geometry)), areas[2].boundary_geojson);
-  assert.deepEqual(JSON.parse(JSON.stringify(features[1].geometry.coordinates[0])), [[2, 0], [2.5, 0], [2.5, .5], [2, .5], [2, 0]]);
-  assert.deepEqual(JSON.parse(JSON.stringify(features[3].geometry.coordinates[0])), [[4, 0], [4.5, 0], [4.5, .5], [4, .5], [4, 0]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(features[1].geometry)), areas[2].boundary_geojson);
   assert.match(source, /Promise\.resolve\(loadFarmBoundaries\(\)\)\.finally\(\(\) => loadAreaMonitoring\(\)\)/);
 });
 
 test('area selection leaves the base outline source dedicated to the farm outline', () => {
   const selection = section('window.selectFarmArea =', '// Used by the monitoring cards');
   assert.doesNotMatch(selection, /lanticse-farm-src/);
+});
+
+test('the default farm location map has no placeholder outline', () => {
+  const mapSource = section("mainMap.addSource('lanticse-farm-src'", '// Render the solid filled inner region');
+  const farmLocation = section('function applyFarmLocation(center)', 'async function loadFarmLocation()');
+
+  assert.match(mapSource, /FeatureCollection', 'features': \[\]/);
+  assert.match(farmLocation, /source\.setData\(\{ type: 'FeatureCollection', features: \[\] \}\)/);
 });

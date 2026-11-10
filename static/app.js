@@ -1201,19 +1201,10 @@ function initializeMaps() {
     
     mainMap.setTerrain({ source: 'dem-src', exaggeration: 1.5 });
     
-    // ✅ Precise bounding coordinates mapped exclusively around the inner tree block
-    const farmBoundaryCoordinates = farmBoundaryCoordinatesFor(farmLocation);
-
-    // Add the custom GeoJSON Data Source
+    // Keep the base map clear until the farmer saves an actual boundary.
     mainMap.addSource('lanticse-farm-src', {
         'type': 'geojson',
-        'data': {
-            'type': 'Feature',
-            'geometry': {
-                'type': 'Polygon',
-                'coordinates': [farmBoundaryCoordinates]
-            }
-        }
+        'data': { 'type': 'FeatureCollection', 'features': [] }
     });
 
     // Render the solid filled inner region of the farm box
@@ -2113,7 +2104,7 @@ function applyFarmLocation(center) {
   farmLocation = { latitude, longitude };
   AREA_MONITORING_BOUNDS = farmBoundsFor(farmLocation);
   const source = mainMap?.getSource?.('lanticse-farm-src');
-  if (source) source.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [farmBoundaryCoordinatesFor(farmLocation)] } });
+  if (source) source.setData({ type: 'FeatureCollection', features: [] });
   // This can run after an upload or remote refresh. The map constructor uses
   // farmLocation for initial setup; later data updates must not move the main
   // camera away from a detection or a user-selected view.
@@ -2200,12 +2191,10 @@ function areaColor(prevalence) {
 }
 
 function buildAreaFeatures(areas) {
-  return areas.map(area => ({
+  return areas.filter(area => area.boundary_geojson).map(area => ({
     type: 'Feature',
     properties: { name: area.name, diseased: area.diseased, samples: area.samples, color: area.color },
-    geometry: area.boundary_geojson || { type: 'Polygon', coordinates: [[
-      [area.minLng, area.minLat], [area.maxLng, area.minLat], [area.maxLng, area.maxLat], [area.minLng, area.maxLat], [area.minLng, area.minLat]
-    ]] }
+    geometry: area.boundary_geojson
   }));
 }
 
