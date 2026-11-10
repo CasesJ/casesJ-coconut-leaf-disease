@@ -2327,6 +2327,8 @@ let stagedUploadFiles = [];
 let batchUploadResults = [];
 let activeBatchResultIndex = 0;
 const uploadIdempotencyKeys = new WeakMap();
+let stagedPreviewGeneration = 0;
+const STAGED_PREVIEW_EDGE = 320;
 
 function stageUploadImage(files) {
   const selectedFiles = Array.from(files || []);
@@ -2352,18 +2354,49 @@ function stageUploadImage(files) {
   if (confirmation) confirmation.style.display = 'block';
 }
 
+async function thumbnailPreviewUrl(file) {
+  // Keep the original File untouched for upload (including DJI EXIF/XMP), but
+  // do not retain a full 48 MP raster merely for the staging thumbnail.
+  if (typeof createImageBitmap !== 'function') return URL.createObjectURL(file);
+  try {
+    const bitmap = await createImageBitmap(file, {
+      resizeWidth: STAGED_PREVIEW_EDGE,
+      resizeHeight: STAGED_PREVIEW_EDGE,
+      resizeQuality: 'low',
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const thumbnail = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.72));
+    return thumbnail ? URL.createObjectURL(thumbnail) : URL.createObjectURL(file);
+  } catch {
+    return URL.createObjectURL(file);
+  }
+}
+
 function renderStagedImagePreviews() {
   const previewGrid = document.getElementById('staged-image-previews');
   if (!previewGrid) return;
+  const generation = ++stagedPreviewGeneration;
   previewGrid.innerHTML = '';
   stagedUploadFiles.forEach((file, index) => {
     const item = document.createElement('div');
     item.className = 'preview-item';
     const image = document.createElement('img');
-    const imageUrl = URL.createObjectURL(file);
-    image.src = imageUrl;
     image.alt = file.name;
-    image.onload = () => URL.revokeObjectURL(imageUrl);
+    image.decoding = 'async';
+    image.loading = 'lazy';
+    thumbnailPreviewUrl(file).then(imageUrl => {
+      if (generation !== stagedPreviewGeneration || !item.isConnected) {
+        URL.revokeObjectURL(imageUrl);
+        return;
+      }
+      image.src = imageUrl;
+      image.onload = () => URL.revokeObjectURL(imageUrl);
+      image.onerror = () => URL.revokeObjectURL(imageUrl);
+    });
     const remove = document.createElement('button');
     remove.className = 'preview-remove';
     remove.type = 'button';
@@ -2392,10 +2425,11 @@ window.confirmStagedUpload = async function confirmStagedUpload() {
   if (!stagedUploadFiles.length) return;
   const files = stagedUploadFiles;
   stagedUploadFiles = [];
+  stagedPreviewGeneration++;
   const confirmation = document.getElementById('upload-confirmation');
   if (confirmation) confirmation.style.display = 'none';
   setDetectionWorkflowStep(3);
-  await detectImages(files);
+  await detectImages(files, performance.now());
 };
 
 function setDetectionWorkflowStep(step) {
@@ -2406,6 +2440,7 @@ function setDetectionWorkflowStep(step) {
 
 window.cancelStagedUpload = function cancelStagedUpload() {
   stagedUploadFiles = [];
+  stagedPreviewGeneration++;
   const confirmation = document.getElementById('upload-confirmation');
   const fileInput = document.getElementById('fileInput');
   if (confirmation) confirmation.style.display = 'none';
@@ -2421,7 +2456,7 @@ function handleDrop(e){
   if (uploadDrop) uploadDrop.classList.remove('over');
   stageUploadImage(e.dataTransfer.files);
 }
-async function detectImages(files) {
+async function detectImages(files, detectedAt = performance.now()) {
   if (!files.length) return;
   if (!currentUser) {
     showToast('Session expired, please refresh');
@@ -2433,6 +2468,7 @@ async function detectImages(files) {
   const recsArea = document.getElementById('recommendations-area');
   const batchResults = document.getElementById('batch-results');
   releaseBatchPreviewUrls();
+  batchUploadResults = [];
   if (uploadLoading) uploadLoading.classList.add('on');
   if (resultArea) resultArea.style.display = 'none';
   if (recsArea) {
@@ -2477,6 +2513,23 @@ async function detectImages(files) {
         completedResults[index] = { file: files[index], result };
         uploadStates[index] = 'Complete';
         completed += 1;
+        // Requests are serialized to protect the Cloudinary connection pool.
+        // Show the first completed result instead of hiding it behind later
+        // files in the same selected batch.
+        if (!batchUploadResults.length) {
+          batchUploadResults = [{
+            file: files[index], result,
+            originalObjectUrl: URL.createObjectURL(files[index]),
+          }];
+          showBatchResult(0);
+          requestAnimationFrame(() => {
+            console.info('[CoconutAI] DJI detection timing', {
+              click_to_result_ms: Math.round(performance.now() - detectedAt),
+              http_200_to_result_dom_ms: Math.round(performance.now() - result.client_response_received_at),
+              ...result.client_timing_ms,
+            });
+          });
+        }
       } catch (err) {
         console.error(`Upload error for ${files[index].name}:`, err);
         uploadStates[index] = 'Failed';
@@ -2581,6 +2634,7 @@ async function detectImage(file, onUploadProgress){
   
   const sendDetectionRequest = () => new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      const timings = { request_created_at: performance.now() };
       request.open('POST', '/detect/image');
       request.timeout = 300_000;
       if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
@@ -2588,8 +2642,13 @@ async function detectImage(file, onUploadProgress){
       request.upload.addEventListener('progress', event => {
         if (event.lengthComputable) onUploadProgress?.({ loaded: event.loaded, total: event.total });
       });
-      request.upload.addEventListener('load', () => onUploadProgress?.({ complete: true }));
+      request.upload.addEventListener('loadstart', () => { timings.upload_started_at = performance.now(); });
+      request.upload.addEventListener('load', () => {
+        timings.upload_completed_at = performance.now();
+        onUploadProgress?.({ complete: true });
+      });
       request.addEventListener('load', () => {
+        timings.response_received_at = performance.now();
         if (request.status < 200 || request.status >= 300) {
           const detail = request.responseText || '';
           const error = new Error(`Server error ${request.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
@@ -2598,7 +2657,21 @@ async function detectImage(file, onUploadProgress){
           return;
         }
         try {
-          resolve(JSON.parse(request.responseText));
+          const data = JSON.parse(request.responseText);
+          Object.defineProperty(data, 'client_timing_ms', {
+            enumerable: false,
+            value: {
+              request_to_upload_start_ms: Math.round((timings.upload_started_at || timings.request_created_at) - timings.request_created_at),
+              browser_to_render_upload_ms: Math.round((timings.upload_completed_at || timings.response_received_at) - (timings.upload_started_at || timings.request_created_at)),
+              upload_complete_to_http_200_ms: Math.round(timings.response_received_at - (timings.upload_completed_at || timings.request_created_at)),
+              request_total_ms: Math.round(timings.response_received_at - timings.request_created_at),
+            },
+          });
+          Object.defineProperty(data, 'client_response_received_at', {
+            enumerable: false,
+            value: timings.response_received_at,
+          });
+          resolve(data);
         } catch {
           reject(new Error('The server returned an invalid response.'));
         }
@@ -2613,6 +2686,7 @@ async function detectImage(file, onUploadProgress){
         error.retryable = true;
         reject(error);
       });
+      timings.request_sent_at = performance.now();
       request.send(fd);
     });
 
