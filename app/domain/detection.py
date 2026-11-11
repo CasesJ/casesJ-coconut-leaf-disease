@@ -118,10 +118,13 @@ def normalize_verification_status(record: dict) -> str:
     status_value = str(record.get("verification_status") or "").strip().lower()
     source = str(record.get("source") or "upload").lower()
 
-    # Every uploaded image remains pending unless a server-authorized expert
-    # action recorded who verified it and when.  Confidence never verifies an
-    # upload, and a stray `verified` field from legacy data is not sufficient.
+    # Healthy upload results are approved automatically. All other uploaded
+    # results still require a server-authorized expert verification.
     if source == "upload":
+        primary_disease, _ = _extract_primary_disease(record)
+        if primary_disease.strip().casefold() == "healthy":
+            return VERIFIED_STATUS
+
         verified_by_role = str(record.get("verified_by_role") or "").strip().lower()
         verified_by = str(record.get("verified_by") or "").strip()
         verified_by_uid = str(record.get("verified_by_uid") or "").strip()
@@ -274,6 +277,13 @@ def _extract_primary_disease(record: dict) -> tuple[str, float]:
 def upload_verification_status(detections: list[dict], source: str) -> str:
     """Return the initial status for a newly submitted detection record."""
     if str(source or "").lower() != "upload":
+        return VERIFIED_STATUS
+    primary = max(
+        (detection for detection in detections if isinstance(detection, dict)),
+        key=lambda detection: float(detection.get("confidence") or 0),
+        default={},
+    )
+    if str(primary.get("class") or "").strip().casefold() == "healthy":
         return VERIFIED_STATUS
     return PENDING_VERIFICATION_STATUS
 

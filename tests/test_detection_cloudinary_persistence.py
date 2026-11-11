@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.infrastructure.cloudinary_storage import CloudinaryStorageError
-from app.domain.detection import deduplicate_records
+from app.domain.detection import deduplicate_records, upload_verification_status
 from app.services import detection_service as service
 
 
@@ -76,6 +76,12 @@ def test_firestore_stores_one_cloudinary_original_and_normalized_annotation_meta
     assert db.record["detections"][0]["bbox"] == [10, 20, 110, 220]
     assert "image_url" not in db.record and "secure_url" not in str(db.record)
     assert deleted == []
+
+
+def test_healthy_upload_is_automatically_approved():
+    assert upload_verification_status(
+        [{"class": "Healthy", "confidence": 0.53}], "upload"
+    ) == "verified"
 
 
 def test_verified_ambiguous_firestore_commit_is_success(monkeypatch):
