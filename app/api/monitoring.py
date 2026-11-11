@@ -17,7 +17,7 @@ from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MI
                              MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
-from app.domain.expert import is_authorized_expert_identity
+from app.domain.expert import append_expert_audit_event, is_authorized_expert_identity
 from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
 from app.services.detection_service import _annotated_detections
@@ -99,6 +99,23 @@ def create_monitoring_case(payload: MonitoringCaseCreate,
                                  payload.baseline_detection_id,
                                  due.isoformat() if due else None,
                                  expert_id, payload.follow_up_interval_days)
+        # The audit log is a detection-oriented view.  Record the successful
+        # monitoring enrolment against its baseline upload so its displayed
+        # timestamp is the time the expert added the disease to monitoring.
+        append_expert_audit_event(
+            action="create_monitoring_case",
+            actor=decoded,
+            target={
+                "user_id": payload.farmer_id,
+                "record_id": payload.baseline_detection_id,
+                "tree_id": case.get("tree_id"),
+            },
+            details={
+                "case_id": case.get("id"),
+                "disease": case.get("disease"),
+                "created_at": case.get("created_at"),
+            },
+        )
         return media_service.present_monitoring_case(case)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

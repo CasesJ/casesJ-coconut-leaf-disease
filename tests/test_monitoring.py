@@ -198,7 +198,14 @@ def test_case_creation_requires_expert(client, monkeypatch):
     assert response.status_code == 403
     app.dependency_overrides[verify_firebase_token] = lambda: {"uid": "expert-1", "role": "expert"}
     monkeypatch.setattr(monitoring.store, "create_case", lambda *args: {"id": "case-1"})
+    audit_events = []
+    monkeypatch.setattr(monitoring, "append_expert_audit_event",
+                        lambda **event: audit_events.append(event))
     assert client.post("/expert/monitoring/cases", json=payload).status_code == 201
+    assert audit_events[0]["action"] == "create_monitoring_case"
+    assert audit_events[0]["target"] == {
+        "user_id": "farmer-a", "record_id": "upload-1", "tree_id": None,
+    }
     payload.pop("tree_id")
     assert client.post("/expert/monitoring/cases", json=payload).status_code == 201
 

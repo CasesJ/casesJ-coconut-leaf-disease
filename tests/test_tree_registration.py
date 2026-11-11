@@ -170,3 +170,23 @@ def test_audit_enrichment_uses_exact_owner_and_record_link(monkeypatch):
     assert not result[1].get("tree_id")
     assert result[2]["tree_id"] == "existing"
     assert "tree_id" not in events[0]
+
+
+def test_audit_log_shows_only_the_latest_action_for_each_detection(monkeypatch):
+    from app.api import expert
+
+    events = [
+        {"timestamp": "2026-11-12T02:00:00+00:00", "action": "create_monitoring_case",
+         "target": {"user_id": "farmer", "record_id": "one"}},
+        {"timestamp": "2026-11-12T01:00:00+00:00", "action": "update_recommendation",
+         "target": {"user_id": "farmer", "record_id": "one"}},
+    ]
+    monkeypatch.setattr(expert, "_require_expert", lambda _: None)
+    monkeypatch.setattr(expert, "read_expert_audit_events", lambda **_: deepcopy(events))
+    monkeypatch.setattr(expert, "get_all_user_records", lambda **_: [])
+    monkeypatch.setattr(identity.store, "list_expert_cases", lambda: [])
+
+    result = expert.get_expert_audit_log(decoded={})["events"]
+
+    assert len(result) == 1
+    assert result[0]["action"] == "create_monitoring_case"

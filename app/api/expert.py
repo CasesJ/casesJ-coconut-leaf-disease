@@ -45,6 +45,29 @@ def _require_expert(decoded: dict) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Expert access required")
 
 
+def _latest_event_per_detection(events: list[dict]) -> list[dict]:
+    """Keep the current audit-table row for each uploaded detection.
+
+    One expert workflow can emit several immutable audit events for a single
+    upload (verification, recommendation, then monitoring enrolment).  The
+    audit screen is a detection log, so showing all of those events makes one
+    image look like duplicate records.  Events without an uploaded-detection
+    target remain individually visible.
+    """
+    latest: list[dict] = []
+    seen_targets: set[tuple[str, str]] = set()
+    for event in events:
+        target = event.get("target") or {}
+        key = (str(target.get("user_id") or "").strip(),
+               str(target.get("record_id") or "").strip())
+        if not all(key):
+            latest.append(event)
+        elif key not in seen_targets:
+            seen_targets.add(key)
+            latest.append(event)
+    return latest
+
+
 @router.get("/records")
 def get_expert_records(
     status: str = "pending",
@@ -320,4 +343,4 @@ def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_fireba
         case = by_detection.get((target.get("user_id"), target.get("record_id"))) or {}
         event["tree_id"] = event.get("tree_id") or target.get("tree_id") or case.get("tree_id")
         event["monitoring_status"] = case.get("monitoring_status", "waiting")
-    return {"events": events, "limit": safe_limit}
+    return {"events": _latest_event_per_detection(events), "limit": safe_limit}
