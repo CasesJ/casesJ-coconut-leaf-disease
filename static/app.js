@@ -2886,9 +2886,10 @@ function renderUpload(data, originalFile = null, originalObjectUrl = '') {
   const resultArea = document.getElementById('result-area');
   const sTotal = document.getElementById('s-total');
   const sConf = document.getElementById('s-conf');
+  const sDisease = document.getElementById('s-disease');
   const sStatus = document.getElementById('s-status');
   
-  if (!resultImg || !feedToolbar || !uploadDrop || !resultArea || !sTotal || !sConf || !sStatus) {
+  if (!resultImg || !feedToolbar || !uploadDrop || !resultArea || !sTotal || !sConf || !sDisease || !sStatus) {
     console.error('❌ Required DOM elements missing for renderUpload');
     return;
   }
@@ -2930,6 +2931,7 @@ function renderUpload(data, originalFile = null, originalObjectUrl = '') {
   const bad = n > 0;
   if (sTotal) sTotal.textContent = n;
   if (sConf) sConf.textContent = confText;
+  if (sDisease) sDisease.textContent = primary ? formatDiseaseClass(primary.class) : 'No disease detected';
   if (sStatus) {
     sStatus.textContent = n === 0 ? 'Clear' : 'Diseased';
     sStatus.style.color = bad ? 'var(--red)' : 'var(--accent)';
@@ -2947,6 +2949,7 @@ function clearUploadResults(){
   const fileInput = document.getElementById('fileInput');
   const sTotal = document.getElementById('s-total');
   const sConf = document.getElementById('s-conf');
+  const sDisease = document.getElementById('s-disease');
   const sStatus = document.getElementById('s-status');
   const batchResults = document.getElementById('batch-results');
   const previousButton = document.getElementById('result-prev');
@@ -2957,6 +2960,7 @@ function clearUploadResults(){
   if (uploadDrop) uploadDrop.style.display='';
   setDetectionWorkflowStep(1);
   if (fileInput) fileInput.value='';
+  if (sDisease) sDisease.textContent='—';
   if (sTotal) sTotal.textContent='0';
   if (sConf) sConf.textContent='—';
   if (sStatus) {
@@ -3886,14 +3890,17 @@ function renderExpertAuditTable(events) {
     const timestamp = new Date(entry.timestamp || Date.now()).toLocaleString();
     const target = entry.target || {};
     const upload = entry.upload || {};
-    const action = String(entry.action || 'action').replace(/_/g, ' ');
     const treeId = entry.tree_id || target.tree_id;
     const treeCell = treeId && target.user_id
       ? `<button type="button" class="btn btn-o audit-tree-link" title="${escapeHtml(treeId)}" onclick="monitoringOpenTree('${encodeInlineValue(treeId)}','${encodeInlineValue(target.user_id)}')">${escapeHtml(treeId)}</button>`
       : escapeHtml(treeId || 'Unassigned');
-    return `<tr><td data-label="Date and time">${escapeHtml(timestamp)}</td><td data-label="Action"><strong>${escapeHtml(action)}</strong></td><td data-label="Record">${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</td><td data-label="Uploaded by">${escapeHtml(upload.email || upload.user_id || target.user_id || '—')}</td><td data-label="Tree ID">${treeCell}</td><td data-label="Status"><span class="monitor-pill">${entry.monitoring_status === 'finish' ? 'Finish' : 'Waiting'}</span></td></tr>`;
+    const imageLabel = upload.filename || target.disease || target.record_id || 'Detection image';
+    const imageCell = upload.image_url || upload.annotated_image_url
+      ? `<button type="button" title="View detection image" onclick="openExpertImageResult('${encodeInlineValue(upload.image_url || '')}','${encodeInlineValue(upload.annotated_image_url || '')}','${encodeInlineValue(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" data-private-src="${escapeHtml(upload.image_url || upload.annotated_image_url)}" alt="View ${escapeHtml(imageLabel)}"></button>`
+      : '<span class="expert-table-muted">No image</span>';
+    return `<tr><td data-label="Date and time">${escapeHtml(timestamp)}</td><td data-label="Records"><strong>${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</strong></td><td data-label="Uploaded by">${escapeHtml(upload.email || upload.user_id || target.user_id || '—')}</td><td data-label="Image">${imageCell}</td><td data-label="Tree ID">${treeCell}</td><td data-label="Status"><span class="monitor-pill">${entry.monitoring_status === 'finish' ? 'Finish' : 'Waiting'}</span></td></tr>`;
   }).join('');
-  return `<div class="expert-table-wrap"><table class="expert-records-table expert-audit-table"><thead><tr><th>Date and time</th><th>Action</th><th>Record</th><th>Uploaded by</th><th>TREE ID</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="expert-table-wrap"><table class="expert-records-table expert-audit-table"><thead><tr><th>Date and time</th><th>Records</th><th>Uploaded by</th><th>Image</th><th>TREE ID</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderExpertAuditLog() {

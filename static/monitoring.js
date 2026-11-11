@@ -502,17 +502,9 @@ document.addEventListener('DOMContentLoaded', () => {
           tree_id: document.getElementById('monitor-tree-select').value === '__new__' ? null : document.getElementById('monitor-tree-select').value, baseline_detection_id: record.id,
           follow_up_interval_days: Number(document.getElementById('monitor-interval').value) }) });
       monitoringState.selected = created.id;
-      const referenceFile = document.getElementById('monitor-create-tree-file')?.files[0];
       form.reset();
       document.getElementById('monitor-tree-select').disabled = true;
-      if (referenceFile) {
-        try {
-          await monitoringUploadBaseline(created, referenceFile);
-          showToast('Monitoring case and tree reference created');
-        } catch (error) {
-          showToast(`Case created; tree reference was not confirmed saved. Reload this case before retrying: ${error.message}`);
-        }
-      } else showToast('Monitoring case created. Add a tree reference when available.');
+      showToast('Monitoring case created');
       await loadMonitoringDashboard();
     } catch (error) { showToast(`Could not create case: ${error.message}`); }
     finally { button.disabled = false; }

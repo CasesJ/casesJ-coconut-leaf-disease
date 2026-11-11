@@ -19,18 +19,20 @@ function harness(events, query = '') {
 
 test('audit columns follow the requested order and old events remain Unassigned', () => {
   const html = harness([{ tree_id: 'TREE-ABC' }, { target: {} }]);
-  assert.match(html, /<thead><tr><th>Date and time<\/th><th>Action<\/th><th>Record<\/th><th>Uploaded by<\/th><th>TREE ID<\/th><th>Status<\/th><\/tr><\/thead>/);
+  assert.match(html, /<thead><tr><th>Date and time<\/th><th>Records<\/th><th>Uploaded by<\/th><th>Image<\/th><th>TREE ID<\/th><th>Status<\/th><\/tr><\/thead>/);
   assert.match(html, /TREE-ABC/);
   assert.match(html, /Unassigned/);
-  for (const column of ['Action', 'Record', 'Uploaded by'])
+  assert.match(html, /No image/);
+  for (const column of ['Records', 'Uploaded by', 'Image'])
     assert.ok(html.includes(`<th>${column}</th>`));
 });
 
 test('each row shows the detection uploader rather than the acting expert', () => {
   const html = harness([{ action: 'verify_record', actor_email: 'expert@example.com',
-    upload: { filename: 'coconut.jpg', email: 'farmer@example.com' },
+    upload: { filename: 'coconut.jpg', email: 'farmer@example.com', image_url: '/expert/media/detections/farmer-1/record-1/original', annotated_image_url: '/expert/media/detections/farmer-1/record-1/annotated' },
     target: { user_id: 'farmer-1', tree_id: 'TREE-ABC' } }]);
-  assert.match(html, /data-label="Record">coconut.jpg<\/td><td data-label="Uploaded by">farmer@example.com<\/td><td data-label="Tree ID">/);
+  assert.match(html, /data-label="Records"><strong>coconut.jpg<\/strong><\/td><td data-label="Uploaded by">farmer@example.com<\/td><td data-label="Image">/);
+  assert.match(html, /data-private-src="\/expert\/media\/detections\/farmer-1\/record-1\/original"/);
   assert.doesNotMatch(html, /expert@example.com/);
   assert.match(harness([{ target: { user_id: 'farmer-1' } }]), /data-label="Uploaded by">farmer-1<\/td>/);
 });
