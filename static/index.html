@@ -1294,8 +1294,7 @@
     .dashboard-intro p { color:var(--text3); font-size:14px; margin-top:6px; }
     .dashboard-date { padding:8px 11px; color:var(--mid); background:#edf8f1; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
     .dashboard-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
-    /* The Detection Records summary has three metrics; let all three use the full row. */
-    #records-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    #records-stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
     .stat-box { align-items:flex-start; text-align:left; min-height:145px; padding:20px; border-radius:14px; }
     .stat-box .stat-icon { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; margin-bottom:14px; background:color-mix(in srgb,var(--stat-accent) 14%, white); color:var(--stat-accent); }
     .stat-box .stat-icon svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.9; }
@@ -1378,7 +1377,7 @@
     .sidebar-footer-copy { position:absolute; z-index:1; left:37px; bottom:29px; display:flex; align-items:center; gap:9px; color:rgba(255,255,255,.88); font-size:12px; line-height:1.35; font-style:italic; }
     .sidebar-footer-copy svg { width:23px; height:23px; flex:0 0 23px; fill:none; stroke:#e6f6ea; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .sidebar-nav { position:relative; z-index:2; }.sidebar-logo { position:relative; z-index:2; }
-    #records-stats { grid-template-columns:repeat(5,minmax(0,1fr)); }
+    #records-stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
     @media(max-width:1200px){#records-stats{grid-template-columns:repeat(3,minmax(0,1fr));}}
     @media(max-width:650px){#records-stats{grid-template-columns:1fr;}}
     @media(max-width:1023px){.sidebar-footer-art{display:none}}
@@ -1914,29 +1913,24 @@
       <div class="dashboard-main-column">
         <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
           <div class="stat-box">
-            <h4>Diseased Trees</h4>
+            <h4>Disease Detection</h4>
             <div class="stat-value" id="total-diseases-found">0</div>
             <div class="stat-subtext">All disease cases recorded</div>
           </div>
           <div class="stat-box">
-            <h4>Detection Records</h4>
+            <h4>Total Images Analyzed</h4>
             <div class="stat-value" id="total-records-count">0</div>
             <div class="stat-subtext">Detection sessions</div>
           </div>
           <div class="stat-box">
-            <h4>Most Common Disease</h4>
+            <h4>Disease Types Detected</h4>
             <div class="stat-value" id="most-common-disease">—</div>
             <div class="stat-subtext">Detected on farm</div>
           </div>
           <div class="stat-box healthy">
-            <h4>Healthy</h4>
+            <h4>Healthy Detection</h4>
             <div class="stat-value" id="records-healthy-count">0</div>
             <div class="stat-subtext">No disease detected</div>
-          </div>
-          <div class="stat-box mapped">
-            <h4>Common Diseases</h4>
-            <div class="stat-value" id="records-common-diseases">0</div>
-            <div class="stat-subtext">Disease types detected</div>
           </div>
         </div>
     <!-- Health Analytics & Trends Dashboard -->
