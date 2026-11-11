@@ -2199,13 +2199,38 @@ async function loadFarmLocation() {
   } catch (error) { console.warn('Could not load farm location:', error); }
 }
 
+function getEmbeddedRecordGps(record) {
+  const parseGps = value => {
+    if (typeof value !== 'string') return value && typeof value === 'object' ? value : {};
+    try { return JSON.parse(value); } catch (_) { return {}; }
+  };
+  const gpsData = parseGps(record?.gps_data);
+  const gps = parseGps(record?.gps);
+  const metadataGps = parseGps(record?.image_metadata?.gps);
+  const source = [record?.gps_source, gpsData.source, gps.source, record?.image_metadata?.gps_source, metadataGps.source]
+    .map(value => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_'))
+    .find(value => value === 'exif' || value === 'dji_exif');
+  if (!source) return null;
+  const coordinatePairs = [
+    [record?.lat, record?.lng],
+    [gpsData.latitude ?? gpsData.lat, gpsData.longitude ?? gpsData.lng],
+    [gps.latitude ?? gps.lat, gps.longitude ?? gps.lng],
+    [metadataGps.latitude ?? metadataGps.lat, metadataGps.longitude ?? metadataGps.lng],
+  ];
+  for (const [rawLat, rawLng] of coordinatePairs) {
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng, source };
+    }
+  }
+  return null;
+}
+
 function getRecordCoordinates(record) {
-  const gps = typeof record?.gps_data === 'string' ? (() => { try { return JSON.parse(record.gps_data); } catch (_) { return {}; } })() : (record?.gps_data || record?.gps || {});
+  const embeddedGps = getEmbeddedRecordGps(record);
+  if (embeddedGps) return embeddedGps;
   const metadataGps = record?.image_metadata?.gps || {};
-  const lat = Number(record?.lat ?? gps.latitude ?? gps.lat ?? metadataGps.latitude ?? metadataGps.lat);
-  const lng = Number(record?.lng ?? gps.longitude ?? gps.lng ?? metadataGps.longitude ?? metadataGps.lng);
-  const source = String(record?.gps_source ?? gps.source ?? '').toLowerCase();
-  if (['exif', 'dji_exif'].includes(source) && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat, lng };
   const metadataLat = Number(metadataGps.latitude ?? metadataGps.lat);
   const metadataLng = Number(metadataGps.longitude ?? metadataGps.lng);
   return Number.isFinite(metadataLat) && Number.isFinite(metadataLng) && metadataLat >= -90 && metadataLat <= 90 && metadataLng >= -180 && metadataLng <= 180 ? { lat: metadataLat, lng: metadataLng } : null;
@@ -3559,42 +3584,14 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
       && recommendationSnapshot && typeof recommendationSnapshot === 'object'
       && recommendationSnapshot.recommendations && typeof recommendationSnapshot.recommendations === 'object';
     const recordKey = `history-${getRecordKey(record, index)}`;
-    let lat = null;
-    let lng = null;
-    let gpsSource = 'unknown';
-    if (record.lat && record.lng) {
-      lat = record.lat;
-      lng = record.lng;
-      gpsSource = record.gps_source || 'database';
-    } else if (record.gps_data && typeof record.gps_data === 'object') {
-      lat = record.gps_data.latitude || record.gps_data.lat;
-      lng = record.gps_data.longitude || record.gps_data.lng;
-      gpsSource = record.gps_data.source || gpsSource;
-    } else if (record.gps && typeof record.gps === 'object') {
-      lat = record.gps.lat || record.gps.latitude;
-      lng = record.gps.lng || record.gps.longitude;
-      gpsSource = record.gps.source || gpsSource;
-    } else if (record.image_metadata?.gps) {
-      lat = record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat;
-      lng = record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng;
-      gpsSource = record.image_metadata.gps_source || 'exif';
-    }
-    if (lat !== null && lng !== null) {
-      lat = parseFloat(lat);
-      lng = parseFloat(lng);
-    }
-    if (!['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase()) && record.image_metadata?.gps) {
-      lat = Number(record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat);
-      lng = Number(record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng);
-      gpsSource = record.image_metadata.gps_source || 'exif';
-    }
-    const hasEmbeddedGps = ['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase())
-      && Number.isFinite(lat) && Number.isFinite(lng)
-      && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-    const actions = imageUrl || hasEmbeddedGps || hasExpertRecommendation
-      ? `<div class="history-actions">${imageUrl ? `<button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button>` : ''}${hasEmbeddedGps ? `<button class="btn btn-o" type="button" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : ''}${hasExpertRecommendation ? `<button class="btn btn-o" type="button" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>` : ''}</div>`
+    const embeddedGps = getEmbeddedRecordGps(record);
+    const locationDisplay = embeddedGps
+      ? `<div class="record-location"><span class="record-location-label">Location</span><span>${embeddedGps.lat.toFixed(5)}, ${embeddedGps.lng.toFixed(5)}</span></div>`
       : '';
-    return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
+    const actions = imageUrl || embeddedGps || hasExpertRecommendation
+      ? `<div class="history-actions">${imageUrl ? `<button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button>` : ''}${embeddedGps ? `<button class="btn btn-o" type="button" onclick="showRecordLocationOnMap(${embeddedGps.lat}, ${embeddedGps.lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : ''}${hasExpertRecommendation ? `<button class="btn btn-o" type="button" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>` : ''}</div>`
+      : '';
+    return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div>${locationDisplay}</div>${actions}</div>`;
   }).join('') : '<div class="no-records">No verified disease records available.</div>';
   if (list) {
     list.querySelectorAll('.history-record').forEach((row, index) => {
@@ -4134,51 +4131,6 @@ async function loadUserRecords({ force = false } = {}) {
       const status = formatVerificationStatus(record.verification_status);
       const primary = getPrimaryDetection(record);
       
-      // Read only GPS coordinates that were extracted from the uploaded image.
-      let lat = null;
-      let lng = null;
-      let gpsSource = 'unknown';
-      
-      // Records may expose the same persisted EXIF GPS through legacy shapes.
-      if (record.lat && record.lng) {
-        lat = record.lat;
-        lng = record.lng;
-        gpsSource = record.gps_source || 'database';
-      } else if (record.gps_data && typeof record.gps_data === 'object') {
-        // Check for latitude/longitude or lat/lng in gps_data object
-        lat = record.gps_data.latitude || record.gps_data.lat;
-        lng = record.gps_data.longitude || record.gps_data.lng;
-        gpsSource = record.gps_data.source || gpsSource;
-      } else if (record.gps && typeof record.gps === 'object') {
-        lat = record.gps.lat || record.gps.latitude;
-        lng = record.gps.lng || record.gps.longitude;
-        gpsSource = record.gps.source || gpsSource;
-      } else if (record.image_metadata?.gps) {
-        lat = record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat;
-        lng = record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng;
-        gpsSource = record.image_metadata.gps_source || 'exif';
-      }
-      
-      // Convert to numbers if they exist
-      if (lat !== null && lng !== null) {
-        lat = parseFloat(lat);
-        lng = parseFloat(lng);
-      }
-
-      if (!['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase()) && record.image_metadata?.gps) {
-        lat = Number(record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat);
-        lng = Number(record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng);
-        gpsSource = record.image_metadata.gps_source || 'exif';
-      }
-      
-      const hasEmbeddedGps = ['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase())
-        && Number.isFinite(lat) && Number.isFinite(lng)
-        && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-      console.log(hasEmbeddedGps
-        ? `📍 Record ${idx}: Embedded GPS - ${lat.toFixed(6)}, ${lng.toFixed(6)} (source: ${gpsSource})`
-        : `📍 Record ${idx}: No embedded GPS metadata`);
-      
-      const locationDisplay = `<div class="record-location"><span class="record-location-label">Location</span><span>${hasEmbeddedGps ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS data'}</span>${!hasEmbeddedGps ? '<small>This upload has no embedded coordinates.</small>' : ''}</div>`;
       const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
       const imageLabel = record.filename || record.image_path || 'Detection image';
       const imagePreview = imageUrl
@@ -4201,7 +4153,6 @@ async function loadUserRecords({ force = false } = {}) {
             ${detections.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))} ${Math.round(d.confidence*100)}%</span>`).join('')}
             <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
-          ${locationDisplay}
           </div>
         </div>
       `;
