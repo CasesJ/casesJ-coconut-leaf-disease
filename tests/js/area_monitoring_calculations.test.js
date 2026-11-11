@@ -66,3 +66,12 @@ test('area monitoring renders counts once per card and no prevalence percentage'
   assert.doesNotMatch(body, /Severity status|area\.severity/);
   assert.doesNotMatch(body, /Disease Prevalence|prevalenceLabel|area-bar|% disease prevalence/);
 });
+
+test('verified history exposes expert recommendations only after expert verification', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../static/app.js'), 'utf8');
+  const start = source.indexOf('window.filterVerifiedHistory');
+  const body = source.slice(start, source.indexOf('// Verified history is deliberately separate', start));
+  assert.match(body, /View recommendation/);
+  assert.match(body, /record\.verified_by_role/);
+  assert.match(body, /recommendationSnapshot\.recommendations/);
+});

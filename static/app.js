@@ -3523,12 +3523,17 @@ let verifiedHistoryRecords = [];
 window.filterVerifiedHistory = function filterVerifiedHistory() {
   const list = document.getElementById('verified-history-list');
   const matches = verifiedHistoryRecords;
-  if (list) list.innerHTML = matches.length ? matches.map(record => {
+  if (list) list.innerHTML = matches.length ? matches.map((record, index) => {
     const ds = record.detections || [];
     const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Detection image';
-    const actions = imageUrl
-      ? `<div class="history-actions"><button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button></div>`
+    const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot;
+    const hasExpertRecommendation = String(record.verified_by_role || '').toLowerCase() === 'expert'
+      && recommendationSnapshot && typeof recommendationSnapshot === 'object'
+      && recommendationSnapshot.recommendations && typeof recommendationSnapshot.recommendations === 'object';
+    const recordKey = `history-${getRecordKey(record, index)}`;
+    const actions = imageUrl || hasExpertRecommendation
+      ? `<div class="history-actions">${imageUrl ? `<button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button>` : ''}${hasExpertRecommendation ? `<button class="btn btn-o" type="button" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>` : ''}</div>`
       : '';
     return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
   }).join('') : '<div class="no-records">No verified disease records available.</div>';
@@ -3547,6 +3552,20 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
         thumbnail.textContent = 'Image unavailable';
       }
       badge.replaceWith(thumbnail);
+
+      const recommendationSnapshot = record?.recommendation_snapshot || record?.recommendationSnapshot;
+      const hasExpertRecommendation = String(record?.verified_by_role || '').toLowerCase() === 'expert'
+        && recommendationSnapshot && typeof recommendationSnapshot === 'object'
+        && recommendationSnapshot.recommendations && typeof recommendationSnapshot.recommendations === 'object';
+      if (hasExpertRecommendation) {
+        const panel = document.createElement('div');
+        panel.id = `record-recommendation-history-${getRecordKey(record, index)}`;
+        panel.dataset.loaded = '1';
+        panel.style.display = 'none';
+        panel.style.marginTop = '10px';
+        panel.innerHTML = renderRecommendationCardHtml(recommendationSnapshot);
+        row.querySelector('.record-detections')?.parentElement?.appendChild(panel);
+      }
     });
   }
 };
@@ -4090,7 +4109,7 @@ async function loadUserRecords({ force = false } = {}) {
       const mapButtonHtml = hasEmbeddedGps
         ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
       const hasExpertRecommendation = status.cls === 'verified'
-        && recommendationSnapshot?.recommendation_scope === 'record'
+        && String(record.verified_by_role || '').toLowerCase() === 'expert'
         && recommendationSnapshot?.recommendations;
       const recommendationButtonHtml = hasExpertRecommendation
         ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>`
