@@ -139,6 +139,13 @@ VERIFIED_STATUS = "verified"
 # ── Expert account credentials (from environment / .env) ──────────────────────
 EXPERT_ACCOUNT_EMAIL: str = _required_env("EXPERT_ACCOUNT_EMAIL").lower()
 EXPERT_ACCOUNT_PASSWORD: str = _required_env("EXPERT_ACCOUNT_PASSWORD")
+# Creating or updating an Auth user makes a remote Firebase Admin API call.
+# Keep it out of normal web-service startup so a transient Firebase problem
+# cannot prevent the process from binding Render's required port.  Set this
+# explicitly to true only for a controlled provisioning deployment.
+PROVISION_EXPERT_ACCOUNT_ON_STARTUP = _bool_env(
+    "PROVISION_EXPERT_ACCOUNT_ON_STARTUP", False,
+)
 EXPERT_ACCOUNT_UID: str = os.getenv("EXPERT_ACCOUNT_UID", "").strip()
 
 EXPERT_ACCOUNT_EMAILS: set[str] = {

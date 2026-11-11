@@ -11,8 +11,10 @@ services:
         value: "3.12.11"
       - key: INFERENCE_BACKEND
         value: roboflow
-      - key: OPENVINO_MODEL_DIR
-        value: models/yolo26s_openvino_model
+      # Do not make Firebase Auth writes part of the web-service boot path.
+      # Enable temporarily only when deliberately provisioning the expert user.
+      - key: PROVISION_EXPERT_ACCOUNT_ON_STARTUP
+        value: "false"
       - key: MAX_IMAGE_UPLOAD_BYTES
         value: "50000000"
       - key: MAX_IMAGE_UPLOAD_PIXELS

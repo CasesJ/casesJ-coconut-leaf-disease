@@ -21,6 +21,7 @@ from app.core.config import (
     CORS_ALLOWED_ORIGINS,
     IMAGE_PIPELINE_MAX_CONCURRENCY,
     IMAGE_PIPELINE_QUEUE_SECONDS,
+    PROVISION_EXPERT_ACCOUNT_ON_STARTUP,
 )
 from app.api import auth, detections, drone, expert, health, monitoring, notifications, records, recommendations, reports, farm_boundaries
 from app.api import tree_identity
@@ -66,16 +67,22 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("⚠️  Drone GPS init error: %s", exc)
 
-    # Ensure the expert account exists in Firebase Auth.
-    try:
-        from app.core.config import EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD  # noqa: PLC0415
-        from app.infrastructure.firebase.auth import ensure_user_account  # noqa: PLC0415
-        expert_user, created = await run_in_threadpool(
-            ensure_user_account, EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD, {"role": "expert"}
-        )
-        logger.info("✅ Expert account ready: %s (%s)", expert_user.email, "created" if created else "updated")
-    except Exception as exc:
-        logger.warning("⚠️  Could not prepare expert account: %s", exc)
+    # Provisioning an Auth account is an administrative action that can wait
+    # on Firebase network retries for minutes.  Do not let it hold up Render's
+    # port scan.  Existing accounts still work normally; enable this only for
+    # an intentional one-off provisioning deployment.
+    if PROVISION_EXPERT_ACCOUNT_ON_STARTUP:
+        try:
+            from app.core.config import EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD  # noqa: PLC0415
+            from app.infrastructure.firebase.auth import ensure_user_account  # noqa: PLC0415
+            expert_user, created = await run_in_threadpool(
+                ensure_user_account, EXPERT_ACCOUNT_EMAIL, EXPERT_ACCOUNT_PASSWORD, {"role": "expert"}
+            )
+            logger.info("✅ Expert account ready: %s (%s)", expert_user.email, "created" if created else "updated")
+        except Exception as exc:
+            logger.warning("⚠️  Could not prepare expert account: %s", exc)
+    else:
+        logger.info("Expert account provisioning skipped during web-service startup")
 
     logger.info("✅ Application startup complete")
     logger.info("=" * 70)
