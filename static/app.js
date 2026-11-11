@@ -2738,7 +2738,7 @@ async function detectImage(file, onUploadProgress){
       const attemptTiming = { attempt, request_body_bytes: null, upload_duration_ms: null, upload_mbps: null };
       let lastUploadedBytes = 0;
       let lastUploadTotal = 0;
-      request.open('POST', '/detect/image');
+      request.open('POST', window.coconutApiUrl('/detect/image'));
       request.timeout = 300_000;
       if (currentToken) request.setRequestHeader('Authorization', `Bearer ${currentToken}`);
       request.setRequestHeader('Idempotency-Key', idempotencyKey);
@@ -3262,7 +3262,7 @@ async function startDrone(){
     document.getElementById('sdot').classList.add('live');
     document.getElementById('sdot-lbl').textContent='Live • Detecting...';
     document.getElementById('canvas-ph').classList.add('hidden');
-    ws=new WebSocket('ws://'+location.host+'/detect/stream?token='+currentToken);
+    ws=new WebSocket(window.coconutApiWebSocketUrl('/detect/stream?token='+encodeURIComponent(currentToken)));
     ws.onmessage=e=>{
       const data=JSON.parse(e.data);
       if (data.error) {
@@ -3904,18 +3904,25 @@ window.filterExpertAuditLog = function filterExpertAuditLog() {
 function updateRecordSummaryCards(allRecords) {
   const allDetections = [];
   const diseaseCounts = {};
+  let pendingDetections = 0;
+  let verifiedDiseases = 0;
 
   allRecords.forEach(record => {
+    const verification = formatVerificationStatus(record.verification_status).cls;
+    if (verification === 'verified') verifiedDiseases += 1;
+    else pendingDetections += 1;
     if (record.detections && Array.isArray(record.detections)) {
       record.detections.forEach(detection => {
         allDetections.push(detection);
-        const diseaseClass = detection.class || 'unknown';
-        diseaseCounts[diseaseClass] = (diseaseCounts[diseaseClass] || 0) + 1;
+        if (isDiseaseClass(detection.class)) {
+          const diseaseClass = normalizeDiseaseClass(detection.class) || 'unknown';
+          diseaseCounts[diseaseClass] = (diseaseCounts[diseaseClass] || 0) + 1;
+        }
       });
     }
   });
 
-  const totalDiseases = allDetections.length;
+  const totalDiseases = allDetections.filter((detection) => isDiseaseClass(detection.class)).length;
   const mostCommonDisease = Object.keys(diseaseCounts).length > 0
     ? formatDiseaseClass(Object.entries(diseaseCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0])
     : '—';
@@ -3927,18 +3934,20 @@ function updateRecordSummaryCards(allRecords) {
   ).size;
 
   const totalDiseasesEl = document.getElementById('total-diseases-found');
-  const totalRecordsEl = document.getElementById('total-records-count');
+  const pendingDetectionsEl = document.getElementById('total-pending-detections');
+  const verifiedDiseasesEl = document.getElementById('total-verified-diseases');
   const mostCommonEl = document.getElementById('most-common-disease');
   const healthyCountEl = document.getElementById('records-healthy-count');
   const commonDiseasesEl = document.getElementById('records-common-diseases');
   const statsEl = document.getElementById('records-stats');
 
   if (totalDiseasesEl) totalDiseasesEl.textContent = totalDiseases;
-  if (totalRecordsEl) totalRecordsEl.textContent = allRecords.length;
+  if (pendingDetectionsEl) pendingDetectionsEl.textContent = pendingDetections;
+  if (verifiedDiseasesEl) verifiedDiseasesEl.textContent = verifiedDiseases;
   if (mostCommonEl) mostCommonEl.textContent = mostCommonDisease;
   if (healthyCountEl) healthyCountEl.textContent = healthyDetections;
   if (commonDiseasesEl) commonDiseasesEl.textContent = commonDiseases;
-  if (statsEl) statsEl.style.display = allRecords.length > 0 ? 'grid' : 'none';
+  if (statsEl) statsEl.style.display = 'grid';
 }
 
 async function loadUserRecords({ force = false } = {}) {

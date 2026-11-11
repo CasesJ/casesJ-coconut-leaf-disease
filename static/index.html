@@ -147,7 +147,8 @@
     .auth-form { min-height:100%; background:#fff; border-radius:0; padding:clamp(2rem, 5vw, 5rem); box-shadow:none; backdrop-filter:none; display:flex; flex-direction:column; justify-content:center; }
     .auth-form form { width:100%; }
     .auth-brand { display:flex; align-items:center; gap:.8rem; margin:0 auto 2.5rem; color:#101827; }
-    .auth-brand .logo-icon { width:48px; height:48px; display:grid; place-items:center; border-radius:15px; background:#0e9b8d; color:#fff; font-size:1.6rem; font-weight:700; }
+    .auth-brand .logo-icon { width:48px; height:48px; display:grid; place-items:center; border-radius:50%; background:#064831; color:#fff; border:2px solid rgba(255,255,255,.92); }
+    .auth-brand .logo-icon svg { width:32px; height:32px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
     .auth-brand strong { display:block; font-size:1.2rem; }
     .auth-brand small { color:#0e9b8d; font-size:.85rem; }
     .auth-tabs { display:grid; grid-template-columns:1fr 1fr; margin-bottom:2rem; border-bottom:1px solid #e1e5eb; }
@@ -247,7 +248,7 @@
       .auth-trust { margin-bottom:.45rem; padding:.4rem .7rem; font-size:.72rem; }
       .auth-form { min-height:0; justify-content:flex-start; padding:1rem; }
       .auth-brand { gap:.65rem; margin-bottom:.85rem; }
-      .auth-brand .logo-icon { width:40px; height:40px; border-radius:12px; font-size:1.35rem; }
+      .auth-brand .logo-icon { width:40px; height:40px; border-radius:50%; }
       .auth-brand strong { font-size:1.05rem; }
       .auth-brand small { font-size:.75rem; }
       .auth-tabs { margin-bottom:.85rem; }
@@ -1293,14 +1294,19 @@
     .dashboard-intro h1 { color:var(--deep); font-size:clamp(25px,3vw,34px); line-height:1.1; letter-spacing:-.8px; }
     .dashboard-intro p { color:var(--text3); font-size:14px; margin-top:6px; }
     .dashboard-date { padding:8px 11px; color:var(--mid); background:#edf8f1; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
-    .dashboard-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
-    #records-stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
-    .stat-box { align-items:flex-start; text-align:left; min-height:145px; padding:20px; border-radius:14px; }
-    .stat-box .stat-icon { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; margin-bottom:14px; background:color-mix(in srgb,var(--stat-accent) 14%, white); color:var(--stat-accent); }
-    .stat-box .stat-icon svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.9; }
-    .stat-box h4 { order:2; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
-    .stat-box .stat-value { order:3; margin:5px 0 0; font-size:28px; }
-    .stat-box .stat-subtext { order:4; margin-top:3px; }
+    .dashboard-stats { grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+    #records-stats { grid-template-columns:repeat(5,minmax(0,1fr)); }
+    .stat-box { align-items:flex-start; text-align:left; min-height:122px; padding:16px; border-radius:10px; }
+    .stat-box .stat-card-heading { display:flex; align-items:center; gap:10px; order:2; }
+    .stat-box .stat-icon { width:26px; height:26px; display:grid; place-items:center; flex:0 0 26px; margin:0; color:var(--stat-accent); }
+    .stat-box .stat-icon svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+    .stat-box h4 { margin:0; font-size:12px; text-transform:none; letter-spacing:0; color:var(--deep); }
+    .stat-box .stat-value { order:3; margin:9px 0 0; font-size:25px; }
+    .stat-box .stat-subtext { order:4; margin-top:5px; }
+    .stat-box.pending { --stat-accent:#e69300; background:linear-gradient(135deg,#fffdf6 0%,#fff8db 100%); }
+    .stat-box.verified { --stat-accent:#1b73a8; background:linear-gradient(135deg,#fafcff 0%,#eef5ff 100%); }
+    .stat-box.disease { --stat-accent:#31b869; background:linear-gradient(135deg,#fff 0%,#f2fbf5 100%); }
+    .stat-box.common { --stat-accent:#31b869; background:linear-gradient(135deg,#fff 0%,#f2fbf5 100%); }
     .stat-box.mapped { --stat-accent:#5579c9; }
     .dashboard-lower { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:18px; margin-top:18px; }
     .dashboard-section-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--sh); }
@@ -1360,7 +1366,7 @@
     .panels { padding:22px 16px 0; }.panel { background:transparent; box-shadow:none; padding:0; }
     #panel-dashboard .dashboard-intro { min-height:280px; align-items:flex-start; padding:23px 28px; margin:0 0 16px; border-radius:11px; background-image:linear-gradient(90deg,rgba(5,54,35,.66),rgba(5,54,35,.36),rgba(5,54,35,.03)),url('/coco-farm.jpg'); background-position:center, center 68%; background-size:cover, 118% auto; background-repeat:no-repeat; box-shadow:0 4px 14px rgba(7,58,36,.12); }
     #panel-dashboard .dashboard-intro h1 { color:#fff; font-size:29px; margin:0; } #panel-dashboard .dashboard-intro p { max-width:340px; color:rgba(255,255,255,.88); line-height:1.6; } #panel-dashboard .dashboard-date { color:#fff; background:rgba(255,255,255,.15); }
-    #panel-dashboard .dashboard-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:16px; }.stat-box { min-height:122px; padding:16px; border:0; border-radius:10px; box-shadow:0 2px 8px rgba(10,53,34,.06); }.stat-box h4 { font-size:12px; text-transform:none; letter-spacing:0; }.stat-box .stat-value { font-size:26px; }
+    #panel-dashboard .dashboard-stats { grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:16px; }.stat-box { min-height:122px; padding:16px; border:0; border-radius:10px; box-shadow:0 2px 8px rgba(10,53,34,.06); }.stat-box h4 { font-size:12px; text-transform:none; letter-spacing:0; }.stat-box .stat-value { font-size:25px; }
     .dashboard-reference-grid { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; }.dashboard-main-column,.dashboard-aside { display:grid; gap:16px; align-content:start; }.dashboard-white-card,.dashboard-reference-grid .records-container { background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 2px 8px rgba(10,53,34,.05); overflow:hidden; }.dashboard-card-heading,.dashboard-reference-grid .records-head { display:flex; align-items:center; justify-content:space-between; padding:15px 18px; border-bottom:1px solid var(--line); }.dashboard-card-heading h4,.dashboard-reference-grid .records-head h4 { color:var(--deep); font-size:16px; }.dashboard-card-heading span { color:#187145; font-size:12px; font-weight:600; }.dashboard-action-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:14px; }.dashboard-action { position:relative; min-height:132px; padding:15px; border:0; border-radius:8px; text-align:left; cursor:pointer; font-family:'DM Sans',sans-serif; color:#124c32; background:#edf9ef; }.dashboard-action.history{background:#edf6ff;color:#286da6}.dashboard-action.guide{background:#f4f1ff;color:#6944bb}.dashboard-action.reports{background:#ecf9fb;color:#187c82}.dashboard-action .action-symbol { display:grid;place-items:center;width:42px;height:42px;border-radius:50%;margin-bottom:12px;background:currentColor;color:#fff;font-size:23px;line-height:1; }.dashboard-action strong,.dashboard-action small { display:block; }.dashboard-action strong { font-size:13px; }.dashboard-action small { margin-top:7px; font-size:11px; font-weight:400; line-height:1.35; color:inherit; opacity:.8; }.dashboard-action b { position:absolute;right:14px;bottom:13px;font-size:18px;font-weight:400; }.dashboard-reference-grid #analytics-section { margin:0; }.dashboard-reference-grid .analytics-grid { padding:14px; }.dashboard-reference-grid .class-key-card { margin:0 14px 14px; }.empty-result { display:flex; gap:11px; align-items:center; padding:18px; }.empty-leaf { display:grid; place-items:center; width:54px; height:54px; border-radius:10px; background:#eaf6ed; color:#17804a; font-size:28px; }.empty-result strong { font-size:13px; color:var(--deep); }.empty-result p { margin-top:4px; font-size:11px; line-height:1.45; color:var(--text3); }.overview-list { padding:7px 16px; }.overview-list div { position:relative; padding:11px 0 11px 17px; border-bottom:1px solid var(--line); }.overview-list div:last-child { border:0; }.overview-list i { position:absolute;left:0;top:16px;width:8px;height:8px;border-radius:50%;background:#1d9b54; }.overview-list b,.overview-list small { display:block; }.overview-list b { font-size:12px; color:var(--deep); }.overview-list small { margin-top:3px; font-size:10px; color:var(--text3); }.summary-placeholder { display:flex;align-items:center;gap:22px;padding:15px 18px; }.summary-circle { display:grid;place-content:center;width:105px;height:105px;border-radius:50%;background:conic-gradient(#16954b 0 75%,#ed4545 75% 100%);position:relative;text-align:center; }.summary-circle::before {content:'';position:absolute;inset:14px;background:#fff;border-radius:50%;}.summary-circle b,.summary-circle small { z-index:1; }.summary-circle b { font-size:20px;color:var(--deep); }.summary-circle small { font-size:9px;color:var(--text3); }.summary-placeholder p { display:flex;gap:7px;align-items:center;min-width:125px;margin:10px 0;color:var(--text2);font-size:11px; }.summary-placeholder p b { margin-left:auto;color:var(--deep); }.summary-placeholder i { width:9px;height:9px;border-radius:50%; }.green-dot{background:#16954b}.red-dot{background:#ed4545}
     .dashboard-action-grid.expert-quick-actions { grid-template-columns:repeat(2,1fr); }
     @media(max-width:1100px){.dashboard-reference-grid{grid-template-columns:1fr}.dashboard-action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){#panel-dashboard .dashboard-stats{grid-template-columns:repeat(2,1fr)}.dashboard-action-grid{grid-template-columns:1fr}.dashboard-reference-grid .analytics-grid{grid-template-columns:1fr}.dashboard-intro{padding:20px}.dashboard-intro h1{font-size:24px}}
@@ -1377,7 +1383,7 @@
     .sidebar-footer-copy { position:absolute; z-index:1; left:37px; bottom:29px; display:flex; align-items:center; gap:9px; color:rgba(255,255,255,.88); font-size:12px; line-height:1.35; font-style:italic; }
     .sidebar-footer-copy svg { width:23px; height:23px; flex:0 0 23px; fill:none; stroke:#e6f6ea; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .sidebar-nav { position:relative; z-index:2; }.sidebar-logo { position:relative; z-index:2; }
-    #records-stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
+    #records-stats { grid-template-columns:repeat(5,minmax(0,1fr)); }
     @media(max-width:1200px){#records-stats{grid-template-columns:repeat(3,minmax(0,1fr));}}
     @media(max-width:650px){#records-stats{grid-template-columns:1fr;}}
     @media(max-width:1023px){.sidebar-footer-art{display:none}}
@@ -1613,6 +1619,21 @@
     let baseLat=7.293750, baseLng=125.638647;
     let lastDroneGPS = null;
 
+    // Firebase Hosting serves the browser application; authenticated API and
+    // media requests are delivered by the Render backend.
+    const COCONUT_API_ORIGIN = 'https://coconut-disease-detection-3agq.onrender.com';
+    window.coconutApiUrl = (path) => {
+      const value = String(path || '');
+      return value.startsWith('/') && !value.startsWith('//')
+        ? `${COCONUT_API_ORIGIN}${value}` : value;
+    };
+    window.coconutApiWebSocketUrl = (path) => window.coconutApiUrl(path)
+      .replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => nativeFetch(
+      typeof input === 'string' ? window.coconutApiUrl(input) : input, options
+    );
+
     // Firebase Config
     const firebaseConfig = {
       apiKey: "AIzaSyCYPyhuhLGuKLColorKYU6gZs3-ASMo0ck",
@@ -1741,7 +1762,7 @@
   <script src="/detection_overlay.js?v=overlay-scale-20261030-1"></script>
   <script src="/private_media.js?v=20261025-1"></script>
   <script src="/area_monitoring_calculations.js?v=prevalence-20261110-1"></script>
-  <script src="/app.js?v=logout-confirmation-20261111-1"></script>
+  <script src="/app.js?v=render-api-20261109-1"></script>
   <script src="/tree_identity.js?v=20261025-1"></script>
   <link rel="stylesheet" href="/static/monitoring.css?v=20261102-1">
   <script src="/monitoring.js?v=compact-monitoring-20261102-1"></script>
@@ -1763,7 +1784,7 @@
     </div>
     
     <div class="auth-form">
-      <div class="auth-brand"><div class="logo-icon" aria-hidden="true">C</div><div><strong>Neural Coco</strong><small>Drone Disease Mapping System</small></div></div>
+      <div class="auth-brand"><div class="logo-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 39V22"></path><path d="M24 24c-5-8-12-8-15-5 6 1 10 4 15 8"></path><path d="M24 24c5-8 12-8 15-5-6 1-10 4-15 8"></path><path d="M24 21c-1-8-7-11-11-10 4 4 7 7 11 13"></path><path d="M24 21c1-8 7-11 11-10-4 4-7 7-11 13"></path><path d="M17 39h14"></path></svg></div><div><strong>Neural Coco</strong><small>Drone Disease Mapping System</small></div></div>
       <div class="auth-tabs" role="tablist" aria-label="Account access">
         <button class="auth-tab active" id="login-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-form" onclick="setAuthMode('login')">Sign In</button>
         <button class="auth-tab" id="signup-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-form" onclick="setAuthMode('signup')">Create Account</button>
@@ -1912,23 +1933,28 @@
     <div class="dashboard-reference-grid">
       <div class="dashboard-main-column">
         <div class="dashboard-stats" id="records-stats" style="margin-bottom:20px;display:none;">
-          <div class="stat-box">
-            <h4>Disease Detection</h4>
+          <div class="stat-box disease">
+            <div class="stat-card-heading"><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"></path></svg></span><h4>Disease Detection</h4></div>
             <div class="stat-value" id="total-diseases-found">0</div>
             <div class="stat-subtext">All disease cases recorded</div>
           </div>
-          <div class="stat-box">
-            <h4>Total Images Analyzed</h4>
-            <div class="stat-value" id="total-records-count">0</div>
-            <div class="stat-subtext">Detection sessions</div>
+          <div class="stat-box pending">
+            <div class="stat-card-heading"><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg></span><h4>Total Pending Detection</h4></div>
+            <div class="stat-value" id="total-pending-detections">0</div>
+            <div class="stat-subtext">Awaiting expert verification</div>
           </div>
-          <div class="stat-box">
-            <h4>Disease Types Detected</h4>
+          <div class="stat-box verified">
+            <div class="stat-card-heading"><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-3Z"></path><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg></span><h4>Total Verified Disease</h4></div>
+            <div class="stat-value" id="total-verified-diseases">0</div>
+            <div class="stat-subtext">Verified by expert</div>
+          </div>
+          <div class="stat-box common">
+            <div class="stat-card-heading"><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21V11"></path><path d="M12 15c-5 0-8-3-8-8 5 0 8 3 8 8Z"></path><path d="M12 11c0-5 3-8 8-8 0 5-3 8-8 8Z"></path></svg></span><h4>Common Disease Detected</h4></div>
             <div class="stat-value" id="most-common-disease">—</div>
             <div class="stat-subtext">Detected on farm</div>
           </div>
           <div class="stat-box healthy">
-            <h4>Healthy Detection</h4>
+            <div class="stat-card-heading"><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20c6-1 11-6 16-16-10 3-15 8-16 16Z"></path><path d="M4 20c3-4 6-7 11-10"></path></svg></span><h4>Healthy Detection</h4></div>
             <div class="stat-value" id="records-healthy-count">0</div>
             <div class="stat-subtext">No disease detected</div>
           </div>
