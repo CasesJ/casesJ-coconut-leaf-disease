@@ -459,6 +459,25 @@ function setFarmerNavigationVisible(visible) {
   if (historyNav) historyNav.style.display = visible ? '' : 'none';
 }
 
+function setExpertNavigationOrder(isExpert) {
+  const navigation = document.querySelector('.sidebar-nav');
+  const recordsNav = document.getElementById('nav-records-link');
+  const historyNav = document.getElementById('nav-history-link');
+  const monitoringNav = document.getElementById('nav-monitoring-link');
+  const expertNav = document.getElementById('expert-nav-link');
+  if (!navigation || !recordsNav || !historyNav || !monitoringNav || !expertNav) return;
+
+  if (isExpert) {
+    navigation.insertBefore(expertNav, recordsNav);
+    navigation.insertBefore(monitoringNav, recordsNav);
+    return;
+  }
+
+  navigation.insertBefore(recordsNav, historyNav);
+  navigation.insertBefore(historyNav, monitoringNav);
+  navigation.insertBefore(monitoringNav, expertNav);
+}
+
 function updateDashboardPrimaryAction() {
   const title = document.getElementById('dashboard-primary-action-title');
   const description = document.getElementById('dashboard-primary-action-description');
@@ -649,6 +668,7 @@ window.updateUIOnLogin = function updateUIOnLogin(user, accountInfo = {}) {
   const notificationWrap = document.querySelector('.notification-wrap');
   if (notificationWrap) notificationWrap.style.display = currentUserIsExpert ? 'none' : '';
   setFarmerNavigationVisible(!currentUserIsExpert);
+  setExpertNavigationOrder(currentUserIsExpert);
   updateDashboardPrimaryAction();
   const myRecordsAuditContainer = document.getElementById('my-records-audit-container');
   if (myRecordsAuditContainer) myRecordsAuditContainer.style.display = currentUserIsExpert ? 'block' : 'none';
@@ -690,6 +710,7 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   const notificationWrap = document.querySelector('.notification-wrap');
   if (notificationWrap) notificationWrap.style.display = '';
   setFarmerNavigationVisible(true);
+  setExpertNavigationOrder(false);
   currentUserRole = 'farmer';
   currentUserIsExpert = false;
   window.monitoringResetIdentity?.();
