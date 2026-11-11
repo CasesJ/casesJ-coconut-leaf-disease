@@ -699,8 +699,8 @@
     .expert-enlarged-frame { width:min(1100px, 100%); height:calc(100vh - 2.5rem); }
     .expert-enlarged-frame > img { width:100%; height:100%; object-fit:contain; }
     body.expert-recommendation-open { overflow:hidden; }
-    .expert-recommendation-modal { position:fixed; inset:0; z-index:1001; display:flex; align-items:center; justify-content:center; box-sizing:border-box; padding:1rem; background:rgba(8,38,28,.72); backdrop-filter:blur(6px); }
-    .expert-recommendation-modal-card { width:min(1100px,100%); height:min(800px,calc(100dvh - 2rem)); max-height:calc(100dvh - 2rem); display:flex; flex-direction:column; overflow:hidden; position:relative; padding:clamp(1.25rem,2.5vw,1.75rem); border-radius:16px; background:var(--white); box-shadow:0 24px 80px rgba(8,38,28,.24); }
+    .expert-recommendation-modal { position:fixed; inset:0; z-index:1001; display:flex; align-items:center; justify-content:center; box-sizing:border-box; padding:0; background:rgba(8,38,28,.72); backdrop-filter:blur(6px); }
+    .expert-recommendation-modal-card { width:100%; height:100dvh; max-height:none; display:flex; flex-direction:column; overflow:hidden; position:relative; padding:clamp(1.25rem,2.5vw,2rem); border-radius:0; background:var(--white); box-shadow:none; }
     .expert-recommendation-modal-body { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr); flex:1 1 auto; gap:1.25rem; align-items:start; min-height:0; overflow:auto; padding:0.25rem 0.4rem 0.25rem 0; }
     .expert-recommendation-image-panel { position:sticky; top:0; min-width:0; }
     .expert-recommendation-image { display:block; width:100%; height:auto; object-fit:contain; border:1px solid rgba(11,42,31,.1); border-radius:10px; background:#f3f8f3; cursor:zoom-in; }
@@ -709,7 +709,12 @@
     .expert-image-lightbox { position:fixed; inset:0; z-index:1002; display:grid; place-items:center; padding:1.25rem; background:rgba(8,38,28,.86); backdrop-filter:blur(6px); }
     .expert-image-lightbox img { display:block; max-width:100%; max-height:calc(100vh - 2.5rem); object-fit:contain; border-radius:10px; background:#f3f8f3; }
     .expert-image-lightbox-close { position:fixed; top:1.1rem; right:1.2rem; border:0; background:rgba(255,255,255,.9); color:var(--deep); width:38px; height:38px; border-radius:50%; font-size:1.25rem; cursor:pointer; }
-    @media(max-width:1050px) { .expert-recommendation-modal { align-items:flex-start; padding:.75rem; }.expert-recommendation-modal-card { max-height:calc(100dvh - 1.5rem); }.expert-recommendation-modal-body { grid-template-columns:1fr; }.expert-recommendation-image-panel { position:static; } }
+    .recommendation-result-modal { position:fixed; inset:0; z-index:1002; display:flex; align-items:center; justify-content:center; padding:0; background:rgba(8,38,28,.72); backdrop-filter:blur(6px); }
+    .recommendation-result-card { width:100%; height:100dvh; overflow:auto; position:relative; padding:clamp(1.25rem,3vw,3rem); background:var(--white); }
+    .recommendation-result-card .rec-card { width:min(880px,100%); margin:2.5rem auto 0 !important; padding:clamp(1.25rem,3vw,2.25rem); }
+    .recommendation-result-card .rec-title { font-size:clamp(1.25rem,2.5vw,1.7rem); }
+    .recommendation-result-card .rec-item { padding:1.1rem 0; }
+    @media(max-width:1050px) { .expert-recommendation-modal-body { grid-template-columns:1fr; }.expert-recommendation-image-panel { position:static; } }
     .detail-pill { display:inline-flex; align-items:center; gap:0.35rem; padding:0.35rem 0.65rem; border-radius:999px; background:#edf8f1; color:#14623d; font-size:var(--text-xs); font-weight:600; margin-top:0.45rem; }
     
     /* Farmer records: compact image with details alongside it. */
@@ -1427,8 +1432,7 @@
       .preview-head { align-items:flex-start; flex-direction:column; gap:4px; }
       #disease-map, #mini-map { min-height:250px; }
       .notification-menu { width:calc(100vw - 16px); right:-4px; }
-      .expert-recommendation-modal { padding:6px; }
-      .expert-recommendation-modal-card { width:100%; height:calc(100vh - 12px); }
+      .expert-recommendation-modal-card { padding:1rem; }
     }
     /* Treatment monitoring workspace */
     #panel-monitoring .panels { max-width:1440px; margin-left:auto; margin-right:auto; padding-bottom:32px; }
@@ -2224,7 +2228,10 @@
     <div class="panels">
       <div class="expert-command-header">
         <div><p class="section-label">Expert command center</p><h1>Disease Verification</h1><p>Prioritize uncertain diagnoses and keep every farmer record clinically reliable.</p></div>
-        <span class="expert-live">Live system data</span>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">
+          <button class="btn btn-p" type="button" onclick="openNewDiseaseVerification()">Verify New Disease</button>
+          <span class="expert-live">Live system data</span>
+        </div>
       </div>
       <div class="dashboard-stats" id="expert-stats" style="margin-bottom:20px;display:grid;">
         <div class="stat-box expert-kpi warning">
@@ -2315,6 +2322,15 @@
             <div id="expert-recommendation-status" style="color:var(--text3);font-size:12px;"></div>
             </div>
           </div>
+        </section>
+      </div>
+
+      <div class="recommendation-result-modal hidden" id="recommendation-result-modal" onclick="if(event.target.id === 'recommendation-result-modal') closeRecommendationResultModal()">
+        <section class="recommendation-result-card" role="dialog" aria-modal="true" aria-labelledby="recommendation-result-title">
+          <button class="record-modal-close" type="button" onclick="closeRecommendationResultModal()" aria-label="Close recommendation">✕</button>
+          <h4 class="record-modal-title" id="recommendation-result-title">Disease Recommendation</h4>
+          <p class="record-modal-subtitle">Review the complete recommendation for this detection.</p>
+          <div id="recommendation-result-content"></div>
         </section>
       </div>
 

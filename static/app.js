@@ -783,6 +783,10 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     const modal = document.getElementById('logout-confirmation');
     if (modal && !modal.classList.contains('hidden')) closeLogoutConfirmation();
+    const recommendationModal = document.getElementById('recommendation-result-modal');
+    if (recommendationModal && !recommendationModal.classList.contains('hidden')) closeRecommendationResultModal();
+    const expertEditor = document.getElementById('expert-recommendation-editor');
+    if (expertEditor && !expertEditor.classList.contains('hidden')) hideExpertRecommendationEditor();
   }
 });
 
@@ -3131,17 +3135,35 @@ window.saveFarmerLowConfidenceRecommendation = async function saveFarmerLowConfi
   }
 };
 
+function closeRecommendationResultModal() {
+  const modal = document.getElementById('recommendation-result-modal');
+  if (modal) modal.classList.add('hidden');
+  document.body.classList.remove('expert-recommendation-open');
+}
+
+window.closeRecommendationResultModal = closeRecommendationResultModal;
+
 function displayRecommendation(rec){
-  const recArea=document.getElementById('recommendations-area');
-  
-  // ✅ Safety check: return early if element doesn't exist
-  if (!recArea) {
-    console.warn('⚠️ recommendations-area element not found');
-    return;
+  const recommendationHtml = renderRecommendationCardHtml(rec);
+  const modal = document.getElementById('recommendation-result-modal');
+  const modalContent = document.getElementById('recommendation-result-content');
+
+  // Keep the old result area in sync for existing callers, while making the
+  // completed recommendation easy to read in a dedicated full-screen view.
+  const recArea = document.getElementById('recommendations-area');
+  if (recArea) {
+    recArea.innerHTML = recommendationHtml;
+    recArea.style.display = 'block';
   }
-  
-  recArea.innerHTML = renderRecommendationCardHtml(rec);
-  recArea.style.display='block';
+
+  if (!modal || !modalContent) return;
+  // The Expert panel is animated, so the overlay must be outside it to stay
+  // fixed to the viewport instead of being clipped by the panel.
+  if (modal.parentElement !== document.body) document.body.appendChild(modal);
+  modalContent.innerHTML = recommendationHtml;
+  modal.classList.remove('hidden');
+  document.body.classList.add('expert-recommendation-open');
+  modal.querySelector('.record-modal-close')?.focus();
 }
 
 function escapeHtml(value) {
@@ -3642,7 +3664,15 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
       return;
     }
 
-    verifiedHistoryRecords = diseaseRecords;
+    // Farmer history is a verification timeline: newest expert decision first.
+    // Do not reorder the expert-wide history, which keeps its server order.
+    verifiedHistoryRecords = currentUserIsExpert ? diseaseRecords : [...diseaseRecords].sort((a, b) => {
+      const verifiedTime = (record) => {
+        const value = Date.parse(record?.verified_at || record?.timestamp || '');
+        return Number.isNaN(value) ? 0 : value;
+      };
+      return verifiedTime(b) - verifiedTime(a);
+    });
     filterVerifiedHistory();
     /*listEl.innerHTML = diseaseRecords.map((record) => {
       const timestamp = new Date(record.timestamp || Date.now()).toLocaleString();
@@ -4272,6 +4302,16 @@ window.reviewExpertPriority = function reviewExpertPriority(userId, recordId) {
     if (queue) queue.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const button = queue?.querySelector(`button[onclick*="verifyExpertRecord('${userId}','${recordId}')"]`);
     if (button) button.focus();
+  });
+};
+
+window.openNewDiseaseVerification = function openNewDiseaseVerification() {
+  const queue = document.getElementById('expert-pending-list');
+  if (!queue) return;
+  currentExpertFilter = 'pending';
+  loadExpertReview({ force: true }).finally(() => {
+    queue.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    queue.querySelector('button[onclick*="verifyExpertRecord"]')?.focus();
   });
 };
 
