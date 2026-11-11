@@ -3222,6 +3222,7 @@ window.toggleRecordRecommendation = function toggleRecordRecommendation(recordKe
 
   if (panel.style.display !== 'none' && panel.innerHTML.trim()) {
     panel.style.display = 'none';
+    panel.closest('.history-record')?.classList.remove('history-recommendation-open');
     if (buttonEl) buttonEl.textContent = 'Recommendation';
     return;
   }
@@ -3231,6 +3232,7 @@ window.toggleRecordRecommendation = function toggleRecordRecommendation(recordKe
   // for every record that has the same disease name.
   if (panel.dataset.loaded === '1' && panel.innerHTML.trim()) {
     panel.style.display = 'block';
+    panel.closest('.history-record')?.classList.add('history-recommendation-open');
     if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
     return;
   }
@@ -3242,6 +3244,7 @@ window.toggleRecordRecommendation = function toggleRecordRecommendation(recordKe
     return;
   }
   panel.style.display = 'block';
+  panel.closest('.history-record')?.classList.add('history-recommendation-open');
   if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
 };
 
@@ -3560,11 +3563,18 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
       if (hasExpertRecommendation) {
         const panel = document.createElement('div');
         panel.id = `record-recommendation-history-${getRecordKey(record, index)}`;
+        panel.className = 'history-recommendation-panel';
         panel.dataset.loaded = '1';
         panel.style.display = 'none';
         panel.style.marginTop = '10px';
-        panel.innerHTML = renderRecommendationCardHtml(recommendationSnapshot);
-        row.querySelector('.record-detections')?.parentElement?.appendChild(panel);
+        const details = row.querySelector('.record-detections')?.parentElement;
+        if (details) details.classList.add('history-summary');
+        const imagePreview = imageUrl
+          ? `<button type="button" class="history-recommendation-image" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(record?.filename || record?.image_path || 'Detection image')}')">${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? record.detections : [] }, { alt: record?.filename || 'Detection image', priority: 'high' }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(record?.filename || 'Detection image')}">`}</button>`
+          : '<div class="history-recommendation-image history-recommendation-image-empty">Image unavailable</div>';
+        panel.innerHTML = `<div class="history-recommendation-layout">${imagePreview}<div class="history-recommendation-content">${renderRecommendationCardHtml(recommendationSnapshot)}</div></div>`;
+        row.appendChild(panel);
+        window.DetectionOverlay?.mount(panel);
       }
     });
   }
@@ -3595,7 +3605,7 @@ window.loadVerifiedDiseaseHistory = async function loadVerifiedDiseaseHistory() 
     if (currentUserIsExpert) {
       payload = await fetchExpertRecords();
     } else {
-      payload = await fetchUserRecords();
+      payload = await fetchUserRecords({ force: true });
     }
     const verifiedRecords = (payload.records || []).filter((record) =>
       formatVerificationStatus(record.verification_status).cls === 'verified'

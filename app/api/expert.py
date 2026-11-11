@@ -156,19 +156,31 @@ def verify_expert_record(
     if not primary or not primary.get("class"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to determine record disease")
 
-    try:
-        recommendation_snapshot = build_recommendation_response(
-            disease_name=primary["class"], confidence=primary["confidence"],
-        )
-    except Exception as error:
-        logger.warning("Could not build recommendation snapshot for %s: %s", record_id, error)
-        recommendation_snapshot = {
-            "disease": primary["class"],
-            "confidence_percent": round(float(primary["confidence"]) * 100, 2),
-            "model_used": "Unknown",
-            "recommendations": {"fertilizer": "", "treatment": "", "prevention": []},
-            "location": {}, "note": "", "source": "default",
-        }
+    existing_snapshot = record.get("recommendation_snapshot") or record.get("recommendationSnapshot")
+    has_expert_override = (
+        isinstance(existing_snapshot, dict)
+        and existing_snapshot.get("source") == "expert_override"
+        and isinstance(existing_snapshot.get("recommendations"), dict)
+    )
+    if has_expert_override:
+        # An expert may save their edits and then press Verify.  Verification
+        # must retain those record-specific edits instead of replacing them
+        # with the generic disease recommendation.
+        recommendation_snapshot = existing_snapshot
+    else:
+        try:
+            recommendation_snapshot = build_recommendation_response(
+                disease_name=primary["class"], confidence=primary["confidence"],
+            )
+        except Exception as error:
+            logger.warning("Could not build recommendation snapshot for %s: %s", record_id, error)
+            recommendation_snapshot = {
+                "disease": primary["class"],
+                "confidence_percent": round(float(primary["confidence"]) * 100, 2),
+                "model_used": "Unknown",
+                "recommendations": {"fertilizer": "", "treatment": "", "prevention": []},
+                "location": {}, "note": "", "source": "default",
+            }
 
     updates = {
         "verification_status": desired_status,
