@@ -1829,6 +1829,7 @@ async function loadSavedMapPins(userId) {
     if (loadId !== mapPinsLoadId || currentUser?.uid !== userId) return;
     syncSessionMapPins();
     refreshMapPins();
+    focusFilteredPins(log, '');
     console.log('✅ Restored', Object.keys(pinsData).length, 'pins from Firebase');
   } catch (error) {
     console.warn('⚠️  Failed to load pins from Firebase:', error);
@@ -3552,13 +3553,46 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
     const ds = record.detections || [];
     const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
     const imageLabel = record.filename || record.image_path || 'Detection image';
+    const primary = getPrimaryDetection(record);
     const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot;
     const hasExpertRecommendation = String(record.verified_by_role || '').toLowerCase() === 'expert'
       && recommendationSnapshot && typeof recommendationSnapshot === 'object'
       && recommendationSnapshot.recommendations && typeof recommendationSnapshot.recommendations === 'object';
     const recordKey = `history-${getRecordKey(record, index)}`;
-    const actions = imageUrl || hasExpertRecommendation
-      ? `<div class="history-actions">${imageUrl ? `<button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button>` : ''}${hasExpertRecommendation ? `<button class="btn btn-o" type="button" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>` : ''}</div>`
+    let lat = null;
+    let lng = null;
+    let gpsSource = 'unknown';
+    if (record.lat && record.lng) {
+      lat = record.lat;
+      lng = record.lng;
+      gpsSource = record.gps_source || 'database';
+    } else if (record.gps_data && typeof record.gps_data === 'object') {
+      lat = record.gps_data.latitude || record.gps_data.lat;
+      lng = record.gps_data.longitude || record.gps_data.lng;
+      gpsSource = record.gps_data.source || gpsSource;
+    } else if (record.gps && typeof record.gps === 'object') {
+      lat = record.gps.lat || record.gps.latitude;
+      lng = record.gps.lng || record.gps.longitude;
+      gpsSource = record.gps.source || gpsSource;
+    } else if (record.image_metadata?.gps) {
+      lat = record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat;
+      lng = record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng;
+      gpsSource = record.image_metadata.gps_source || 'exif';
+    }
+    if (lat !== null && lng !== null) {
+      lat = parseFloat(lat);
+      lng = parseFloat(lng);
+    }
+    if (!['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase()) && record.image_metadata?.gps) {
+      lat = Number(record.image_metadata.gps.latitude ?? record.image_metadata.gps.lat);
+      lng = Number(record.image_metadata.gps.longitude ?? record.image_metadata.gps.lng);
+      gpsSource = record.image_metadata.gps_source || 'exif';
+    }
+    const hasEmbeddedGps = ['exif', 'dji_exif'].includes(String(gpsSource).toLowerCase())
+      && Number.isFinite(lat) && Number.isFinite(lng)
+      && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    const actions = imageUrl || hasEmbeddedGps || hasExpertRecommendation
+      ? `<div class="history-actions">${imageUrl ? `<button class="btn btn-o" type="button" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(imageLabel)}')">View image</button>` : ''}${hasEmbeddedGps ? `<button class="btn btn-o" type="button" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : ''}${hasExpertRecommendation ? `<button class="btn btn-o" type="button" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>` : ''}</div>`
       : '';
     return `<div class="history-record"><span class="record-status verified">Verified</span><div><h4>${escapeHtml(record.filename || 'Detection record')}</h4><p>${ds.map(d => `${formatDiseaseClass(d.class)} ${Math.round((d.confidence || 0) * 100)}%`).join(' · ')}<br>${escapeHtml(String(record.verified_at || record.timestamp || '').replace('T', ' ').slice(0, 16))} · ${escapeHtml(record.verified_by || 'Expert')}</p><div class="record-detections">${ds.map(d => `<span class="record-det high">${escapeHtml(formatDiseaseClass(d.class))}</span>`).join('')}</div></div>${actions}</div>`;
   }).join('') : '<div class="no-records">No verified disease records available.</div>';
