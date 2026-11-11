@@ -28,6 +28,21 @@
     return (Array.isArray(detections) ? detections : []).some(detection => !isHealthyClass(detection?.class));
   }
 
+  function diseaseDetections(detections, isHealthyClass) {
+    return (Array.isArray(detections) ? detections : []).reduce((found, detection) => {
+      const label = String(detection?.class || detection?.disease_name || '').trim();
+      if (label && !isHealthyClass(label)) found.push(label);
+      return found;
+    }, []);
+  }
+
+  function commonDisease(diseaseCounts) {
+    const entries = Object.entries(diseaseCounts || {}).filter(([, count]) => Number(count) > 0);
+    if (!entries.length) return 'No disease detected';
+    return entries.sort((left, right) => Number(right[1]) - Number(left[1])
+      || left[0].localeCompare(right[0]))[0][0];
+  }
+
   function dashboardMetrics(areas) {
     return {
       totalDiseasedDetections: totalDiseasedDetections(areas),
@@ -35,5 +50,5 @@
     };
   }
 
-  return { dashboardMetrics, hasDiseasedDetection, priorityArea, totalDiseasedDetections };
+  return { commonDisease, dashboardMetrics, diseaseDetections, hasDiseasedDetection, priorityArea, totalDiseasedDetections };
 }));

@@ -40,6 +40,15 @@ test('By Area data renders only configured farm polygons', () => {
   assert.match(source, /Promise\.resolve\(loadFarmBoundaries\(\)\)\.finally\(\(\) => loadAreaMonitoring\(\)\)/);
 });
 
+test('polygon matching includes points on the boundary', () => {
+  const context = {};
+  vm.runInNewContext(section('function pointInFarmBoundary', 'window.loadAreaMonitoring'), context);
+  const polygon = { type: 'Polygon', coordinates: [[[125, 7], [125.1, 7], [125.1, 7.1], [125, 7.1], [125, 7]]] };
+  assert.equal(context.pointInFarmBoundary({ lat: 7.05, lng: 125.05 }, polygon), true);
+  assert.equal(context.pointInFarmBoundary({ lat: 7, lng: 125.05 }, polygon), true);
+  assert.equal(context.pointInFarmBoundary({ lat: 7.2, lng: 125.05 }, polygon), false);
+});
+
 test('area selection leaves the base outline source dedicated to the farm outline', () => {
   const selection = section('window.selectFarmArea =', '// Used by the monitoring cards');
   assert.doesNotMatch(selection, /lanticse-farm-src/);

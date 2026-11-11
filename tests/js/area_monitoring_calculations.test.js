@@ -38,6 +38,15 @@ test('healthy detections are excluded while a disease finding makes a record dis
   assert.equal(calculations.hasDiseasedDetection([], isHealthy), false);
 });
 
+test('common disease counts every non-healthy detection and resolves ties predictably', () => {
+  const isHealthy = label => String(label).toLowerCase() === 'healthy';
+  assert.deepEqual(calculations.diseaseDetections([
+    { class: 'Healthy' }, { class: 'Bud Rot' }, { disease_name: 'Bud Rot' }, { class: 'Leaf Spot' },
+  ], isHealthy), ['Bud Rot', 'Bud Rot', 'Leaf Spot']);
+  assert.equal(calculations.commonDisease({ 'Leaf Spot': 2, 'Bud Rot': 2 }), 'Bud Rot');
+  assert.equal(calculations.commonDisease({}), 'No disease detected');
+});
+
 test('each refreshed area snapshot produces current totals without prevalence', () => {
   const first = calculations.dashboardMetrics([{ areaId: 1, name: 'Area 1', diseased: 1 }]);
   const refreshed = calculations.dashboardMetrics([{ areaId: 1, name: 'Area 1', diseased: 2 }]);
@@ -53,5 +62,7 @@ test('area monitoring renders counts once per card and no prevalence percentage'
   assert.match(body, /<h4>Total Diseased Detections<\/h4>/);
   assert.match(body, /<div class="area-main-label">Diseased Detections<\/div>/);
   assert.match(body, /\$\{area\.samples\}<\/strong>Mapped locations/);
+  assert.match(body, /Common disease detected/);
+  assert.doesNotMatch(body, /Severity status|area\.severity/);
   assert.doesNotMatch(body, /Disease Prevalence|prevalenceLabel|area-bar|% disease prevalence/);
 });
