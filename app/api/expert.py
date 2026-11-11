@@ -308,6 +308,7 @@ def get_expert_audit_log(limit: int = 100, decoded: dict = Depends(verify_fireba
         event["upload"] = {
             "user_id": uid, "email": str(record.get("email") or ""),
             "filename": str(record.get("filename") or record.get("image_path") or ""),
+            "thumbnail_url": presented.get("thumbnail_url", ""),
             "image_url": presented.get("image_url", ""),
             "annotated_image_url": presented.get("annotated_image_url", ""),
         }

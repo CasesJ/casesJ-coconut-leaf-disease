@@ -3895,8 +3895,9 @@ function renderExpertAuditTable(events) {
       ? `<button type="button" class="btn btn-o audit-tree-link" title="${escapeHtml(treeId)}" onclick="monitoringOpenTree('${encodeInlineValue(treeId)}','${encodeInlineValue(target.user_id)}')">${escapeHtml(treeId)}</button>`
       : escapeHtml(treeId || 'Unassigned');
     const imageLabel = upload.filename || target.disease || target.record_id || 'Detection image';
-    const imageCell = upload.image_url || upload.annotated_image_url
-      ? `<button type="button" title="View detection image" onclick="openExpertImageResult('${encodeInlineValue(upload.image_url || '')}','${encodeInlineValue(upload.annotated_image_url || '')}','${encodeInlineValue(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" data-private-src="${escapeHtml(upload.image_url || upload.annotated_image_url)}" alt="View ${escapeHtml(imageLabel)}"></button>`
+    const thumbnailUrl = upload.thumbnail_url || upload.image_url || upload.annotated_image_url;
+    const imageCell = thumbnailUrl
+      ? `<button type="button" title="View detection image" onclick="openExpertImageResult('${encodeInlineValue(upload.image_url || '')}','${encodeInlineValue(upload.annotated_image_url || '')}','${encodeInlineValue(imageLabel)}')" style="border:0;background:transparent;padding:0;cursor:pointer;"><img class="expert-record-thumb" data-private-src="${escapeHtml(thumbnailUrl)}" alt="View ${escapeHtml(imageLabel)}"></button>`
       : '<span class="expert-table-muted">No image</span>';
     return `<tr><td data-label="Date and time">${escapeHtml(timestamp)}</td><td data-label="Records"><strong>${escapeHtml(upload.filename || target.disease || target.record_id || target.user_id || '—')}</strong></td><td data-label="Uploaded by">${escapeHtml(upload.email || upload.user_id || target.user_id || '—')}</td><td data-label="Image">${imageCell}</td><td data-label="Tree ID">${treeCell}</td><td data-label="Status"><span class="monitor-pill">${entry.monitoring_status === 'finish' ? 'Finish' : 'Waiting'}</span></td></tr>`;
   }).join('');
