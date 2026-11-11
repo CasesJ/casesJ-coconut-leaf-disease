@@ -4099,8 +4099,6 @@ async function loadUserRecords({ force = false } = {}) {
       const detections = record.detections || [];
       const status = formatVerificationStatus(record.verification_status);
       const primary = getPrimaryDetection(record);
-      const recordKey = getRecordKey(record, idx);
-      const recommendationSnapshot = record.recommendation_snapshot || record.recommendationSnapshot || null;
       
       // Read only GPS coordinates that were extracted from the uploaded image.
       let lat = null;
@@ -4146,20 +4144,7 @@ async function loadUserRecords({ force = false } = {}) {
         ? `📍 Record ${idx}: Embedded GPS - ${lat.toFixed(6)}, ${lng.toFixed(6)} (source: ${gpsSource})`
         : `📍 Record ${idx}: No embedded GPS metadata`);
       
-      const mapButtonHtml = hasEmbeddedGps
-        ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
-      const hasExpertRecommendation = status.cls === 'verified'
-        && String(record.verified_by_role || '').toLowerCase() === 'expert'
-        && recommendationSnapshot?.recommendations;
-      const recommendationButtonHtml = hasExpertRecommendation
-        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>`
-        : status.cls === 'verified'
-          ? '<span class="record-awaiting">Expert verification is complete; recommendation is not available yet.</span>'
-          : '<span class="record-awaiting">Awaiting agricultural expert verification. Recommendations are unavailable.</span>';
-      const locationDisplay = `<div class="record-location"><span class="record-location-label">Location</span><span>${hasEmbeddedGps ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS data'}</span>${!hasEmbeddedGps ? '<small>This upload has no embedded coordinates.</small>' : ''}</div><div class="record-actions">${mapButtonHtml}${recommendationButtonHtml}</div>`;
-      const recommendationPanel = hasExpertRecommendation
-        ? `<div id="record-recommendation-${recordKey}" data-loaded="1" style="display:none;margin-top:10px;">${renderRecommendationCardHtml(recommendationSnapshot)}</div>`
-        : '';
+      const locationDisplay = `<div class="record-location"><span class="record-location-label">Location</span><span>${hasEmbeddedGps ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS data'}</span>${!hasEmbeddedGps ? '<small>This upload has no embedded coordinates.</small>' : ''}</div>`;
       const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
       const imageLabel = record.filename || record.image_path || 'Detection image';
       const imagePreview = imageUrl
@@ -4183,7 +4168,6 @@ async function loadUserRecords({ force = false } = {}) {
             <span class="record-severity">${getSeverity(primary.class, primary.confidence || 0).toUpperCase()} SEVERITY</span>
           </div>
           ${locationDisplay}
-          ${recommendationPanel}
           </div>
         </div>
       `;
