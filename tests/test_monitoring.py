@@ -1,6 +1,7 @@
 """Monitoring access, upload validation, and evidence persistence."""
 
 import sys
+import zlib
 from datetime import date, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -9,6 +10,8 @@ import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from io import BytesIO
+from PIL import Image
 
 from app.api import monitoring
 from app.core.security import verify_firebase_token
@@ -60,10 +63,21 @@ def _upload(client, data, mime="image/jpeg", case_id="case-1"):
                        files={"file": ("leaf.jpg", data, mime)})
 
 
+def _pillow_image(image_format="JPEG", size=(64, 48), *, orientation=None):
+    output = BytesIO()
+    image = Image.new("RGB", size, "green")
+    options = {}
+    if orientation is not None:
+        exif = Image.Exif()
+        exif[274] = orientation
+        options["exif"] = exif
+    image.save(output, format=image_format, **options)
+    return output.getvalue()
+
+
 @pytest.mark.parametrize("data,mime,status", [
     (b"not an image", "image/jpeg", 400),
     (b"", "image/jpeg", 400),
-    (_image(), "image/png", 400),
 ])
 def test_invalid_uploads(client, data, mime, status):
     assert _upload(client, data, mime).status_code == status
@@ -72,6 +86,83 @@ def test_invalid_uploads(client, data, mime, status):
 def test_oversize_upload(client, monkeypatch):
     monkeypatch.setattr(monitoring, "MAX_IMAGE_UPLOAD_BYTES", 4)
     assert _upload(client, _image()).status_code == 413
+
+
+def test_follow_up_accepts_valid_smartphone_jpeg_despite_incorrect_browser_mime():
+    source = _pillow_image("JPEG", (4032, 3024))
+    image, content_type, stored, dimensions = monitoring._decode_follow_up(source, "application/octet-stream")
+    assert content_type == "image/jpeg"
+    assert stored == source
+    assert dimensions == {"width": 4032, "height": 3024}
+    # JPEG DCT reduction is intentional above the inference memory threshold.
+    assert image.shape[:2] == (1512, 2016)
+
+
+def test_follow_up_accepts_valid_png():
+    image, content_type, stored, dimensions = monitoring._decode_follow_up(
+        _pillow_image("PNG"), "image/png")
+    assert content_type == "image/png"
+    assert stored.startswith(b"\x89PNG")
+    assert dimensions == {"width": 64, "height": 48}
+    assert image.shape[:2] == (48, 64)
+
+
+def test_follow_up_applies_exif_orientation_without_reencoding_original():
+    source = _pillow_image("JPEG", (64, 48), orientation=6)
+    image, content_type, stored, dimensions = monitoring._decode_follow_up(source, "image/jpeg")
+    assert content_type == "image/jpeg"
+    assert stored == source
+    assert dimensions == {"width": 48, "height": 64}
+    assert image.shape[:2] == (64, 48)
+
+
+def test_follow_up_accepts_dji_mpo_primary_frame_with_metadata_preserved():
+    output = BytesIO()
+    primary = Image.new("RGB", (64, 48), "green")
+    secondary = Image.new("RGB", (64, 48), "blue")
+    primary.save(output, format="MPO", save_all=True, append_images=[secondary])
+
+    image, content_type, stored, dimensions = monitoring._decode_follow_up(
+        output.getvalue(), "image/jpeg")
+
+    assert content_type == "image/jpeg"
+    assert stored.startswith(b"\xff\xd8") and stored.endswith(b"\xff\xd9")
+    assert dimensions == {"width": 64, "height": 48}
+    assert image.shape[:2] == (48, 64)
+
+
+def test_follow_up_accepts_image_at_configured_pixel_limit(monkeypatch):
+    monkeypatch.setattr(monitoring, "MAX_IMAGE_UPLOAD_PIXELS", 1_000)
+    image, _content_type, _stored, dimensions = monitoring._decode_follow_up(
+        _pillow_image("JPEG", (40, 25)), "image/jpeg")
+    assert dimensions == {"width": 40, "height": 25}
+    assert image.shape[:2] == (25, 40)
+
+
+def test_follow_up_reports_actual_dimensions_when_pixel_limit_is_exceeded(monkeypatch):
+    monkeypatch.setattr(monitoring, "MAX_IMAGE_UPLOAD_PIXELS", 50_000_000)
+    # A valid PNG header advertising 56 MP; Pillow reads the dimensions before
+    # any pixel allocation, which is the production safety boundary too.
+    oversized = bytearray(_pillow_image("PNG", (1, 1)))
+    oversized[16:20] = (8000).to_bytes(4, "big")
+    oversized[20:24] = (7000).to_bytes(4, "big")
+    oversized[29:33] = zlib.crc32(oversized[12:29]).to_bytes(4, "big")
+    with pytest.raises(monitoring.HTTPException) as error:
+        monitoring._decode_follow_up(bytes(oversized), "image/png")
+    assert error.value.status_code == 400
+    assert "8000 x 7000" in error.value.detail
+    assert "50 megapixels" in error.value.detail
+
+
+@pytest.mark.parametrize("source, message", [
+    (b"not an image", "cannot identify image file"),
+    (_pillow_image("GIF"), "Unsupported image format"),
+])
+def test_follow_up_rejects_corrupt_and_unsupported_images(source, message):
+    with pytest.raises(monitoring.HTTPException) as error:
+        monitoring._decode_follow_up(source, "image/jpeg")
+    assert error.value.status_code == 400
+    assert message in error.value.detail
 
 
 def test_invalid_preliminary_status_is_rejected_before_inference(client, monkeypatch):

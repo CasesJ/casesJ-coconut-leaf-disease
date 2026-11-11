@@ -14,10 +14,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MINUTE,
-                             MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+                             INFERENCE_DECODE_MAX_PIXELS, MAX_IMAGE_UPLOAD_BYTES,
+                             MAX_IMAGE_UPLOAD_PIXELS, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
 from app.domain.expert import append_expert_audit_event, is_authorized_expert_identity
+from app.api.detections import _mpo_primary_jpeg_bytes
 from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
 from app.services.detection_service import _annotated_detections
@@ -339,22 +341,83 @@ def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
                            for item in store.list_follow_ups(farmer_id, case_id)]}
 
 
-def _decode_follow_up(contents: bytes, declared_type: str | None):
+def _follow_up_decode_flag(image_format: str, pixels: int) -> int:
+    """Use JPEG DCT reduction before allocating an inference raster."""
+    if image_format != "JPEG":
+        return cv2.IMREAD_COLOR
+    if pixels > INFERENCE_DECODE_MAX_PIXELS * 16:
+        return cv2.IMREAD_REDUCED_COLOR_8
+    if pixels > INFERENCE_DECODE_MAX_PIXELS * 4:
+        return cv2.IMREAD_REDUCED_COLOR_4
+    if pixels > INFERENCE_DECODE_MAX_PIXELS:
+        return cv2.IMREAD_REDUCED_COLOR_2
+    return cv2.IMREAD_COLOR
+
+
+def _apply_exif_orientation(image: np.ndarray, orientation: int) -> np.ndarray:
+    """Orient the inference raster without changing the stored source bytes."""
+    if orientation == 2:
+        return cv2.flip(image, 1)
+    if orientation == 3:
+        return cv2.rotate(image, cv2.ROTATE_180)
+    if orientation == 4:
+        return cv2.flip(image, 0)
+    if orientation == 5:
+        return cv2.transpose(image)
+    if orientation == 6:
+        return cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+    if orientation == 7:
+        return cv2.flip(cv2.transpose(image), -1)
+    if orientation == 8:
+        return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return image
+
+
+def _decode_follow_up(contents: bytes, _declared_type: str | None):
+    """Validate source bytes and decode a bounded raster for monitoring inference.
+
+    Browser MIME labels are advisory: Safari and some Android camera apps may
+    omit or mislabel an otherwise valid JPEG.  The decoded file signature is
+    the authority, matching the initial disease-detection endpoint.
+    """
     try:
         with Image.open(BytesIO(contents)) as image:
-            if image.format not in {"JPEG", "PNG"} or image.width * image.height > MAX_IMAGE_UPLOAD_PIXELS:
-                raise ValueError(f"Upload must be a JPEG or PNG image of at most {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels")
-            content_type = "image/jpeg" if image.format == "JPEG" else "image/png"
+            image_format = image.format
+            width, height = image.size
+            pixels = width * height
+            if image_format not in {"JPEG", "PNG", "MPO"}:
+                raise ValueError("Unsupported image format. Upload a JPEG or PNG image")
+            if pixels > MAX_IMAGE_UPLOAD_PIXELS:
+                raise ValueError(
+                    f"Image resolution is {width} x {height} ({pixels / 1_000_000:.2f} megapixels); "
+                    f"the upload limit is {MAX_IMAGE_UPLOAD_PIXELS / 1_000_000:g} megapixels"
+                )
+            content_type = "image/png" if image_format == "PNG" else "image/jpeg"
             image.verify()
-        if declared_type != content_type:
-            raise ValueError("Image MIME type does not match its contents")
-        decoded_image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+        # DJI MPO captures contain a primary JPEG plus a second frame. Match
+        # initial detection: retain that original primary JPEG (including its
+        # EXIF/GPS metadata) for inference and authenticated evidence storage.
+        evidence_contents = (_mpo_primary_jpeg_bytes(contents)
+                             if image_format == "MPO" else contents)
+        decode_format = "JPEG" if image_format == "MPO" else image_format
+        # Keep verify() directly after open; some Pillow decoders (notably
+        # PNG) reject verification after metadata access. Reopening only reads
+        # EXIF metadata and does not load the pixel raster.
+        with Image.open(BytesIO(evidence_contents)) as image:
+            orientation = int(image.getexif().get(274, 1))
+        decoded_image = cv2.imdecode(
+            np.frombuffer(evidence_contents, np.uint8),
+            _follow_up_decode_flag(decode_format, pixels) | cv2.IMREAD_IGNORE_ORIENTATION,
+        )
         if decoded_image is None:
-            raise ValueError("Upload must be a valid image")
+            raise ValueError("Image file is corrupted or invalid")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(400, str(exc) or "Upload must be a valid image") from exc
 
-    return decoded_image, content_type
+    return _apply_exif_orientation(decoded_image, orientation), content_type, evidence_contents, {
+        "width": height if orientation in {5, 6, 7, 8} else width,
+        "height": width if orientation in {5, 6, 7, 8} else height,
+    }
 
 
 @router.post("/monitoring/cases/{case_id}/follow-ups", status_code=201)
@@ -390,22 +453,22 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         raise HTTPException(413, "Image upload is too large")
     if not contents:
         raise HTTPException(400, "Image upload is empty")
-    decoded_image, content_type = await run_in_threadpool(
+    decoded_image, content_type, evidence_contents, source_dimensions = await run_in_threadpool(
         _decode_follow_up, contents, file.content_type,
     )
 
     await limiter.rolling(f"image-minute:{farmer_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
     await limiter.image_quota_24h(f"image-quota:{farmer_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     return await run_in_threadpool(
-        _process_follow_up, case, farmer_id, case_id, contents, file.filename,
-        decoded_image, content_type, tree_contents, tree_mime,
+        _process_follow_up, case, farmer_id, case_id, evidence_contents, file.filename,
+        decoded_image, content_type, source_dimensions, tree_contents, tree_mime,
         tree_reference_file.filename if tree_reference_file is not None else "",
         preliminary_status, follow_up_schedule_id, treatment_application_id,
     )
 
 
 def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_image,
-                       content_type, tree_contents, tree_mime, tree_filename,
+                       content_type, source_dimensions, tree_contents, tree_mime, tree_filename,
                        preliminary_status, follow_up_schedule_id, treatment_application_id):
     """Keep evidence uploads and the commit/cleanup sequence together in one worker."""
     from model import detector  # noqa: PLC0415
@@ -428,7 +491,7 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_ima
             detail,
         ) from exc
     image_height, image_width = decoded_image.shape[:2]
-    image_dimensions = {"width": int(image_width), "height": int(image_height)}
+    image_dimensions = source_dimensions
     predictions = _annotated_detections(result["detections"], (image_width, image_height))
     gps_reader = DroneGPS()
     gps = gps_reader.extract_gps_from_image(contents, filename or "")
