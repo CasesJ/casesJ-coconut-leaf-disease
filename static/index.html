@@ -674,6 +674,17 @@
     .record-modal-card .detail-card { background:var(--cream); border:1px solid rgba(11,42,31,0.06); border-radius:10px; padding:0.85rem 0.95rem; }
     .record-modal-card .detail-label { font-size:var(--text-xs); font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--mid); margin-bottom:0.35rem; }
     .record-modal-card .detail-value { font-size:var(--text-sm); color:var(--text); line-height:1.6; }
+    .logout-confirmation { position:fixed; inset:0; z-index:1100; display:flex; align-items:center; justify-content:center; padding:1.25rem; background:rgba(8,38,28,0.72); backdrop-filter:blur(4px); }
+    .logout-confirmation-card { width:min(390px, 100%); background:var(--surface); border-radius:16px; box-shadow:0 24px 80px rgba(8,38,28,0.24); padding:1.5rem; text-align:center; animation:slideUp .2s ease; }
+    .logout-confirmation-card h2 { color:var(--deep); font-family:'DM Serif Display',serif; font-size:1.5rem; margin-bottom:.55rem; }
+    .logout-confirmation-card p { color:var(--text3); font-size:var(--text-sm); line-height:1.55; }
+    .logout-confirmation-actions { display:flex; justify-content:center; gap:.7rem; margin-top:1.4rem; }
+    .logout-confirmation-actions button { min-width:92px; padding:.6rem 1rem; border-radius:var(--rs); font:600 var(--text-sm) 'DM Sans',sans-serif; cursor:pointer; transition:all .2s; }
+    .logout-confirmation-no { color:var(--text2); background:transparent; border:1px solid var(--line); }
+    .logout-confirmation-no:hover { background:var(--surface-2); }
+    .logout-confirmation-yes { color:#fff; background:var(--red-text); border:1px solid var(--red-text); }
+    .logout-confirmation-yes:hover { background:#6f1717; }
+    .logout-confirmation-actions button:disabled { cursor:not-allowed; opacity:.65; }
     .detection-overlay-frame { display:block; position:relative; width:100%; overflow:hidden; line-height:0; background:#eef6f1; }
     .detection-overlay-frame > img { display:block; width:100%; height:auto; object-fit:contain; background:#eef6f1; }
     .detection-overlay-svg { position:absolute; inset:0; display:block; width:100%; height:100%; overflow:visible; pointer-events:none; }
@@ -2028,7 +2039,6 @@
         <div class="scard"><div class="sval" id="s-conf">—</div><div class="slbl">Detection Confidence</div></div>
         <div class="scard"><div class="sval" id="s-status">—</div><div class="slbl">Overall Status</div></div>
       </div>
-      <div id="recommendations-area" style="display:none; margin-top:20px;"></div>
     </div>
   </div>
 
@@ -2314,6 +2324,17 @@
 
 <div id="settings-enhanced-root"></div>
 </div><!-- /panels -->
+
+<div class="logout-confirmation hidden" id="logout-confirmation" onclick="if(event.target.id === 'logout-confirmation') closeLogoutConfirmation()">
+  <div class="logout-confirmation-card" role="dialog" aria-modal="true" aria-labelledby="logout-confirmation-title" aria-describedby="logout-confirmation-message">
+    <h2 id="logout-confirmation-title">Log out?</h2>
+    <p id="logout-confirmation-message">Are you sure you want to log out?</p>
+    <div class="logout-confirmation-actions">
+      <button class="logout-confirmation-no" id="logout-confirmation-no" type="button" onclick="closeLogoutConfirmation()">No</button>
+      <button class="logout-confirmation-yes" id="logout-confirmation-yes" type="button" onclick="confirmLogout()">Yes</button>
+    </div>
+  </div>
+</div>
 
 <div class="record-modal hidden" id="record-modal" onclick="if(event.target.id === 'record-modal') closeDetectionModal()">
   <div class="record-modal-card" role="dialog" aria-modal="true" aria-labelledby="record-modal-title">

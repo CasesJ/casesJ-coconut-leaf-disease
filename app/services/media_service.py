@@ -531,6 +531,14 @@ def _strip_image_storage_fields(value: dict) -> None:
 def present_detection_record(record: dict, *, expert: bool = False) -> dict:
     """Replace stored delivery values with authenticated first-party routes."""
     value = deepcopy(record)
+    # A farmer must not receive a draft or legacy recommendation while the
+    # uploaded diagnosis is pending. Expert review creates the final snapshot
+    # when it verifies the record; that snapshot is then shown in Detection
+    # Records only.
+    if not expert and str(value.get("verification_status") or "").lower() != "verified":
+        value.pop("recommendation_snapshot", None)
+        value.pop("recommendationSnapshot", None)
+        value.pop("recommendation_source", None)
     farmer_id = str(value.get("user_id") or "")
     record_id = str(value.get("id") or value.get("record_id") or "")
     base = (f"/expert/media/detections/{farmer_id}/{record_id}" if expert

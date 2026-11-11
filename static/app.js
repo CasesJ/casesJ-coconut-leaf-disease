@@ -704,14 +704,66 @@ window.updateUIOnLogout = function updateUIOnLogout() {
   clearPins();
 };
 
-window.logout = async function logout() {
+let logoutConfirmationTrigger = null;
+let logoutInProgress = false;
+
+window.logout = function logout() {
+  const modal = document.getElementById('logout-confirmation');
+  const noButton = document.getElementById('logout-confirmation-no');
+  const yesButton = document.getElementById('logout-confirmation-yes');
+  if (!modal || !noButton || !yesButton || logoutInProgress) return;
+
+  logoutConfirmationTrigger = document.activeElement;
+  yesButton.disabled = false;
+  yesButton.textContent = 'Yes';
+  noButton.disabled = false;
+  modal.classList.remove('hidden');
+  noButton.focus();
+};
+
+window.closeLogoutConfirmation = function closeLogoutConfirmation() {
+  if (logoutInProgress) return;
+  const modal = document.getElementById('logout-confirmation');
+  if (modal) modal.classList.add('hidden');
+  logoutConfirmationTrigger?.focus?.();
+  logoutConfirmationTrigger = null;
+};
+
+window.confirmLogout = async function confirmLogout() {
+  if (logoutInProgress) return;
+  const yesButton = document.getElementById('logout-confirmation-yes');
+  const noButton = document.getElementById('logout-confirmation-no');
+  logoutInProgress = true;
+  if (yesButton) {
+    yesButton.disabled = true;
+    yesButton.textContent = 'Logging out…';
+  }
+  if (noButton) noButton.disabled = true;
+
   try {
     await auth.signOut();
+    const modal = document.getElementById('logout-confirmation');
+    if (modal) modal.classList.add('hidden');
+    logoutConfirmationTrigger = null;
     showToast('Logged out successfully');
   } catch (error) {
     showError('Logout failed: ' + error.message);
+    if (yesButton) {
+      yesButton.disabled = false;
+      yesButton.textContent = 'Yes';
+    }
+    if (noButton) noButton.disabled = false;
+  } finally {
+    logoutInProgress = false;
   }
 };
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    const modal = document.getElementById('logout-confirmation');
+    if (modal && !modal.classList.contains('hidden')) closeLogoutConfirmation();
+  }
+});
 
 window.loadDashboardStats = async function loadDashboardStats() {
   try {
@@ -2514,16 +2566,11 @@ async function detectImages(files, detectedAt = performance.now()) {
   const uploadLoading = document.getElementById('upload-loading');
   const loadingText = document.getElementById('upload-loading-text');
   const resultArea = document.getElementById('result-area');
-  const recsArea = document.getElementById('recommendations-area');
   const batchResults = document.getElementById('batch-results');
   releaseBatchPreviewUrls();
   batchUploadResults = [];
   if (uploadLoading) uploadLoading.classList.add('on');
   if (resultArea) resultArea.style.display = 'none';
-  if (recsArea) {
-    recsArea.style.display = 'none';
-    recsArea.innerHTML = '';
-  }
   if (batchResults) {
     batchResults.style.display = 'none';
     batchResults.innerHTML = '';
@@ -2867,16 +2914,8 @@ function renderUpload(data, originalFile = null, originalObjectUrl = '') {
     sStatus.style.color = bad ? 'var(--red)' : 'var(--accent)';
   }
   
-  const recsArea = document.getElementById('recommendations-area');
-  if (recsArea) { recsArea.style.display = 'none'; recsArea.innerHTML = ''; }
   if (!primary) return;
 
-  const confidence = Number(primary.confidence || 0);
-  if (confidence >= 0.5) {
-    // Show high-confidence guidance directly below the disease detection.
-    // The record remains available for expert verification.
-    fetchRecommendation(primary.class, confidence);
-  }
 }
 
 // ✅ Clear upload results and restore upload UI
@@ -2888,7 +2927,6 @@ function clearUploadResults(){
   const sTotal = document.getElementById('s-total');
   const sConf = document.getElementById('s-conf');
   const sStatus = document.getElementById('s-status');
-  const recsArea = document.getElementById('recommendations-area');
   const batchResults = document.getElementById('batch-results');
   const previousButton = document.getElementById('result-prev');
   const nextButton = document.getElementById('result-next');
@@ -2904,7 +2942,6 @@ function clearUploadResults(){
     sStatus.textContent='—';
     sStatus.style.color='';
   }
-  if (recsArea) recsArea.style.display='none';
   if (batchResults) {
     batchResults.style.display = 'none';
     batchResults.innerHTML = '';
@@ -3116,10 +3153,8 @@ function renderRecommendationCardHtml(rec) {
     ? recommendation.prevention.join(' • ')
     : recommendation.prevention;
   const sourceLabel = rec?.source === 'expert_override'
-    ? 'Expert edited recommendation'
-    : rec?.source === 'farmer_review'
-      ? 'Farmer-confirmed recommendation — awaiting expert verification'
-      : 'Default recommendation';
+    ? 'Expert-edited recommendation'
+    : 'Expert-verified recommendation';
 
   return `
     <div class="rec-card" style="margin-top:10px;">
@@ -3144,11 +3179,8 @@ function renderRecommendationCardHtml(rec) {
   `;
 }
 
-window.toggleRecordRecommendation = async function toggleRecordRecommendation(recordKey, disease, confidence, buttonEl) {
-  if (!recordKey || !disease) {
-    showToast('Recommendation data is missing');
-    return;
-  }
+window.toggleRecordRecommendation = function toggleRecordRecommendation(recordKey, buttonEl) {
+  if (!recordKey) return;
 
   const panel = document.getElementById(`record-recommendation-${recordKey}`);
   if (!panel) return;
@@ -3168,27 +3200,14 @@ window.toggleRecordRecommendation = async function toggleRecordRecommendation(re
     return;
   }
 
-  panel.innerHTML = '<div class="no-records">Loading the current disease recommendation...</div>';
+  // Recommendations are immutable record snapshots created by the expert
+  // verification action. Never generate or fetch guidance from this view.
+  if (panel.dataset.loaded !== '1' || !panel.innerHTML.trim()) {
+    showToast('This verified record has no expert recommendation yet.');
+    return;
+  }
   panel.style.display = 'block';
   if (buttonEl) buttonEl.textContent = 'Hide Recommendation';
-
-  try {
-    const response = await fetch('/recommendations/fertilizer', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {})
-      },
-      body: JSON.stringify({ disease, confidence: Number(confidence || 0) })
-    });
-    if (!response.ok) throw new Error(`Server error ${response.status}`);
-    panel.innerHTML = renderRecommendationCardHtml(await response.json());
-    panel.dataset.loaded = '1';
-  } catch (error) {
-    console.error('Could not load current recommendation:', error);
-    panel.innerHTML = '<div class="no-records">Could not load the current recommendation. Please try again.</div>';
-    panel.dataset.loaded = '0';
-  }
 };
 
 // ── Drone ──
@@ -4021,12 +4040,17 @@ async function loadUserRecords({ force = false } = {}) {
       
       const mapButtonHtml = hasEmbeddedGps
         ? `<button class="btn btn-o" onclick="showRecordLocationOnMap(${lat}, ${lng}, '${encodeInlineValue(primary.class)}');switchTab('map', document.querySelector('.nav-link[onclick*=map]'))">View on map</button>` : '';
-      const recommendationButtonHtml = status.cls === 'verified'
-        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, ${JSON.stringify(primary.class)}, ${primary.confidence}, this)'>View recommendation</button>`
-        : '<span class="record-awaiting">Recommendations available after expert review</span>';
+      const hasExpertRecommendation = status.cls === 'verified'
+        && recommendationSnapshot?.recommendation_scope === 'record'
+        && recommendationSnapshot?.recommendations;
+      const recommendationButtonHtml = hasExpertRecommendation
+        ? `<button class="btn btn-o" onclick='toggleRecordRecommendation(${JSON.stringify(recordKey)}, this)'>View recommendation</button>`
+        : status.cls === 'verified'
+          ? '<span class="record-awaiting">Expert verification is complete; recommendation is not available yet.</span>'
+          : '<span class="record-awaiting">Awaiting agricultural expert verification. Recommendations are unavailable.</span>';
       const locationDisplay = `<div class="record-location"><span class="record-location-label">Location</span><span>${hasEmbeddedGps ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS data'}</span>${!hasEmbeddedGps ? '<small>This upload has no embedded coordinates.</small>' : ''}</div><div class="record-actions">${mapButtonHtml}${recommendationButtonHtml}</div>`;
-      const recommendationPanel = status.cls === 'verified'
-        ? `<div id="record-recommendation-${recordKey}" data-loaded="${recommendationSnapshot?.recommendation_scope === 'record' ? '1' : '0'}" style="display:none;margin-top:10px;">${recommendationSnapshot?.recommendation_scope === 'record' ? renderRecommendationCardHtml(recommendationSnapshot) : ''}</div>`
+      const recommendationPanel = hasExpertRecommendation
+        ? `<div id="record-recommendation-${recordKey}" data-loaded="1" style="display:none;margin-top:10px;">${renderRecommendationCardHtml(recommendationSnapshot)}</div>`
         : '';
       const imageUrl = record.thumbnail_url || record.image_url || record.annotated_image_url || '';
       const imageLabel = record.filename || record.image_path || 'Detection image';
