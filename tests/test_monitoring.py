@@ -37,7 +37,7 @@ def client(monkeypatch):
                         lambda *_: {"limit": 3, "used": 0, "remaining": 3})
     uploads, deleted = [], []
 
-    def upload_asset(content, content_type, category):
+    def upload_asset(content, content_type, category, **_kwargs):
         reference = {"provider": "cloudinary", "asset_id": uuid4().hex,
                      "public_id": f"neuralcoco/{category}/{uuid4().hex}",
                      "resource_type": "image", "delivery_type": "authenticated",
@@ -56,6 +56,13 @@ def _image():
     success, encoded = cv2.imencode(".jpg", np.zeros((16, 16, 3), dtype=np.uint8))
     assert success
     return encoded.tobytes()
+
+
+def _png_image(size=(64, 48)):
+    output = BytesIO()
+    pixels = np.random.default_rng(8).integers(0, 256, (size[1], size[0], 3), dtype=np.uint8)
+    Image.fromarray(pixels).save(output, "PNG")
+    return output.getvalue()
 
 
 def _upload(client, data, mime="image/jpeg", case_id="case-1"):
@@ -94,8 +101,7 @@ def test_follow_up_accepts_valid_smartphone_jpeg_despite_incorrect_browser_mime(
     assert content_type == "image/jpeg"
     assert stored == source
     assert dimensions == {"width": 4032, "height": 3024}
-    # JPEG DCT reduction is intentional above the inference memory threshold.
-    assert image.shape[:2] == (1512, 2016)
+    assert image is None  # Follow-ups do not allocate a detector raster.
 
 
 def test_follow_up_accepts_valid_png():
@@ -104,7 +110,13 @@ def test_follow_up_accepts_valid_png():
     assert content_type == "image/png"
     assert stored.startswith(b"\x89PNG")
     assert dimensions == {"width": 64, "height": 48}
-    assert image.shape[:2] == (48, 64)
+    assert image is None
+
+
+def test_follow_up_rejects_truncated_png_without_decoding_a_full_raster():
+    with pytest.raises(monitoring.HTTPException) as error:
+        monitoring._decode_follow_up(_pillow_image("PNG")[:-12], "image/png")
+    assert error.value.status_code == 400
 
 
 def test_follow_up_applies_exif_orientation_without_reencoding_original():
@@ -113,7 +125,7 @@ def test_follow_up_applies_exif_orientation_without_reencoding_original():
     assert content_type == "image/jpeg"
     assert stored == source
     assert dimensions == {"width": 48, "height": 64}
-    assert image.shape[:2] == (64, 48)
+    assert image is None
 
 
 def test_follow_up_accepts_dji_mpo_primary_frame_with_metadata_preserved():
@@ -128,7 +140,7 @@ def test_follow_up_accepts_dji_mpo_primary_frame_with_metadata_preserved():
     assert content_type == "image/jpeg"
     assert stored.startswith(b"\xff\xd8") and stored.endswith(b"\xff\xd9")
     assert dimensions == {"width": 64, "height": 48}
-    assert image.shape[:2] == (48, 64)
+    assert image is None
 
 
 def test_follow_up_accepts_image_at_configured_pixel_limit(monkeypatch):
@@ -136,7 +148,7 @@ def test_follow_up_accepts_image_at_configured_pixel_limit(monkeypatch):
     image, _content_type, _stored, dimensions = monitoring._decode_follow_up(
         _pillow_image("JPEG", (40, 25)), "image/jpeg")
     assert dimensions == {"width": 40, "height": 25}
-    assert image.shape[:2] == (25, 40)
+    assert image is None
 
 
 def test_follow_up_reports_actual_dimensions_when_pixel_limit_is_exceeded(monkeypatch):
@@ -187,19 +199,14 @@ def test_expert_cannot_upload_as_farmer(client):
     assert _upload(client, _image()).status_code == 403
 
 
-def test_successful_follow_up_preserves_source_and_predictions(client, monkeypatch):
+def test_successful_follow_up_stores_evidence_without_invoking_inference(client, monkeypatch):
     source = _image()
     saved = []
     uploads = []
-    def predict(image, conf, *, annotate=True):
-        assert annotate is False, "Follow-up uploads must skip annotation rendering"
-        return {"detections": [{"class": "Bud Rot", "confidence": 0.82,
-                                "bbox": [0, 0, 16, 16]}], "image": image}
+    monkeypatch.setattr(monitoring, "run_image_inference",
+                        lambda *_: pytest.fail("Follow-up must not infer"), raising=False)
 
-    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(
-        detector=SimpleNamespace(predict=predict)))
-
-    def fake_upload(content, content_type, category):
+    def fake_upload(content, content_type, category, **_kwargs):
         uploads.append((category, content, content_type))
         return {"provider": "cloudinary", "asset_id": uuid4().hex,
                 "public_id": f"neuralcoco/{category}/{uuid4().hex}",
@@ -215,15 +222,14 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     assert response.status_code == 201, response.text
     assert len(uploads) == 1
     assert uploads[0] == ("monitoring-original", source, "image/jpeg")
-    assert saved[0]["predictions"][0]["class"] == "Bud Rot"
-    assert saved[0]["predictions"][0]["bbox_normalized"] == [0, 0, 1, 1]
+    assert saved[0]["predictions"] == []
     assert saved[0]["image_dimensions"] == {"width": 16, "height": 16}
-    assert saved[0]["annotation_format"] == "xyxy-normalized-v1"
+    assert saved[0]["annotation_format"] is None
     assert saved[0]["baseline_detection_id"] == "upload-1"
     assert saved[0]["review_status"] == "pending_expert_review"
     assert saved[0]["gps_data"] is None
     assert saved[0]["tree_reference"] is None
-    assert saved[0]["image_url"] and saved[0]["annotated_image_url"]
+    assert saved[0]["image_url"] and saved[0]["annotated_image_url"] is None
     assert saved[0]["original_storage_path"] is None
     assert saved[0]["annotated_storage_path"] is None
     assert set(saved[0]["image_assets"]) == {"original"}
@@ -231,35 +237,46 @@ def test_successful_follow_up_preserves_source_and_predictions(client, monkeypat
     assert "severity" not in saved[0] and "recovery" not in saved[0]
 
 
-def test_failed_inference_is_not_saved_as_a_no_detection(client, monkeypatch):
+def test_follow_up_does_not_depend_on_inference_availability(client, monkeypatch):
     upload_attempts = []
     saved = []
-    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf, *, annotate=True: {"detections": [], "image": image,
-                                     "inference_status": "failed",
-                                     "inference_error": "model_execution_failed"})))
     monkeypatch.setattr(monitoring, "upload_asset",
-                        lambda *args: upload_attempts.append(args))
+                        lambda *args, **kwargs: upload_attempts.append(args) or {
+                            "provider": "cloudinary", "asset_id": uuid4().hex,
+                            "public_id": "test", "content_type": "image/jpeg"})
     monkeypatch.setattr(monitoring.store, "save_follow_up",
                         lambda *args: saved.append(args))
 
     response = _upload(client, _image())
 
-    assert response.status_code == 503
-    assert "not saved" in response.json()["detail"]
-    assert upload_attempts == []
-    assert saved == []
+    assert response.status_code == 201
+    assert len(upload_attempts) == 1
+    assert saved[0][2]["predictions"] == []
+
+
+def test_follow_up_and_whole_tree_pngs_use_safe_storage_representation(client, monkeypatch):
+    from app.infrastructure.imaging import image_utils
+    monkeypatch.setattr(image_utils.config, "DETECTION_STORAGE_MAX_BYTES", 100_000)
+    saved = []
+    monkeypatch.setattr(monitoring.store, "save_follow_up", lambda *_args: saved.append(_args[2]))
+    source = _png_image((400, 400))
+    response = client.post("/monitoring/cases/case-1/follow-ups", files={
+        "file": ("leaf.png", source, "image/png"),
+        "tree_reference_file": ("tree.png", source, "image/png"),
+    })
+    assert response.status_code == 201, response.text
+    record = saved[0]
+    assert record["image_assets"]["original"]["storage_representation"] == "png_to_jpeg_storage_copy"
+    assert record["image_assets"]["original"]["source_content_type"] == "image/png"
+    assert record["tree_reference"]["image_asset"]["storage_representation"] == "png_to_jpeg_storage_copy"
+    assert record["tree_reference"]["image_asset"]["stored_content_type"] == "image/jpeg"
 
 
 def test_original_storage_failure_does_not_save_follow_up(client, monkeypatch):
     uploaded = []
     deleted = []
 
-    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
-        predict=lambda image, conf, *, annotate=True: {"detections": [], "image": image,
-                                     "inference_status": "success"})))
-
-    def partial_upload(content, content_type, category):
+    def partial_upload(content, content_type, category, **_kwargs):
         uploaded.append((category, content_type))
         if category == "monitoring-original":
             raise RuntimeError("original upload unavailable")
@@ -584,7 +601,7 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(
         predict=lambda image, conf, *, annotate=True: {"detections": [{"class": "Bud Rot", "confidence": 0.7}],
                                      "image": image})))
-    def upload_asset(content, mime, category):
+    def upload_asset(content, mime, category, **_kwargs):
         return {"provider": "cloudinary", "asset_id": uuid4().hex,
                 "public_id": f"neuralcoco/{category}/{uuid4().hex}",
                 "resource_type": "image", "delivery_type": "authenticated",
@@ -702,7 +719,6 @@ def test_follow_up_limit_blocks_before_reading_or_uploading_image(client, monkey
     monkeypatch.setattr(service, "follow_up_upload_allowance",
                         lambda *_: {"limit": 3, "used": 3, "remaining": 0})
     monkeypatch.setattr(monitoring, "upload_asset", lambda *_: pytest.fail("No asset should upload"))
-    monkeypatch.setattr(monitoring, "run_image_inference", lambda *_: pytest.fail("No inference should run"))
     response = _upload(client, b"not even an image")
     assert response.status_code == 409
     assert "3 follow-up image uploads" in response.json()["detail"]

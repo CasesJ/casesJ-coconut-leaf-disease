@@ -8,21 +8,20 @@ from io import BytesIO
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-import cv2
-import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 
-from app.core.config import (IMAGE_INFERENCE_DAILY_LIMIT, IMAGE_INFERENCE_PER_MINUTE,
-                             INFERENCE_DECODE_MAX_PIXELS, MAX_IMAGE_UPLOAD_BYTES,
-                             MAX_IMAGE_UPLOAD_PIXELS, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD)
+from app.core.config import MAX_IMAGE_UPLOAD_BYTES, MAX_IMAGE_UPLOAD_PIXELS
 from app.core.rate_limit import limiter
 from app.core.security import verify_verified_firebase_token as verify_firebase_token
 from app.domain.expert import append_expert_audit_event, is_authorized_expert_identity
 from app.api.detections import _mpo_primary_jpeg_bytes
 from app.infrastructure.cloudinary_storage import delete_asset, upload_asset
+from app.infrastructure.imaging.image_utils import (
+    DetectionImageProcessingError,
+    prepare_cloudinary_evidence_asset,
+)
 from app.infrastructure.imaging.tree_reference import read_reference_image, reference_metadata
-from app.services.detection_service import _annotated_detections
 from app.services import media_service
 from app.schemas.monitoring import (FollowUpRecord, FollowUpReview,
                                     FollowUpScheduleUpdate, MonitoringCaseCreate,
@@ -30,7 +29,6 @@ from app.schemas.monitoring import (FollowUpRecord, FollowUpReview,
                                     TreatmentApplicationCreate,
                                     TreatmentApplicationRecord)
 from app.services import monitoring_service as store
-from app.services.inference_service import InferenceUnavailable, run_image_inference
 
 router = APIRouter(tags=["monitoring"])
 logger = logging.getLogger(__name__)
@@ -341,40 +339,8 @@ def my_follow_ups(case_id: str, decoded: dict = Depends(verify_firebase_token)):
                            for item in store.list_follow_ups(farmer_id, case_id)]}
 
 
-def _follow_up_decode_flag(image_format: str, pixels: int) -> int:
-    """Use JPEG DCT reduction before allocating an inference raster."""
-    if image_format != "JPEG":
-        return cv2.IMREAD_COLOR
-    if pixels > INFERENCE_DECODE_MAX_PIXELS * 16:
-        return cv2.IMREAD_REDUCED_COLOR_8
-    if pixels > INFERENCE_DECODE_MAX_PIXELS * 4:
-        return cv2.IMREAD_REDUCED_COLOR_4
-    if pixels > INFERENCE_DECODE_MAX_PIXELS:
-        return cv2.IMREAD_REDUCED_COLOR_2
-    return cv2.IMREAD_COLOR
-
-
-def _apply_exif_orientation(image: np.ndarray, orientation: int) -> np.ndarray:
-    """Orient the inference raster without changing the stored source bytes."""
-    if orientation == 2:
-        return cv2.flip(image, 1)
-    if orientation == 3:
-        return cv2.rotate(image, cv2.ROTATE_180)
-    if orientation == 4:
-        return cv2.flip(image, 0)
-    if orientation == 5:
-        return cv2.transpose(image)
-    if orientation == 6:
-        return cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-    if orientation == 7:
-        return cv2.flip(cv2.transpose(image), -1)
-    if orientation == 8:
-        return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    return image
-
-
 def _decode_follow_up(contents: bytes, _declared_type: str | None):
-    """Validate source bytes and decode a bounded raster for monitoring inference.
+    """Validate follow-up evidence without decoding a model input raster.
 
     Browser MIME labels are advisory: Safari and some Android camera apps may
     omit or mislabel an otherwise valid JPEG.  The decoded file signature is
@@ -394,27 +360,24 @@ def _decode_follow_up(contents: bytes, _declared_type: str | None):
                 )
             content_type = "image/png" if image_format == "PNG" else "image/jpeg"
             image.verify()
-        # DJI MPO captures contain a primary JPEG plus a second frame. Match
-        # initial detection: retain that original primary JPEG (including its
-        # EXIF/GPS metadata) for inference and authenticated evidence storage.
+        if content_type == "image/jpeg" and not contents.rstrip().endswith(b"\xff\xd9"):
+            raise ValueError("Image file is incomplete")
+        # DJI MPO captures contain a primary JPEG plus a second frame. Keep
+        # the primary JPEG (including its EXIF/GPS metadata) as evidence.
         evidence_contents = (_mpo_primary_jpeg_bytes(contents)
                              if image_format == "MPO" else contents)
-        decode_format = "JPEG" if image_format == "MPO" else image_format
         # Keep verify() directly after open; some Pillow decoders (notably
         # PNG) reject verification after metadata access. Reopening only reads
-        # EXIF metadata and does not load the pixel raster.
+        # EXIF metadata and does not load a pixel raster.
         with Image.open(BytesIO(evidence_contents)) as image:
             orientation = int(image.getexif().get(274, 1))
-        decoded_image = cv2.imdecode(
-            np.frombuffer(evidence_contents, np.uint8),
-            _follow_up_decode_flag(decode_format, pixels) | cv2.IMREAD_IGNORE_ORIENTATION,
-        )
-        if decoded_image is None:
-            raise ValueError("Image file is corrupted or invalid")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise HTTPException(400, str(exc) or "Upload must be a valid image") from exc
 
-    return _apply_exif_orientation(decoded_image, orientation), content_type, evidence_contents, {
+    # Keep the private helper's tuple shape stable for callers/tests from the
+    # prior inference workflow. The first value is intentionally no longer a
+    # decoded image.
+    return None, content_type, evidence_contents, {
         "width": height if orientation in {5, 6, 7, 8} else width,
         "height": width if orientation in {5, 6, 7, 8} else height,
     }
@@ -444,7 +407,8 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
             raise HTTPException(404, "Follow-up schedule not found")
         treatment_application_id = follow_up_schedule.get("treatment_application_id")
 
-    # Validate every input before inference, quota consumption, or any uploads.
+    # Validate every input before any uploads. Follow-up inspections record
+    # treatment progress only; they deliberately never invoke a detector.
     tree_contents, tree_mime = (await read_reference_image(tree_reference_file)
                                 if tree_reference_file is not None else (None, None))
 
@@ -453,46 +417,23 @@ async def upload_follow_up(case_id: str, file: UploadFile = File(...),
         raise HTTPException(413, "Image upload is too large")
     if not contents:
         raise HTTPException(400, "Image upload is empty")
-    decoded_image, content_type, evidence_contents, source_dimensions = await run_in_threadpool(
+    _, content_type, evidence_contents, source_dimensions = await run_in_threadpool(
         _decode_follow_up, contents, file.content_type,
     )
-
-    await limiter.rolling(f"image-minute:{farmer_id}", IMAGE_INFERENCE_PER_MINUTE, 60)
-    await limiter.image_quota_24h(f"image-quota:{farmer_id}", IMAGE_INFERENCE_DAILY_LIMIT)
     return await run_in_threadpool(
         _process_follow_up, case, farmer_id, case_id, evidence_contents, file.filename,
-        decoded_image, content_type, source_dimensions, tree_contents, tree_mime,
+        content_type, source_dimensions, tree_contents, tree_mime,
         tree_reference_file.filename if tree_reference_file is not None else "",
         preliminary_status, follow_up_schedule_id, treatment_application_id,
     )
 
 
-def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_image,
-                       content_type, source_dimensions, tree_contents, tree_mime, tree_filename,
+def _process_follow_up(case, farmer_id, case_id, contents, filename, content_type,
+                       source_dimensions, tree_contents, tree_mime, tree_filename,
                        preliminary_status, follow_up_schedule_id, treatment_application_id):
     """Keep evidence uploads and the commit/cleanup sequence together in one worker."""
-    from model import detector  # noqa: PLC0415
     from drone_gps import DroneGPS  # noqa: PLC0415
-
-    try:
-        result = run_image_inference(
-            detector, decoded_image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD, annotate=False,
-        )
-    except InferenceUnavailable as exc:
-        logger.error("Monitoring inference failed for %s/%s category=%s", farmer_id, case_id, exc.category)
-        if exc.category == "image_too_large":
-            status_code, detail = 413, "The follow-up image is too large for disease analysis."
-        elif exc.category in {"rate_limited", "cooldown", "request_in_progress"}:
-            status_code, detail = 429, "Disease analysis is temporarily busy. Please try again shortly."
-        else:
-            status_code, detail = 503, "Disease analysis is temporarily unavailable. The follow-up was not saved."
-        raise HTTPException(
-            status_code,
-            detail,
-        ) from exc
-    image_height, image_width = decoded_image.shape[:2]
     image_dimensions = source_dimensions
-    predictions = _annotated_detections(result["detections"], (image_width, image_height))
     gps_reader = DroneGPS()
     gps = gps_reader.extract_gps_from_image(contents, filename or "")
     gps_data = ({"latitude": gps.latitude, "longitude": gps.longitude,
@@ -507,14 +448,28 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_ima
             delete_asset(reference)
 
     try:
-        original_asset = upload_asset(contents, content_type, "monitoring-original")
+        original_asset = prepare_cloudinary_evidence_asset(
+            contents, content_type, "monitoring-original", operation_id=follow_up_id,
+            uploader=upload_asset,
+        )
         uploaded_evidence.append(original_asset)
         if tree_contents is not None:
             metadata = reference_metadata(case, uuid4().hex, farmer_id, tree_contents,
                                           tree_mime, tree_filename or "", follow_up_id)
-            tree_asset = upload_asset(tree_contents, tree_mime, "whole-tree-reference")
+            tree_asset = prepare_cloudinary_evidence_asset(
+                tree_contents, tree_mime, "whole-tree-reference", operation_id=follow_up_id,
+                uploader=upload_asset,
+            )
             uploaded_evidence.append(tree_asset)
             tree_reference = {**metadata, "image_asset": tree_asset}
+    except DetectionImageProcessingError as exc:
+        cleanup_new_evidence()
+        logger.warning("Could not safely prepare follow-up evidence for storage case_id=%s error_type=%s",
+                       case_id, type(exc).__name__)
+        raise HTTPException(
+            413,
+            "The image cannot be prepared below Cloudinary's storage limit while preserving required metadata. Use a smaller JPEG image.",
+        ) from exc
     except Exception as exc:
         cleanup_new_evidence()
         logger.exception("Could not upload follow-up evidence")
@@ -527,11 +482,12 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_ima
         follow_up_schedule_id=follow_up_schedule_id,
         treatment_application_id=treatment_application_id,
         created_at=_audit_timestamp(),
-        filename=filename or "", predictions=predictions,
+        filename=filename or "", predictions=[],
         image_dimensions=image_dimensions,
-        annotation_format="xyxy-normalized-v1",
+        # New inspections deliberately have no inference or generated overlay.
+        annotation_format=None,
         image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/original",
-        annotated_image_url=f"/media/monitoring/{case_id}/follow-ups/{follow_up_id}/annotated",
+        annotated_image_url=None,
         original_storage_path=None,
         annotated_storage_path=None,
         image_assets={"original": original_asset},

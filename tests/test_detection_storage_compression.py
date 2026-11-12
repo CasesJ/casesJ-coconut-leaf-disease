@@ -34,6 +34,21 @@ def photo(size=(80, 60), noisy=False, metadata=True):
     return output.getvalue()
 
 
+def png_photo(size=(80, 60), *, mode="RGB", noisy=False, metadata=False):
+    channels = 4 if mode == "RGBA" else 3
+    pixels = (np.random.default_rng(99).integers(0, 256, (size[1], size[0], channels), dtype=np.uint8)
+              if noisy else np.full((size[1], size[0], channels), 90, dtype=np.uint8))
+    output = BytesIO()
+    image = Image.fromarray(pixels, mode)
+    if metadata:
+        exif = Image.Exif()
+        exif[271] = "DJI"
+        image.save(output, "PNG", exif=exif)
+    else:
+        image.save(output, "PNG")
+    return output.getvalue()
+
+
 def _jpeg_segment(marker, payload):
     return b"\xff" + bytes([marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
 
@@ -104,6 +119,68 @@ def test_oversized_jpeg_is_compressed_without_resizing_or_metadata_loss(monkeypa
     assert before_metadata["dji_telemetry"]["relative_altitude_m"] == 35.5
     for field in ("gps", "captured_at", "camera_make", "camera_model", "is_dji", "dji_telemetry"):
         assert after_metadata[field] == before_metadata[field]
+
+
+def test_small_png_is_stored_byte_identically():
+    source = png_photo()
+    stored, representation = images._prepare_cloudinary_copy(source, "image/png")
+    assert representation == "source_original"
+    assert stored == source
+
+
+def test_large_opaque_png_becomes_bounded_jpeg_storage_copy():
+    source = png_photo((1800, 1800), noisy=True)
+    assert len(source) > 8_000_000
+    stored, representation = images._prepare_cloudinary_copy(source, "image/png")
+    assert representation == "png_to_jpeg_storage_copy"
+    assert len(stored) <= 8_000_000
+    with Image.open(BytesIO(stored)) as image:
+        assert image.format == "JPEG" and image.mode == "RGB"
+
+
+def test_large_rgba_png_preserves_transparency_in_bounded_png_copy(monkeypatch):
+    source = png_photo((1800, 1800), mode="RGBA", noisy=True)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 8_000_000)
+    stored, representation = images._prepare_cloudinary_copy(source, "image/png")
+    assert representation == "reduced_png_storage_copy"
+    assert len(stored) <= 8_000_000
+    with Image.open(BytesIO(stored)) as image:
+        assert image.format == "PNG" and image.mode == "RGBA"
+        assert image.size[0] < 1800
+
+
+def test_palette_png_with_transparency_stays_transparent(monkeypatch):
+    source_image = Image.fromarray(
+        np.random.default_rng(3).integers(0, 256, (1200, 1200), dtype=np.uint8), "P")
+    output = BytesIO()
+    source_image.save(output, "PNG", transparency=0)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 10_000)
+    stored, representation = images._prepare_cloudinary_copy(output.getvalue(), "image/png")
+    assert representation == "reduced_png_storage_copy"
+    with Image.open(BytesIO(stored)) as image:
+        assert image.format == "PNG" and image.mode == "RGBA"
+
+
+def test_png_storage_copy_preserves_exif_and_records_true_stored_type(monkeypatch):
+    source = png_photo((1800, 1800), noisy=True, metadata=True)
+    uploads = []
+    monkeypatch.setattr(images, "upload_asset", lambda data, mime, category, **kwargs:
+                        uploads.append((data, mime, category)) or {"provider": "cloudinary"})
+    asset = images.save_upload_image_assets("png-record", source)["image_assets"]["original"]
+    assert uploads[0][1] == "image/jpeg"
+    assert asset["source_content_type"] == "image/png"
+    assert asset["stored_content_type"] == "image/jpeg"
+    assert asset["storage_representation"] == "png_to_jpeg_storage_copy"
+    with Image.open(BytesIO(uploads[0][0])) as image:
+        assert image.getexif().get(271) == "DJI"
+
+
+def test_oversized_png_above_storage_pixel_budget_is_rejected_before_load(monkeypatch):
+    source = png_photo((200, 200), noisy=True)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_BYTES", 1)
+    monkeypatch.setattr(images.config, "DETECTION_STORAGE_MAX_PIXELS", 10_000)
+    with pytest.raises(images.DetectionImageProcessingError, match="memory budget"):
+        images._prepare_cloudinary_copy(source, "image/png")
 
 
 def test_large_dji_jpeg_uses_draft_reduction_and_preserves_gps(monkeypatch):

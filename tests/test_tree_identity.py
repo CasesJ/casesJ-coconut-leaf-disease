@@ -145,7 +145,7 @@ def env(monkeypatch):
     app.dependency_overrides[verify_firebase_token] = lambda: dict(actor)
     assets, deleted, inference_calls = {}, [], []
 
-    def upload_asset(content, content_type, category):
+    def upload_asset(content, content_type, category, **_kwargs):
         reference = {"provider": "cloudinary", "asset_id": uuid4().hex,
                      "public_id": f"neuralcoco/{category}/{uuid4().hex}",
                      "resource_type": "image", "delivery_type": "authenticated",
@@ -170,12 +170,6 @@ def env(monkeypatch):
     monkeypatch.setattr(api.limiter, "rolling", allowed)
     monkeypatch.setattr(api.limiter, "image_quota_24h", allowed)
 
-    def infer(image, conf, *, annotate=True):
-        assert annotate is False  # Monitoring stores predictions without drawing on the image.
-        inference_calls.append(image.copy())
-        return {"image": image, "detections": [{"class": "Bud Rot", "confidence": 0.81}]}
-
-    monkeypatch.setitem(sys.modules, "model", SimpleNamespace(detector=SimpleNamespace(predict=infer)))
     return SimpleNamespace(db=db, client=TestClient(app), actor=actor, assets=assets,
                            deleted=deleted, originals=originals, inference_calls=inference_calls)
 
@@ -218,7 +212,7 @@ def test_complete_workflow_preserves_history_and_separates_outcomes(env):
     assert record["tree_reference"]["case_id"] == "case-1"
     assert record["identity_review"] is None
     assert record["identity_baseline_reference_id"] == tree_ref["id"]
-    assert len(env.inference_calls) == 1 and env.inference_calls[0].shape[:2] == (20, 20)
+    assert not env.inference_calls
     before = deepcopy(env.db.docs)
     reviewed = review(env, record, explanation="Same trunk scar and shed")
     assert reviewed.status_code == 200, reviewed.text
@@ -451,7 +445,7 @@ def test_private_storage_has_no_download_token_and_prevents_overwrites(monkeypat
 
 def test_partial_reference_storage_failure_keeps_history(env, monkeypatch):
     original_upload = monitoring.upload_asset
-    def unavailable(content, content_type, category):
+    def unavailable(content, content_type, category, **_kwargs):
         if category == "whole-tree-reference":
             raise RuntimeError("Cloudinary unavailable")
         return original_upload(content, content_type, category)
@@ -466,9 +460,9 @@ def test_partial_reference_storage_failure_keeps_history(env, monkeypatch):
 def test_decoding_and_pixel_limits(env):
     import struct
     import zlib
-    # A real PNG header advertising >40 MP, rejected before pixel allocation.
+    # A real PNG header advertising >50 MP, rejected before pixel allocation.
     data = bytearray(photo("PNG"))
-    data[16:24] = struct.pack(">II", 8000, 6000)
+    data[16:24] = struct.pack(">II", 8000, 7000)
     data[29:33] = struct.pack(">I", zlib.crc32(data[12:29]))
     for content, mime in ((bytes(data), "image/png"), (photo()[:100], "image/jpeg")):
         result = env.client.post(EXPERT_BASE + "/tree-reference", files={"file": ("bad-image", content, mime)})

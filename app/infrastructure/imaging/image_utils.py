@@ -26,6 +26,7 @@ _MAX_JPEG_MARKERS = 100_000
 _MAX_PROTECTED_METADATA_BYTES = 16 * 1024 * 1024
 _DETECTION_THUMBNAIL_SIZE = (480, 480)
 _DETECTION_THUMBNAIL_QUALITY = 78
+_PNG_RESIZE_FACTOR = 0.8
 
 
 class DetectionImageProcessingError(CloudinaryStorageError):
@@ -260,6 +261,96 @@ def _opencv_reduced_flag(factor: int) -> int:
     }[factor] | cv2.IMREAD_IGNORE_ORIENTATION
 
 
+def _png_has_transparency(image: Image.Image) -> bool:
+    """Identify alpha without decoding the PNG raster."""
+    return image.mode in {"RGBA", "LA"} or (
+        image.mode == "P" and "transparency" in image.info
+    )
+
+
+def _png_save_options(image: Image.Image) -> dict:
+    """Carry GPS-capable EXIF/ICC metadata into a PNG storage derivative."""
+    options = {"format": "PNG", "optimize": True, "compress_level": 9}
+    if image.info.get("exif"):
+        options["exif"] = image.info["exif"]
+    if image.info.get("icc_profile"):
+        options["icc_profile"] = image.info["icc_profile"]
+    return options
+
+
+def _jpeg_save_options(image: Image.Image, quality: int) -> dict:
+    """Carry metadata when an opaque PNG is safely stored as JPEG."""
+    options = {"format": "JPEG", "quality": quality, "optimize": True}
+    if image.info.get("exif"):
+        options["exif"] = image.info["exif"]
+    if image.info.get("icc_profile"):
+        options["icc_profile"] = image.info["icc_profile"]
+    return options
+
+
+def _resize_to_pixel_budget(image: Image.Image, max_pixels: int) -> None:
+    if image.width * image.height <= max_pixels:
+        return
+    scale = (max_pixels / (image.width * image.height)) ** 0.5
+    image.thumbnail((max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                    Image.Resampling.LANCZOS)
+
+
+def _prepare_oversized_png(content: bytes, storage_pixel_limit: int) -> tuple[bytes, str]:
+    """Create a bounded PNG/JPEG evidence derivative without dropping alpha.
+
+    Pillow has no PNG equivalent to JPEG DCT draft decoding.  Consequently an
+    oversized PNG above the storage pixel limit is rejected before `load()`;
+    this makes the Render worker's peak allocation explicit and bounded.
+    """
+    try:
+        with Image.open(BytesIO(content)) as source:
+            if source.format != "PNG":
+                raise DetectionImageProcessingError("Storage source is not a PNG")
+            source.verify()
+        with Image.open(BytesIO(content)) as source:
+            pixels = source.width * source.height
+            if pixels > storage_pixel_limit:
+                raise DetectionImageProcessingError(
+                    "PNG cannot be safely decoded within the storage memory budget"
+                )
+            preserve_alpha = _png_has_transparency(source)
+            source.load()  # bounded above; this is the only full PNG raster decode.
+            _resize_to_pixel_budget(source, storage_pixel_limit)
+            if preserve_alpha:
+                # Never flatten alpha. Repeated bounded downscales trade
+                # dimensions for a compatible transparent PNG under the limit.
+                if source.mode not in {"RGBA", "LA"}:
+                    source = source.convert("RGBA")
+                while True:
+                    output = BytesIO()
+                    source.save(output, **_png_save_options(source))
+                    candidate = output.getvalue()
+                    if len(candidate) <= config.DETECTION_STORAGE_MAX_BYTES:
+                        return candidate, "reduced_png_storage_copy"
+                    next_width = max(1, int(source.width * _PNG_RESIZE_FACTOR))
+                    next_height = max(1, int(source.height * _PNG_RESIZE_FACTOR))
+                    if (next_width, next_height) == source.size:
+                        break
+                    source.thumbnail((next_width, next_height), Image.Resampling.LANCZOS)
+                raise DetectionImageProcessingError(
+                    "Transparent PNG cannot fit the storage limit without losing transparency"
+                )
+
+            rgb = source.convert("RGB")
+            for quality in _JPEG_QUALITIES:
+                output = BytesIO()
+                rgb.save(output, **_jpeg_save_options(source, quality))
+                candidate = output.getvalue()
+                if len(candidate) <= config.DETECTION_STORAGE_MAX_BYTES:
+                    return candidate, "png_to_jpeg_storage_copy"
+            raise DetectionImageProcessingError("PNG cannot fit the storage byte limit")
+    except DetectionImageProcessingError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise DetectionImageProcessingError("PNG image compression failed") from exc
+
+
 def _prepare_cloudinary_copy(
     content: bytes,
     content_type: str,
@@ -267,12 +358,16 @@ def _prepare_cloudinary_copy(
     operation_id: str = "unknown",
 ) -> tuple[bytes, str]:
     """Return a verified, bounded storage copy without changing inference evidence."""
+    if content_type == "image/png":
+        if len(content) <= config.DETECTION_STORAGE_MAX_BYTES:
+            return content, "source_original"
+        storage_pixel_limit = min(config.CLOUDINARY_MAX_IMAGE_PIXELS,
+                                  config.DETECTION_STORAGE_MAX_PIXELS)
+        return _prepare_oversized_png(content, storage_pixel_limit)
     if content_type != "image/jpeg":
         if len(content) <= config.DETECTION_STORAGE_MAX_BYTES:
             return content, "source_original"
-        raise DetectionImageProcessingError(
-            "Only oversized JPEG detection images can be compressed for storage"
-        )
+        raise DetectionImageProcessingError("Unsupported oversized image format")
 
     metadata_started = time.perf_counter()
     protected_segments = _jpeg_protected_segments(content)
@@ -465,10 +560,11 @@ def save_upload_image_assets(
     ) * 1000
     upload_started = time.perf_counter()
     _log_memory("before_cloudinary_upload", operation_id)
+    stored_content_type = _image_content_type(storage_bytes)
     category = ("detection-original" if representation == "source_original"
                 else "detection-storage-copy")
     original = upload_asset(
-        storage_bytes, content_type, category, operation_id=operation_id,
+        storage_bytes, stored_content_type, category, operation_id=operation_id,
         source_bytes=len(original_bytes),
     )
     upload_ms = (time.perf_counter() - upload_started) * 1000
@@ -483,6 +579,8 @@ def save_upload_image_assets(
         "source_sha256": source_sha256,
         "stored_byte_size": len(storage_bytes),
         "stored_sha256": stored_sha256,
+        "source_content_type": content_type,
+        "stored_content_type": stored_content_type,
     })
     try:
         with Image.open(BytesIO(storage_bytes)) as stored_image:
@@ -525,3 +623,61 @@ def save_upload_image_assets(
         preparation_timings.get("image_metadata_verification_ms", 0.0),
     )
     return {"image_assets": assets}
+
+
+def prepare_cloudinary_evidence_asset(
+    source_bytes: bytes,
+    content_type: str,
+    category: str,
+    *,
+    operation_id: str = "unknown",
+    uploader=upload_asset,
+) -> dict:
+    """Store one evidence image within Cloudinary's byte limit.
+
+    The returned reference explicitly distinguishes a byte-identical source
+    from a verified JPEG storage derivative.  Callers retain source dimensions
+    and any source-specific GPS metadata in their own evidence record.
+    """
+    detected_type = _image_content_type(source_bytes)
+    if detected_type != content_type:
+        raise DetectionImageProcessingError("Evidence image type does not match its contents")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    storage_bytes, representation = _prepare_cloudinary_copy(
+        source_bytes, content_type, operation_id=operation_id,
+    )
+    stored_content_type = _image_content_type(storage_bytes)
+    try:
+        reference = uploader(
+            storage_bytes, stored_content_type, category, operation_id=operation_id,
+            source_bytes=len(source_bytes),
+        )
+    except CloudinaryStorageError:
+        raise
+    stored_sha256 = (source_sha256 if storage_bytes is source_bytes
+                     else hashlib.sha256(storage_bytes).hexdigest())
+    reference.update({
+        "storage_representation": representation,
+        "source_byte_size": len(source_bytes),
+        "source_sha256": source_sha256,
+        "stored_byte_size": len(storage_bytes),
+        "stored_sha256": stored_sha256,
+        "source_content_type": content_type,
+        "stored_content_type": stored_content_type,
+    })
+    try:
+        with Image.open(BytesIO(source_bytes)) as source_image:
+            reference["source_dimensions"] = {
+                "width": int(source_image.width), "height": int(source_image.height),
+            }
+        with Image.open(BytesIO(storage_bytes)) as stored_image:
+            reference["storage_dimensions"] = {
+                "width": int(stored_image.width), "height": int(stored_image.height),
+            }
+    except (UnidentifiedImageError, OSError) as exc:
+        raise DetectionImageProcessingError("Evidence image metadata could not be read") from exc
+    logger.info(
+        "Evidence image prepared operation_id=%s source_bytes=%d stored_bytes=%d representation=%s category=%s",
+        operation_id, len(source_bytes), len(storage_bytes), representation, category,
+    )
+    return reference

@@ -29,10 +29,13 @@ def _validate_reference_image(contents: bytes, declared_type: str | None) -> tup
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("Use a single-frame whole-tree photograph")
             image.verify()
+        # verify() checks container structure without materialising a 50 MP
+        # raster. JPEG verification alone can accept a truncated stream, so
+        # require its end marker as the bounded completeness check.
+        if content_type == "image/jpeg" and not contents.rstrip().endswith(b"\xff\xd9"):
+            raise ValueError("Whole-tree image is incomplete")
         if declared_type != content_type:
             raise ValueError("Whole-tree image MIME type does not match its contents")
-        with Image.open(BytesIO(contents)) as image:
-            image.load()
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
         raise HTTPException(400, "Invalid whole-tree image: " + str(exc)) from exc
     return contents, content_type
