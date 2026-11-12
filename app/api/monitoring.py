@@ -152,6 +152,7 @@ def my_monitoring_overview(case_id: str, decoded: dict = Depends(verify_firebase
         raise HTTPException(404, "Monitoring case not found")
     overview["follow_up_upload_allowance"] = store.follow_up_upload_allowance(
         overview["case"]["farmer_id"], overview["case"]["tree_id"])
+    overview["follow_up_eligibility"] = store.follow_up_eligibility(_farmer(decoded), case_id)
     return media_service.present_monitoring_overview(overview)
 
 
@@ -499,6 +500,9 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, content_typ
         store.save_follow_up(farmer_id, case_id, record)
         return media_service.present_monitoring_follow_up(record)
     except store.FollowUpLimitReached as exc:
+        cleanup_new_evidence()
+        raise HTTPException(409, str(exc)) from exc
+    except store.FollowUpIntervalPending as exc:
         cleanup_new_evidence()
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:

@@ -129,7 +129,7 @@ def expert_detection_image(farmer_id: str, record_id: str, kind: str, background
 
 def _monitoring_image(farmer_id: str, case_id: str, follow_up_id: str | None,
                       kind: str, baseline: bool = False) -> Response:
-    if (kind not in ({"original", "annotated", "thumbnail"} if baseline else {"original", "annotated"})
+    if (kind not in ({"original", "annotated", "thumbnail"} if baseline else {"original", "annotated", "thumbnail"})
             or not _SAFE_ID.fullmatch(farmer_id)
             or not _SAFE_ID.fullmatch(case_id)
             or (follow_up_id is not None and not _SAFE_ID.fullmatch(follow_up_id))):

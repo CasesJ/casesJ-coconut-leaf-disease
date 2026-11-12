@@ -3,6 +3,19 @@ const monitoringState = { cases: [], selected: null, overview: null, expertRecor
 const MONITORING_UPLOAD_MAX_BYTES = 50 * 1000 * 1000;
 const MONITORING_REQUEST_TIMEOUT_MS = 120000;
 
+function monitoringSuccessModal() {
+  let modal = document.getElementById('monitor-success-modal');
+  if (!modal) {
+    modal = document.createElement('dialog');
+    modal.id = 'monitor-success-modal';
+    modal.className = 'monitor-success-modal';
+    modal.innerHTML = '<div><h3>Inspection saved</h3><p>Follow-up inspection saved successfully.</p><button class="btn btn-p" type="button">OK</button></div>';
+    modal.querySelector('button').addEventListener('click', () => modal.close());
+    document.body.append(modal);
+  }
+  if (!modal.open) modal.showModal();
+}
+
 window.monitoringOpenTree = function (encodedTree, encodedFarmer) {
   monitoringState.requestedTree = { id: decodeURIComponent(encodedTree), farmer: decodeURIComponent(encodedFarmer) };
   switchTab('monitoring', document.getElementById('nav-monitoring-link'));
@@ -367,7 +380,7 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const postTreatmentDue = monitoringDue(latestPostSchedule?.due_date || item.next_post_treatment_follow_up_date);
   const lifecycle = monitoringTreatmentLifecycle(overview);
   const original = monitoringImageUrl(overview.baseline?.thumbnail_url || overview.baseline?.image_url || overview.baseline?.annotated_image_url);
-  const after = monitoringImageUrl(selected?.image_url || selected?.annotated_image_url);
+  const after = monitoringImageUrl(selected?.thumbnail_url || selected?.image_url || selected?.annotated_image_url);
   const originalPreview = original
     ? (window.DetectionOverlay?.frameHtml(original, overview.baseline || {}, {
       className: 'monitor-detection-preview', alt: 'Baseline disease image',
@@ -408,10 +421,13 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
   const allowance = overview.follow_up_upload_allowance || {
     limit: 3, used: followUps.length, remaining: Math.max(0, 3 - followUps.length)
   };
+  const eligibility = overview.follow_up_eligibility || { eligible: allowance.remaining > 0, completed: followUps.length };
+  const uploadsLocked = allowance.remaining === 0 || !eligibility.eligible;
+  const nextEligible = eligibility.next_eligible_at ? monitoringDate(eligibility.next_eligible_at) : '';
   const uploadForm = !currentUserIsExpert && item.monitoring_status !== 'finish' ? `<section class="monitor-card"><h3 class="monitor-section-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 5l1.5-2h5L16 5M8 14l2.5-2.5 2 2L15.5 10l3.5 4"/></svg>Add an inspection</h3><p class="monitor-muted" style="margin-top:7px;">Upload a clear image of this tree. Your observation stays preliminary until an expert reviews it.</p>
     <p class="monitor-muted">${monitoringText(allowance.used)} of ${monitoringText(allowance.limit)} follow-up uploads used for this tree ID. ${monitoringText(allowance.remaining)} remaining.</p>
-    ${allowance.remaining === 0 ? '<p class="monitor-muted" role="status">You have reached the limit of 3 follow-up image uploads for this tree ID.</p>' : ''}
-    <form id="monitor-upload-form" class="monitor-form"><fieldset style="border:0;padding:0;margin:0;display:contents" ${allowance.remaining === 0 ? 'disabled' : ''}>
+    ${allowance.remaining === 0 ? '<p class="monitor-muted" role="status">All 3 follow-up inspections have been completed.</p>' : !eligibility.eligible ? `<p class="monitor-muted" role="status">Next follow-up inspection available on ${monitoringText(nextEligible)}.</p>` : ''}
+    <form id="monitor-upload-form" class="monitor-form"><fieldset style="border:0;padding:0;margin:0;display:contents" ${uploadsLocked ? 'disabled' : ''}>
       ${scheduleOptions ? `<label>Inspection schedule (optional)<select id="monitor-follow-up-schedule"><option value="">General inspection</option>${scheduleOptions}</select></label>` : ''}
       <label>Disease close-up image<input id="monitor-upload-file" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" required></label>
       <label>Whole-tree reference photo (optional)<input id="monitor-upload-tree-file" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png"></label>
@@ -589,7 +605,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const treePhoto = document.getElementById('monitor-upload-tree-file').files[0];
         if (treePhoto) body.append('tree_reference_file', treePhoto);
         await monitoringRequest(`/monitoring/cases/${encodeURIComponent(item.id)}/follow-ups`, { method: 'POST', body });
-        showToast('Follow-up saved for expert review');
       } else if (form.id === 'monitor-review-form') {
         await monitoringRequest(`/expert/monitoring/cases/${encodeURIComponent(item.farmer_id)}/${encodeURIComponent(item.id)}/follow-ups/${encodeURIComponent(form.dataset.followUpId)}/review`,
           { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -605,6 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('Monitoring saved but refresh failed', refreshError);
         showToast('Inspection saved, but the history could not refresh. Use Refresh cases to confirm it.');
       }
+      if (form.id === 'monitor-upload-form') monitoringSuccessModal();
       if (form.dataset.followUpId && monitoringState.overview?.case.id === item.id) {
         monitoringRenderOverview(monitoringState.overview, form.dataset.followUpId);
       }

@@ -409,6 +409,27 @@ class FollowUpLimitReached(ValueError):
 FOLLOW_UP_LIMIT_MESSAGE = "You have reached the limit of 3 follow-up image uploads for this tree ID."
 
 
+class FollowUpIntervalPending(ValueError):
+    """A later inspection was submitted before its server-calculated due time."""
+
+
+def follow_up_eligibility(farmer_id: str, case_id: str) -> dict:
+    """Return the case-local inspection window; legacy records remain readable."""
+    case = get_case(farmer_id, case_id)
+    if not case:
+        return {"eligible": False, "next_eligible_at": None, "completed": 0}
+    records = list_follow_ups(farmer_id, case_id)
+    completed = len(records)
+    if completed >= FOLLOW_UP_UPLOAD_LIMIT:
+        return {"eligible": False, "next_eligible_at": None, "completed": completed}
+    if not records:
+        return {"eligible": True, "next_eligible_at": None, "completed": 0}
+    interval = max(1, min(90, int(case.get("follow_up_interval_days") or 6)))
+    next_at = _timestamp_sort_key(records[-1].get("created_at")) + timedelta(days=interval)
+    return {"eligible": datetime.now(timezone.utc) >= next_at,
+            "next_eligible_at": next_at.isoformat(), "completed": completed}
+
+
 def tree_follow_up_count(farmer_id: str, tree_id: str) -> int:
     """Count historical uploads across every case for this farmer and tree."""
     return sum(len(list_follow_ups(farmer_id, case["id"]))
@@ -450,6 +471,14 @@ def save_follow_up(farmer_id: str, case_id: str, follow_up: dict) -> None:
         used = max(historical_count, (quota or {}).get("used", 0))
         if used >= FOLLOW_UP_UPLOAD_LIMIT:
             raise FollowUpLimitReached(FOLLOW_UP_LIMIT_MESSAGE)
+        if used and case.get("last_inspection_at"):
+            interval = max(1, min(90, int(case.get("follow_up_interval_days") or 6)))
+            next_at = _timestamp_sort_key(case["last_inspection_at"]) + timedelta(days=interval)
+            submitted_at = _timestamp_sort_key(follow_up.get("created_at"))
+            if submitted_at < next_at:
+                raise FollowUpIntervalPending(
+                    f"Next follow-up inspection is available on {next_at.isoformat()}"
+                )
         schedule_ref = None
         schedule = {}
         schedule_id = follow_up.get("follow_up_schedule_id")

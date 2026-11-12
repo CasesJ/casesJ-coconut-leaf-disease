@@ -589,6 +589,8 @@ def present_monitoring_follow_up(record: dict, *, expert: bool = False) -> dict:
             value[field] = f"{base}/{kind}"
         else:
             value.pop(field, None)
+    if has_record_image(record, "original"):
+        value["thumbnail_url"] = f"{base}/thumbnail"
     _strip_image_storage_fields(value)
     if value.get("tree_reference"):
         value["tree_reference"] = present_tree_reference(value["tree_reference"])

@@ -2,7 +2,7 @@
 
 import sys
 import zlib
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -631,6 +631,13 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
     follow_up_id = uploaded.json()["id"]
     assert uploaded.json()["review_status"] == "pending_expert_review"
     assert uploaded.json()["preliminary_status"] == "no_visible_change"
+    # The first inspection is immediate; a second cannot bypass the expert's
+    # configured five-day interval.
+    early = client.post(f"/monitoring/cases/{case_id}/follow-ups",
+        files={"file": ("leaf.jpg", _image(), "image/jpeg")},
+        data={"preliminary_status": "no_visible_change"})
+    assert early.status_code == 409
+    assert "Next follow-up inspection is available" in early.json()["detail"]
     review_path = f"/expert/monitoring/cases/farmer-a/{case_id}/follow-ups/{follow_up_id}/review"
     assert client.put(review_path, json={"confirmed_outcome": "improving", "note": "Observed"}).status_code == 403
 
@@ -662,6 +669,12 @@ def test_complete_baseline_follow_up_expert_review(monkeypatch):
                          and schedule.get("treatment_application_id") == application_data["id"])
     assert post_schedule["schedule_type"] == "post_treatment"
 
+    first_inspection_at = datetime.fromisoformat(uploaded.json()["created_at"]).astimezone(timezone.utc)
+    eligible_times = iter([
+        (first_inspection_at + timedelta(days=5, seconds=1)).isoformat(),
+        (first_inspection_at + timedelta(days=10, seconds=2)).isoformat(),
+    ])
+    monkeypatch.setattr(monitoring, "_audit_timestamp", lambda: next(eligible_times))
     post_inspections = []
     for _ in range(2):
         inspection = client.post(f"/monitoring/cases/{case_id}/follow-ups",
