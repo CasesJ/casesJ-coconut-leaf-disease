@@ -3230,7 +3230,7 @@ function getPrimaryDetection(record) {
   };
 }
 
-function renderRecommendationCardHtml(rec) {
+function renderLegacyRecommendationCardHtml(rec) {
   const recommendation = rec?.recommendations || {};
   const preventionText = Array.isArray(recommendation.prevention)
     ? recommendation.prevention.join(' • ')
@@ -3258,6 +3258,36 @@ function renderRecommendationCardHtml(rec) {
       <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(11,42,31,.1); font-size:11px; color:var(--text3);">
         ${escapeHtml(rec?.note || '')}
       </div>
+    </div>
+  `;
+}
+
+function renderRecommendationCardHtml(rec, context = {}) {
+  const recommendation = rec?.recommendations || {};
+  const preventionText = Array.isArray(recommendation.prevention) ? recommendation.prevention.join('\n') : recommendation.prevention;
+  const sourceLabel = rec?.source === 'expert_override' ? 'Expert-edited recommendation' : 'Expert-verified recommendation';
+  const disease = formatDiseaseClass(rec?.disease || context.disease || 'Unknown');
+  const confidence = rec?.confidence_percent ?? context.confidencePercent ?? '0';
+  const location = context.location || '';
+  const note = rec?.note || '';
+  const icon = (paths) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+  const leafIcon = icon('<path d="M20 4C11 4 5 8 5 15c0 2.8 1.8 4 4 4 7 0 11-7 11-15Z"/><path d="M4 20c3-4 6-6 11-9"/>');
+  const verifiedIcon = icon('<path d="m5 12 4 4L19 6"/>');
+  const fertilizerIcon = icon('<path d="M7 3h10M6 7h12l-1 13H7L6 7Z"/><path d="M12 16c0-3 2-5 5-6-1 3-2 5-5 6Z"/>');
+  const treatmentIcon = icon('<path d="M12 5v14M5 12h14"/><rect x="3" y="3" width="18" height="18" rx="4"/>');
+  const preventionIcon = icon('<path d="M12 3 20 6v5c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/>');
+  const locationIcon = icon('<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2"/>');
+
+  return `
+    <div class="rec-card verified-recommendation-card" style="margin-top:10px;">
+      <div class="verified-recommendation-head"><div class="verified-recommendation-heading"><span class="verified-recommendation-icon">${leafIcon}</span><div><p class="verified-recommendation-kicker">${escapeHtml(sourceLabel)}</p><h3 class="verified-recommendation-title">Expert-Verified Recommendation</h3></div></div><span class="verified-badge">${verifiedIcon} Expert Verified</span></div>
+      <div class="verified-detection-summary"><div><span>Detected disease</span><strong>${escapeHtml(disease)}</strong></div><div class="verified-confidence"><span>Confidence</span><strong>${escapeHtml(confidence)}%</strong></div></div>
+      <div class="recommendation-sections">
+        <section class="recommendation-section"><span class="recommendation-section-icon">${fertilizerIcon}</span><div><h4 class="recommendation-section-title">Fertilizer</h4><div class="recommendation-section-text">${escapeHtml(recommendation.fertilizer || '')}</div></div></section>
+        <section class="recommendation-section"><span class="recommendation-section-icon">${treatmentIcon}</span><div><h4 class="recommendation-section-title">Treatment</h4><div class="recommendation-section-text">${escapeHtml(recommendation.treatment || '')}</div></div></section>
+        <section class="recommendation-section"><span class="recommendation-section-icon">${preventionIcon}</span><div><h4 class="recommendation-section-title">Prevention</h4><div class="recommendation-section-text">${escapeHtml(preventionText || '')}</div></div></section>
+      </div>
+      <footer class="recommendation-metadata">${location ? `<span class="recommendation-meta-item"><span class="recommendation-meta-icon">${locationIcon}</span>${escapeHtml(location)}</span>` : ''}${note ? `<div class="recommendation-note">${escapeHtml(note)}</div>` : ''}</footer>
     </div>
   `;
 }
@@ -3625,7 +3655,10 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
         const imagePreview = imageUrl
           ? `<button type="button" class="history-recommendation-image" onclick="openDetectionImagesModal('${encodedRecordImagePayload(record)}', '${encodeInlineValue(record?.filename || record?.image_path || 'Detection image')}')">${window.DetectionOverlay?.frameHtml(imageUrl, { ...record, detections: record.image_url ? record.detections : [] }, { alt: record?.filename || 'Detection image', priority: 'high' }) || `<img data-private-src="${escapeHtml(imageUrl)}" alt="${escapeHtml(record?.filename || 'Detection image')}">`}</button>`
           : '<div class="history-recommendation-image history-recommendation-image-empty">Image unavailable</div>';
-        panel.innerHTML = `<div class="history-recommendation-layout">${imagePreview}<div class="history-recommendation-content">${renderRecommendationCardHtml(recommendationSnapshot)}</div></div>`;
+        const recommendationLocation = embeddedGps
+          ? `${embeddedGps.lat.toFixed(5)}, ${embeddedGps.lng.toFixed(5)}`
+          : (record?.area || record?.location || '');
+        panel.innerHTML = `<div class="history-recommendation-layout">${imagePreview}<div class="history-recommendation-content">${renderRecommendationCardHtml(recommendationSnapshot, { disease: primary.class, confidencePercent: Math.round(Number(primary.confidence || 0) * 100), location: recommendationLocation })}</div></div>`;
         row.appendChild(panel);
         window.DetectionOverlay?.mount(panel);
       }
