@@ -19,7 +19,8 @@ function harness(expert = false) {
     document: { getElementById: element, querySelectorAll: () => [], addEventListener() {},
       documentElement: { classList: { add() {}, remove() {} } } },
     showToast() {}, monitoringIdentityStatus: () => 'Identity not reviewed',
-    fetchExpertRecords: async () => ({ records: [] }), Date, Intl };
+    fetchExpertRecords: async () => ({ records: [] }), Date, Intl,
+    AbortController, setTimeout, clearTimeout };
   vm.createContext(context);
   vm.runInContext(source, context);
   return { context, element, state: vm.runInContext('monitoringState', context) };
@@ -61,6 +62,43 @@ test('dashboard loads existing case list without automatically fetching or openi
   await h.context.window.loadMonitoringDashboard();
   assert.deepEqual(requests, ['/monitoring/cases']);
   assert.equal(h.element('monitor-case-modal').open, false);
+});
+
+test('monitoring request sends its auth header and surfaces useful API failures', async () => {
+  const h = harness();
+  let request;
+  h.context.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: false, status: 413, text: async () => JSON.stringify({ detail: 'Image upload is too large' }) };
+  };
+  await assert.rejects(() => h.context.monitoringRequest('/monitoring/cases/a/follow-ups', { method: 'POST' }),
+    /Image upload is too large/);
+  assert.equal(request.url, '/monitoring/cases/a/follow-ups');
+  assert.equal(request.options.headers.Authorization, 'Bearer fixture-token');
+});
+
+test('monitoring request keeps the server busy explanation visible to the farmer', async () => {
+  const h = harness();
+  h.context.fetch = async () => ({
+    ok: false, status: 503,
+    text: async () => JSON.stringify({ detail: 'Image processing is busy with another upload. Wait a moment, then try once.' })
+  });
+  await assert.rejects(() => h.context.monitoringRequest('/monitoring/cases/a/follow-ups', { method: 'POST' }),
+    /Image processing is busy with another upload/);
+});
+
+test('upload validation allows a DJI JPEG with a generic browser MIME label', () => {
+  const h = harness();
+  const file = { name: 'dji_photo.jpg', size: 1_024, type: 'application/octet-stream' };
+  h.element('monitor-upload-file').files = [file];
+  const form = { reportValidity: () => true };
+  assert.equal(h.context.monitoringValidateUpload(form), file);
+});
+
+test('upload validation rejects a file above the 50 MB limit before a request', () => {
+  const h = harness();
+  h.element('monitor-upload-file').files = [{ name: 'large.jpg', size: 50_000_001, type: 'image/jpeg' }];
+  assert.throws(() => h.context.monitoringValidateUpload({ reportValidity: () => true }), /50 MB/);
 });
 
 test('late case responses cannot replace a newer case or repopulate a closed modal', async () => {

@@ -1,5 +1,7 @@
 // Treatment monitoring uses the existing auth globals and FastAPI routes.
 const monitoringState = { cases: [], selected: null, overview: null, expertRecords: [], search: '', filter: 'all', sort: 'latest', detailRequest: 0 };
+const MONITORING_UPLOAD_MAX_BYTES = 50 * 1000 * 1000;
+const MONITORING_REQUEST_TIMEOUT_MS = 120000;
 
 window.monitoringOpenTree = function (encodedTree, encodedFarmer) {
   monitoringState.requestedTree = { id: decodeURIComponent(encodedTree), farmer: decodeURIComponent(encodedFarmer) };
@@ -227,13 +229,46 @@ function monitoringRenderCaseList() {
 async function monitoringRequest(path, options = {}) {
   if (!currentToken) throw new Error('Please sign in first');
   const requestToken = currentToken;
-  const response = await fetch(path, {
-    ...options, headers: { Authorization: `Bearer ${currentToken}`, ...(options.headers || {}) }
-  });
-  const body = await response.json().catch(() => ({}));
-  if (currentToken !== requestToken) throw new Error('Sign-in changed. Reload the case.');
-  if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Monitoring request failed');
-  return body;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MONITORING_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(path, {
+      ...options, signal: controller.signal,
+      headers: { Authorization: `Bearer ${requestToken}`, ...(options.headers || {}) }
+    });
+    const rawBody = typeof response.text === 'function'
+      ? await response.text()
+      : JSON.stringify(await response.json().catch(() => ({})));
+    let body = {};
+    try { body = rawBody ? JSON.parse(rawBody) : {}; } catch { body = { detail: rawBody }; }
+    if (currentToken !== requestToken) throw new Error('Sign-in changed. Reload the case.');
+    if (!response.ok) {
+      const detail = typeof body.detail === 'string' ? body.detail
+        : typeof body.message === 'string' ? body.message : '';
+      if (response.status === 401) throw new Error(detail || 'Your sign-in has expired. Please sign in again before saving.');
+      if (response.status === 413) throw new Error(detail || 'The image is larger than the 50 MB upload limit.');
+      throw new Error(detail || `Monitoring request failed (${response.status})`);
+    }
+    return body;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('The upload timed out. No retry was sent; check the inspection history before trying again.');
+    if (error instanceof TypeError) throw new Error('Network error while saving. Check your connection and try again once.');
+    throw error;
+  } finally { clearTimeout(timeout); }
+}
+
+function monitoringValidateUpload(form) {
+  if (!form.reportValidity()) throw new Error('Choose a disease close-up image before saving.');
+  const file = document.getElementById('monitor-upload-file')?.files?.[0];
+  if (!file) throw new Error('Choose a disease close-up image before saving.');
+  if (file.size > MONITORING_UPLOAD_MAX_BYTES) throw new Error('The image is larger than the 50 MB upload limit.');
+  // MIME labels from DJI cameras and mobile browsers are inconsistent. The
+  // server validates the real JPEG/PNG/MPO bytes, so do not reject an empty
+  // or generic browser MIME label here.
+  if (file.type && !['image/jpeg', 'image/png', 'image/jpg', 'application/octet-stream'].includes(file.type.toLowerCase())) {
+    throw new Error('Choose a JPEG or PNG image. The selected file will also be checked by the server.');
+  }
+  return file;
 }
 
 window.loadMonitoringDashboard = async function loadMonitoringDashboard() {
@@ -378,8 +413,8 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
     ${allowance.remaining === 0 ? '<p class="monitor-muted" role="status">You have reached the limit of 3 follow-up image uploads for this tree ID.</p>' : ''}
     <form id="monitor-upload-form" class="monitor-form"><fieldset style="border:0;padding:0;margin:0;display:contents" ${allowance.remaining === 0 ? 'disabled' : ''}>
       ${scheduleOptions ? `<label>Inspection schedule (optional)<select id="monitor-follow-up-schedule"><option value="">General inspection</option>${scheduleOptions}</select></label>` : ''}
-      <label>Disease close-up image<input id="monitor-upload-file" type="file" accept="image/jpeg,image/png" required></label>
-      <label>Whole-tree reference photo (optional)<input id="monitor-upload-tree-file" type="file" accept="image/jpeg,image/png"></label>
+      <label>Disease close-up image<input id="monitor-upload-file" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" required></label>
+      <label>Whole-tree reference photo (optional)<input id="monitor-upload-tree-file" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png"></label>
       <p class="monitor-muted">Include the trunk, crown, and surrounding landmarks of this same tree. A separate whole-tree photo is needed for identity confirmation; GPS is optional.</p>
       <label>Your visual observation<select id="monitor-preliminary"><option value="needs_review">Needs Review</option><option value="improving">Improving</option><option value="no_visible_change">No Visible Change</option><option value="worsening">Worsening</option></select></label>
       <button class="btn btn-p" type="submit">Save inspection</button></fieldset></form></section>` : '';
@@ -515,8 +550,15 @@ document.addEventListener('DOMContentLoaded', () => {
     event.preventDefault();
     const item = monitoringState.overview?.case;
     if (!item) return;
+    if (form.dataset.monitoringSubmitting === 'true') return;
     const button = form.querySelector('button[type=submit]');
+    const originalButtonText = button.textContent;
+    form.dataset.monitoringSubmitting = 'true';
     button.disabled = true;
+    if (form.id === 'monitor-upload-form') {
+      button.textContent = 'Saving inspection…';
+      button.setAttribute('aria-busy', 'true');
+    }
     try {
       if (form.id === 'monitor-treatment-schedule-form') {
         await monitoringRequest(`/monitoring/cases/${encodeURIComponent(item.id)}/planned-treatments`, {
@@ -538,8 +580,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         showToast('Treatment application recorded and follow-up scheduled');
       } else if (form.id === 'monitor-upload-form') {
+        const imageFile = monitoringValidateUpload(form);
         const body = new FormData();
-        body.append('file', document.getElementById('monitor-upload-file').files[0]);
+        body.append('file', imageFile, imageFile.name);
         body.append('preliminary_status', document.getElementById('monitor-preliminary').value);
         const scheduleId = document.getElementById('monitor-follow-up-schedule')?.value;
         if (scheduleId) body.append('follow_up_schedule_id', scheduleId);
@@ -554,11 +597,25 @@ document.addEventListener('DOMContentLoaded', () => {
             note: document.getElementById('monitor-review-note').value.trim() }) });
         showToast('Treatment-outcome review recorded');
       }
-      await loadMonitoringDashboard();
+      try {
+        await loadMonitoringDashboard();
+      } catch (refreshError) {
+        // The POST has already returned 201. Do not retry it: the record may
+        // be present even when the subsequent display refresh cannot load.
+        console.error('Monitoring saved but refresh failed', refreshError);
+        showToast('Inspection saved, but the history could not refresh. Use Refresh cases to confirm it.');
+      }
       if (form.dataset.followUpId && monitoringState.overview?.case.id === item.id) {
         monitoringRenderOverview(monitoringState.overview, form.dataset.followUpId);
       }
-    } catch (error) { showToast(`Monitoring update failed: ${error.message}`); }
-    finally { button.disabled = false; }
+    } catch (error) {
+      console.error('Monitoring update failed', { form: form.id, message: error?.message });
+      showToast(`Monitoring update failed: ${error?.message || 'Unexpected error'}`);
+    } finally {
+      delete form.dataset.monitoringSubmitting;
+      button.disabled = false;
+      button.textContent = originalButtonText;
+      button.removeAttribute('aria-busy');
+    }
   });
 });

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 from threading import Lock
+import logging
 
 _INFERENCE_LOCK = Lock()
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -46,9 +48,15 @@ def run_image_inference(detector: Any, image: np.ndarray, confidence: float, *,
                     # CoconutDiseaseDetector supports annotate=False.
                     result = detector.predict(image, conf=confidence)
     except Exception as exc:
+        category = str(getattr(exc, "category", "execution_failed"))
+        # The category comes from our detector adapters, not provider text.
+        # Keep production diagnostics actionable without recording API keys,
+        # request URLs, image data, or raw provider responses.
+        logger.warning("Detector execution failed category=%s exception_type=%s",
+                       category, type(exc).__name__)
         raise InferenceUnavailable(
             "Detector execution failed",
-            category=str(getattr(exc, "category", "execution_failed")),
+            category=category,
         ) from exc
 
     if not isinstance(result, dict):

@@ -41,6 +41,30 @@ def _is_memory_intensive_image_pipeline(request: Request) -> bool:
             and request.url.path.endswith("/follow-ups"))
 
 
+async def _run_memory_intensive_image_pipeline(request: Request, call_next, *,
+                                               slots: asyncio.Semaphore | None = None,
+                                               queue_seconds: float | None = None):
+    """Run one upload under the shared memory budget, always releasing its slot."""
+    slots = slots or _image_pipeline_slots
+    queue_seconds = IMAGE_PIPELINE_QUEUE_SECONDS if queue_seconds is None else queue_seconds
+    try:
+        await asyncio.wait_for(slots.acquire(), timeout=queue_seconds)
+    except TimeoutError:
+        logger.warning(
+            "Image pipeline busy; rejecting request before decoding path=%s max_concurrency=%d queue_seconds=%s",
+            request.url.path, IMAGE_PIPELINE_MAX_CONCURRENCY, queue_seconds,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Image processing is busy with another upload. Wait a moment, then try once."},
+            headers={"Retry-After": str(int(queue_seconds))},
+        )
+    try:
+        return await call_next(request)
+    finally:
+        slots.release()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
@@ -138,21 +162,7 @@ def create_app() -> FastAPI:
         """Bound complete image pipelines so concurrent DJI uploads cannot OOM Render."""
         if not _is_memory_intensive_image_pipeline(request):
             return await call_next(request)
-        try:
-            await asyncio.wait_for(
-                _image_pipeline_slots.acquire(), timeout=IMAGE_PIPELINE_QUEUE_SECONDS,
-            )
-        except TimeoutError:
-            logger.warning("Image pipeline busy; rejecting request before decoding")
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Image analysis is busy. Please retry shortly."},
-                headers={"Retry-After": "10"},
-            )
-        try:
-            return await call_next(request)
-        finally:
-            _image_pipeline_slots.release()
+        return await _run_memory_intensive_image_pipeline(request, call_next)
 
     # Routers
     application.include_router(auth.router)

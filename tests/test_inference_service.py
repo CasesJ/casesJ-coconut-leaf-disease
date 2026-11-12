@@ -34,3 +34,15 @@ def test_successful_empty_detection_result_is_valid():
 def test_failed_or_malformed_inference_is_rejected(detector):
     with pytest.raises(InferenceUnavailable):
         run_image_inference(detector, np.zeros((8, 8, 3), dtype=np.uint8), 0.05)
+
+
+def test_detector_safe_category_is_preserved_for_api_feedback_and_logs(caplog):
+    class ProviderTimeout(RuntimeError):
+        category = "timeout"
+
+    with pytest.raises(InferenceUnavailable) as error:
+        run_image_inference(_Detector(error=ProviderTimeout()), np.zeros((8, 8, 3), dtype=np.uint8), 0.05)
+
+    assert error.value.category == "timeout"
+    assert "category=timeout" in caplog.text
+    assert "ProviderTimeout" in caplog.text

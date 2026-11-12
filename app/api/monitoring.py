@@ -479,7 +479,7 @@ def _process_follow_up(case, farmer_id, case_id, contents, filename, decoded_ima
             detector, decoded_image, UPLOAD_DISPLAY_CONFIDENCE_THRESHOLD, annotate=False,
         )
     except InferenceUnavailable as exc:
-        logger.error("Monitoring inference failed for %s/%s: %s", farmer_id, case_id, exc)
+        logger.error("Monitoring inference failed for %s/%s category=%s", farmer_id, case_id, exc.category)
         if exc.category == "image_too_large":
             status_code, detail = 413, "The follow-up image is too large for disease analysis."
         elif exc.category in {"rate_limited", "cooldown", "request_in_progress"}:
