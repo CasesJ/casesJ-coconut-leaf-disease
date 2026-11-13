@@ -563,13 +563,13 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
     window.DetectionOverlay?.mount(frame);
   }
 
-  // Prefer the original with saved detection boxes; older annotated copies may be unavailable.
+  // Use the optimized queue preview first; originals and older annotated copies are fallbacks.
   const urls = [...new Set((Array.isArray(imageUrls) ? imageUrls : [imageUrls])
     .map(url => String(url || '').trim())
     .filter(Boolean))];
-  const showUnavailable = () => {
+  const showUnavailable = (message = 'No image is available for this upload.') => {
     if (image.dataset.previewId !== previewId) return;
-    empty.textContent = 'No image is available for this upload.';
+    empty.textContent = message;
     image.removeAttribute('src');
     image.onload = null;
     image.onerror = null;
@@ -584,19 +584,45 @@ function setExpertRecommendationPreview(imageUrls, imageLabel, record = null) {
 
   let currentUrl = 0;
   const loadImage = async () => {
+    if (image.dataset.previewId !== previewId) return;
     if (frame) frame.dataset.overlayDetections = JSON.stringify(
       urls[currentUrl] === record?.annotated_image_url ? [] : (record?.detections || []));
-    const loaded = await window.setPrivateImageSource(image, urls[currentUrl]);
+    const attemptedUrl = urls[currentUrl];
+    image.dataset.expertPreviewSource = attemptedUrl;
+    const retryAfterDecodeError = () => {
+      if (image.dataset.previewId !== previewId || image.dataset.expertPreviewSource !== attemptedUrl) return;
+      currentUrl += 1;
+      if (currentUrl < urls.length) {
+        void loadImage();
+      } else {
+        showUnavailable('Unable to load the uploaded image. Please close and reopen this review to retry.');
+      }
+    };
+    image.addEventListener('error', retryAfterDecodeError, { once: true });
+    // The table's thumbnail is usually already decoded as an authenticated
+    // object URL. Reuse it directly while its queue row is present; the
+    // protected-media fetcher remains the fallback for an uncached preview.
+    const cachedImage = image.dataset.privateObjectUrl ? null
+      : [...document.querySelectorAll('img[data-private-src]')].find(candidate =>
+        candidate !== image
+        && candidate.dataset.privateSrc === attemptedUrl
+        && candidate.dataset.privateState === 'loaded'
+        && candidate.naturalWidth > 0
+        && candidate.src);
+    const loaded = cachedImage
+      ? (image.src = cachedImage.src, true)
+      : await window.setPrivateImageSource(image, attemptedUrl);
     if (image.dataset.previewId !== previewId) return;
     if (loaded) {
       image.classList.remove('hidden');
       empty.classList.add('hidden');
     } else {
+      image.removeEventListener('error', retryAfterDecodeError);
       currentUrl += 1;
       if (currentUrl < urls.length) {
         void loadImage();
       } else {
-        showUnavailable();
+        showUnavailable('Unable to load the uploaded image. Please close and reopen this review to retry.');
       }
     }
   };
@@ -3889,6 +3915,7 @@ window.setExpertReviewFilter = function setExpertReviewFilter(filterName) {
 let expertAuditEvents = [];
 let expertQueueRecords = [];
 let currentExpertQueueQuickFilter = 'all';
+let expertReviewLoadId = 0;
 
 function getExpertQueueDetails(record) {
   const primary = getPrimaryDetection(record);
@@ -4321,6 +4348,7 @@ window.openNewDiseaseVerification = function openNewDiseaseVerification() {
 
 window.loadExpertReview = async function loadExpertReview({ force = false } = {}) {
   if (!currentToken || !currentUserIsExpert) return;
+  const loadId = ++expertReviewLoadId;
 
   // Verified records are intentionally excluded from the review queue; each
   // verification is recorded in the Expert Audit Log by the server.
@@ -4344,10 +4372,12 @@ window.loadExpertReview = async function loadExpertReview({ force = false } = {}
     // server's freshly populated queue cache instead of racing it with a
     // second global record scan.
     const allRecordsData = await fetchExpertRecords({ force });
+    if (loadId !== expertReviewLoadId) return;
     const [overridesRes, auditRes] = await Promise.all([
       fetch('/expert/recommendations', { headers: { 'Authorization': `Bearer ${currentToken}` } }),
       fetch('/expert/audit-log?limit=10', { headers: { 'Authorization': `Bearer ${currentToken}` } })
     ]);
+    if (loadId !== expertReviewLoadId) return;
 
     const allRecords = allRecordsData.records || [];
     const records = allRecords.filter(record =>
@@ -4373,6 +4403,10 @@ window.loadExpertReview = async function loadExpertReview({ force = false } = {}
       statusEl.textContent = `Loaded ${records.length} ${getExpertFilterLabel(currentExpertFilter)} and ${Object.keys(overrides).length} expert overrides.`;
     }
   } catch (error) {
+    // A successful verification invalidates the records cache and starts a
+    // newer forced reload. Its older request may reject as intentionally
+    // stale; only the newest load is allowed to show an error to the expert.
+    if (loadId !== expertReviewLoadId) return;
     console.error('Error loading expert review:', error);
     if (pendingListEl) pendingListEl.innerHTML = `<div class="no-records">❌ Error loading expert queue<br>${escapeHtml(error.message)}</div>`;
   }
@@ -4481,6 +4515,9 @@ window.editExpertRecommendation = async function editExpertRecommendation(diseas
   if (!currentToken || !currentUserIsExpert) return;
   const selectedRecord = [...expertQueueRecords, ...(getCachedExpertRecords()?.records || [])].find(record => String(record.user_id || '') === String(userId || '') && String(record.id || '') === String(recordId || ''));
   const imageUrls = [
+    // This is the same small, optimized image that the visible queue has
+    // already loaded. Do not block the review modal on a remote original.
+    selectedRecord?.thumbnail_url,
     selectedRecord?.image_url,
     decodeURIComponent(encodedImageUrl || ''),
     selectedRecord?.annotated_image_url,
