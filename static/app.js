@@ -3626,7 +3626,9 @@ window.filterVerifiedHistory = function filterVerifiedHistory() {
   if (list) {
     list.querySelectorAll('.history-record').forEach((row, index) => {
       const record = matches[index];
+      const primary = getPrimaryDetection(record);
       const imageUrl = record?.thumbnail_url || record?.image_url || record?.annotated_image_url || '';
+      const embeddedGps = getEmbeddedRecordGps(record);
       const badge = row.querySelector('.record-status.verified');
       if (!badge) return;
       const thumbnail = document.createElement(imageUrl ? 'img' : 'div');

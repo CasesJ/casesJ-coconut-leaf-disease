@@ -69,3 +69,87 @@ test('Verified Disease History keeps image and recommendation actions but hides 
   assert.match(html, /View image/);
   assert.match(html, /View recommendation/);
 });
+
+test('Verified Disease History renders expert recommendation panels with and without embedded GPS', () => {
+  const panels = [];
+  const makeRow = () => {
+    const badge = { replaceWith() {} };
+    const details = { parentElement: { classList: { add() {} } } };
+    return {
+      querySelector(selector) {
+        if (selector === '.record-status.verified') return badge;
+        if (selector === '.record-detections') return details;
+        return null;
+      },
+      appendChild(panel) { panels.push(panel); },
+    };
+  };
+  const list = {
+    html: '',
+    set innerHTML(value) { this.html = value; },
+    querySelectorAll() { return [makeRow(), makeRow()]; },
+  };
+  const context = {
+    document: {
+      getElementById: id => id === 'verified-history-list' ? list : null,
+      createElement: () => ({ dataset: {}, style: {}, classList: { add() {} } }),
+    },
+    escapeHtml: value => String(value ?? ''),
+    formatDiseaseClass: value => String(value ?? ''),
+    encodedRecordImagePayload: () => 'image-payload',
+    encodeInlineValue: value => String(value ?? ''),
+    getPrimaryDetection: record => record.detections[0] || { class: 'Unknown', confidence: 0 },
+    getRecordKey: record => record.id,
+    renderRecommendationCardHtml: (_snapshot, details) => `location:${details.location}`,
+  };
+  context.window = { DetectionOverlay: { mount() {} } };
+  vm.createContext(context);
+  const helperStart = source.indexOf('function getEmbeddedRecordGps');
+  const helperEnd = source.indexOf('function metadataPinRecordId', helperStart);
+  const historyStart = source.indexOf('window.filterVerifiedHistory');
+  const historyEnd = source.indexOf('// Verified history is deliberately separate', historyStart);
+  vm.runInContext(`${source.slice(helperStart, helperEnd)}\nlet verifiedHistoryRecords = [];\n${source.slice(historyStart, historyEnd)}`, context);
+  const records = [
+    {
+      id: 'with-gps', verified_by_role: 'expert', gps_source: 'exif', lat: 7.2, lng: 125.6,
+      detections: [{ class: 'Bud Rot', confidence: .9 }], recommendation_snapshot: { recommendations: {} },
+    },
+    {
+      id: 'without-gps', verified_by_role: 'expert',
+      detections: [{ class: 'Bud Rot', confidence: .9 }], recommendation_snapshot: { recommendations: {} },
+    },
+  ];
+
+  assert.doesNotThrow(() => vm.runInContext(`verifiedHistoryRecords = ${JSON.stringify(records)}; window.filterVerifiedHistory();`, context));
+  assert.equal(panels.length, 2);
+  assert.match(panels[0].innerHTML, /location:7\.20000, 125\.60000/);
+  assert.match(panels[1].innerHTML, /location:/);
+});
+
+test('View Recommendation opens and closes a saved expert recommendation', () => {
+  const classChanges = [];
+  const panel = {
+    dataset: { loaded: '1' },
+    innerHTML: '<div>Saved expert recommendation</div>',
+    style: { display: 'none' },
+    closest: () => ({ classList: { add: value => classChanges.push(`add:${value}`), remove: value => classChanges.push(`remove:${value}`) } }),
+  };
+  const context = {
+    window: {},
+    document: { getElementById: id => id === 'record-recommendation-history-with-gps' ? panel : null },
+    showToast: () => assert.fail('saved recommendation should not show an error'),
+  };
+  vm.createContext(context);
+  const start = source.indexOf('window.toggleRecordRecommendation');
+  const end = source.indexOf('// ── Drone', start);
+  vm.runInContext(source.slice(start, end), context);
+
+  const button = { textContent: 'View recommendation' };
+  context.window.toggleRecordRecommendation('history-with-gps', button);
+  assert.equal(panel.style.display, 'block');
+  assert.equal(button.textContent, 'Hide Recommendation');
+  context.window.toggleRecordRecommendation('history-with-gps', button);
+  assert.equal(panel.style.display, 'none');
+  assert.equal(button.textContent, 'Recommendation');
+  assert.deepEqual(classChanges, ['add:history-recommendation-open', 'remove:history-recommendation-open']);
+});
