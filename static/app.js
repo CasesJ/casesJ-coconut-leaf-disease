@@ -2122,6 +2122,39 @@ function renderVertexMarkers() {
     boundaryVertexMarkers.push(marker);
   });
 }
+function farmAreaDisplayCoordinates(area, fallbackLatitude, fallbackLongitude) {
+  const savedLatitude = area?.center_latitude;
+  const savedLongitude = area?.center_longitude;
+  const latitude = Number(savedLatitude), longitude = Number(savedLongitude);
+  const hasSavedCoordinates = savedLatitude !== null && savedLatitude !== undefined
+    && savedLongitude !== null && savedLongitude !== undefined
+    && Number.isFinite(latitude) && Number.isFinite(longitude);
+  const ring = area?.boundary_geojson?.coordinates?.[0];
+  if (!Array.isArray(ring) || ring.length < 4) {
+    return hasSavedCoordinates ? { latitude, longitude } : { latitude: fallbackLatitude, longitude: fallbackLongitude };
+  }
+  // Older areas can retain distinct polygons while their persisted centres are duplicated.
+  if (hasSavedCoordinates && pointInFarmBoundary({ lat: latitude, lng: longitude }, area.boundary_geojson)) {
+    return { latitude, longitude };
+  }
+  const vertices = ring.slice(0, -1);
+  let twiceArea = 0, longitudeTotal = 0, latitudeTotal = 0;
+  const originLongitude = Number(vertices[0]?.[0]), originLatitude = Number(vertices[0]?.[1]);
+  vertices.forEach((vertex, index) => {
+    const next = vertices[(index + 1) % vertices.length];
+    const x = Number(vertex[0]) - originLongitude, y = Number(vertex[1]) - originLatitude;
+    const nextX = Number(next[0]) - originLongitude, nextY = Number(next[1]) - originLatitude;
+    const cross = x * nextY - nextX * y;
+    twiceArea += cross;
+    longitudeTotal += (x + nextX) * cross;
+    latitudeTotal += (y + nextY) * cross;
+  });
+  if (Number.isFinite(twiceArea) && Math.abs(twiceArea) > Number.EPSILON) {
+    return { latitude: originLatitude + latitudeTotal / (3 * twiceArea), longitude: originLongitude + longitudeTotal / (3 * twiceArea) };
+  }
+  const average = vertices.reduce((sum, vertex) => ({ latitude: sum.latitude + Number(vertex[1]), longitude: sum.longitude + Number(vertex[0]) }), { latitude: 0, longitude: 0 });
+  return vertices.length ? { latitude: average.latitude / vertices.length, longitude: average.longitude / vertices.length } : { latitude: fallbackLatitude, longitude: fallbackLongitude };
+}
 async function loadFarmBoundaries() {
   if (!currentToken || currentUserIsExpert) return;
   try { const response = await fetch('/farm/areas', { headers: { Authorization: `Bearer ${currentToken}` } }); if (!response.ok) throw new Error('Could not load farm boundaries'); farmBoundaries = (await response.json()).areas || []; renderFarmBoundaries(); selectFarmArea(selectedFarmArea, { focus: false }); }
@@ -2135,14 +2168,7 @@ window.selectFarmArea = function(areaId, { focus = true } = {}) {
   if (name) name.value = area?.farm_name || `Area ${selectedFarmArea}`;
   const fallbackLatitude = Number(farmLocation?.latitude ?? DEFAULT_FARM_LOCATION.latitude);
   const fallbackLongitude = Number(farmLocation?.longitude ?? DEFAULT_FARM_LOCATION.longitude);
-  // Do not coerce null to zero: Number(null) is 0 and would send an
-  // unconfigured area to (0, 0) in the Atlantic Ocean.
-  const savedLatitude = area?.center_latitude;
-  const savedLongitude = area?.center_longitude;
-  const latitude = savedLatitude !== null && savedLatitude !== undefined
-    && Number.isFinite(Number(savedLatitude)) ? Number(savedLatitude) : fallbackLatitude;
-  const longitude = savedLongitude !== null && savedLongitude !== undefined
-    && Number.isFinite(Number(savedLongitude)) ? Number(savedLongitude) : fallbackLongitude;
+  const { latitude, longitude } = farmAreaDisplayCoordinates(area, fallbackLatitude, fallbackLongitude);
   if (lat) lat.value = latitude;
   if (lng) lng.value = longitude;
   updateBoundaryStatus();
