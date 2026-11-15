@@ -223,14 +223,13 @@ function monitoringRenderCaseList() {
     return;
   }
   list.innerHTML = `<table class="monitor-table"><caption class="monitor-sr-only">Treatment cases. Open View Details for the complete care record.</caption>
-    <thead><tr><th scope="col">Tree ID</th><th scope="col">Detected disease</th><th scope="col">Treatment</th><th scope="col">Inspection</th><th scope="col" class="monitor-secondary-column">Recommendation</th><th scope="col" class="monitor-secondary-column">Last activity</th><th scope="col">Next check</th><th scope="col">Actions</th></tr></thead>
+    <thead><tr><th scope="col">Tree ID</th><th scope="col">Detected disease</th><th scope="col">Inspection</th><th scope="col" class="monitor-secondary-column">Recommendation</th><th scope="col" class="monitor-secondary-column">Last activity</th><th scope="col">Next check</th><th scope="col">Actions</th></tr></thead>
     <tbody>${visibleCases.map(({ item, index }) => {
     const action = monitoringNextAction(item);
     const due = monitoringDue(action?.date);
     return `<tr>
       <td data-label="Tree ID"><span class="monitor-tree-id" title="${monitoringText(item.tree_id)}">${monitoringText(item.tree_id || 'Not recorded')}</span>${currentUserIsExpert && item.farmer_id ? `<small class="monitor-cell-note">Farmer ${monitoringText(item.farmer_id)}</small>` : ''}</td>
       <td data-label="Disease" class="monitor-disease-cell">${monitoringText(item.disease || 'Not recorded')}</td>
-      <td data-label="Treatment">${monitoringBadge(monitoringTreatmentBadge(item))}</td>
       <td data-label="Inspection">${monitoringBadge(monitoringInspectionBadge(item))}</td>
       <td data-label="Recommendation" class="monitor-secondary-column"><span class="monitor-recommendation-state">${item.treatment_record_id ? 'On record' : 'Not available'}</span></td>
       <td data-label="Last activity" class="monitor-secondary-column">${monitoringDate(monitoringLastActivity(item))}</td>
