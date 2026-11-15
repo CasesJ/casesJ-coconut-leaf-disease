@@ -381,7 +381,7 @@ class CoconutDiseaseDetector:
         recommendations = {
             'bud rot': {
                 'fertilizer': 'Do not use fertilizer as a cure. After removing active rot, restore palm vigor with organic matter and a soil-test-based coconut fertilizer program; avoid excess nitrogen on stressed palms.',
-                'treatment': 'Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.',
+                'treatment': 'Cut and burn infected palms as soon as disease is detected to avoid further spread',
                 'prevention': 'Improve drainage and air flow; clean the crown before the rainy season; remove and destroy infected nuts, fronds, and nearby alternate-host material; inspect nearby palms, especially within about 20 m, and avoid wounding the crown.'
             },
             'caterpillars': {

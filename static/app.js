@@ -1174,7 +1174,7 @@ function renderDashboardHighlights(records) {
 function getTreatmentRecommendation(diseaseName) {
   const normalized = normalizeDiseaseClass(diseaseName);
   if (normalized.includes('stem bleeding')) return 'Promptly inspect the trunk for bleeding lesions, improve drainage, avoid bark wounds, and have an agricultural specialist confirm the diagnosis and recommend a locally registered treatment.';
-  if (normalized.includes('bud') || normalized.includes('root')) return 'Remove infected parts and severely damaged coconut trees to prevent the spread of bud rot. Apply recommended fungicides, such as fosetyl-aluminum, to protect nearby healthy trees, following proper dosage and application guidelines.';
+  if (normalized.includes('bud') || normalized.includes('root')) return 'Cut and burn infected palms as soon as disease is detected to avoid further spread';
   if (normalized.includes('grey leaf spot')) return 'Mechanical Method: Remove and properly dispose of or burn severely infected fronds.\nChemical Method: Spray recommended fungicide only when needed.';
   if (normalized.includes('caterpillar')) return 'Inspect the canopy for larval clusters and apply an approved biological control or insecticide.';
   return 'Inspect the field closely, isolate the affected trees, and consult a local agronomist for treatment guidance.';
