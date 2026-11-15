@@ -1,6 +1,6 @@
 // Tree identity evidence is independent of disease inference and outcome review.
 function monitoringIdentityStatus(review) {
-  return ({ confirmed: 'Identity confirmed', uncertain: 'Identity uncertain', mismatch: 'Identity mismatch' })[review?.status] || 'Identity not reviewed';
+  return ({ confirmed: 'Identity confirmed', uncertain: 'Identity uncertain', mismatch: 'Identity mismatch' })[review?.status] || '';
 }
 
 function monitoringIdentityBase(item) {
