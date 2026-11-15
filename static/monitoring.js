@@ -465,7 +465,6 @@ function monitoringRenderOverview(overview, selectedFollowUp = null) {
       <dl class="monitor-info-grid">${field('Treatment status', item.monitoring_status === 'finish' ? 'Completed' : lifecycle.text)}
       ${field('Follow-up status', monitoringCaseReview(item).text)}${field('Progression check', item.next_follow_up_date ? monitoringDate(item.next_follow_up_date) : 'Not scheduled')}
       ${field('Expert confirmation', item.monitoring_status === 'finish' ? `Healthy · ${monitoringDateTime(item.finished_at)}` : item.latest_review_status === 'expert_confirmed' ? monitoringStatus(item.latest_confirmed_outcome) : 'Not recorded yet')}${field('Follow-up count', String(followUps.length))}</dl>
-      <h4 class="monitor-subheading">Application history</h4><ul class="monitor-treatment-history">${treatmentApplications.length ? treatmentApplications.map(application => `<li><div class="monitor-application-top"><strong>${monitoringText(application.treatment_performed)}</strong><time>${monitoringDate(application.application_date)}</time></div><p>${monitoringText(application.notes || 'No notes recorded')}</p></li>`).join('') : '<li class="monitor-history-empty">No treatment applications recorded yet.</li>'}</ul>
       ${item.monitoring_status !== 'finish' && currentUserIsExpert ? '<div class="monitor-care-status"><button type="button" class="btn btn-p" data-monitor-finish>Finish - confirm tree is healthy</button></div>' : ''}</section>
     ${treatmentForms}${treeLocation}${uploadForm}${reviewForm}`;
 }
