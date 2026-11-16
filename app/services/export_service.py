@@ -14,6 +14,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from app.domain.detection import normalize_verification_status
+from app.domain.disease_labels import canonical_disease_label
 from app.services.detection_service import get_all_user_records
 
 logger = logging.getLogger(__name__)
@@ -339,7 +340,8 @@ def _build_executive_user_records_pdf(records: list[dict], email: str) -> bytes:
         has_disease_in_record = False
 
         for detection in record.get("detections") or []:
-            disease = str(detection.get("class") or "Unknown")
+            raw_disease = detection.get("class") or "Unknown"
+            disease = canonical_disease_label(raw_disease) or str(raw_disease)
             conf = float(detection.get("confidence") or 0)
             conf_pct = conf * 100
 
